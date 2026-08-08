@@ -33,11 +33,13 @@ jobs:
           cache: false
       - run: go test ./...
       - run: go vet ./...
+      - run: bash -n .github/xgo/*.sh
 
   build:
     name: cross-build release assets
     needs: test
     runs-on: rootless-docker
+    timeout-minutes: 60
     permissions:
       contents: read
     env:
@@ -62,88 +64,17 @@ jobs:
             exit 1
           fi
           echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
-      - name: Cross-compile native libraries
+      - name: Cross-compile and package native libraries
         env:
           VERSION: ${{ steps.release.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist/raw
-          go run src.techknowlogick.com/xgo@v1.9.0 \
-            -image "$XGO_IMAGE" \
-            -targets 'linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64' \
-            -buildmode c-shared \
-            -trimpath \
-            -buildvcs=false \
-            -ldflags "-s -w -X main.pluginVersion=$VERSION" \
-            -hooksdir .github/xgo \
-            -out model-router \
-            -dest dist/raw \
-            .
-      - name: Package and validate release assets
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          targets=(
-            'linux|amd64|dist/raw/model-router-linux-amd64.so|so'
-            'linux|arm64|dist/raw/model-router-linux-arm64.so|so'
-            'darwin|amd64|dist/raw/model-router-darwin-*-amd64.dylib|dylib'
-            'darwin|arm64|dist/raw/model-router-darwin-*-arm64.dylib|dylib'
-            'windows|amd64|dist/raw/model-router-windows-*-amd64.dll|dll'
-          )
-
-          for target in "${targets[@]}"; do
-            IFS='|' read -r goos goarch pattern extension <<< "$target"
-            mapfile -t matches < <(compgen -G "$pattern" || true)
-            if [[ "${#matches[@]}" -ne 1 ]]; then
-              echo "expected one cross-build output for $goos/$goarch, found ${#matches[@]}"
-              exit 1
-            fi
-
-            source_library="${matches[0]}"
-            build_metadata="$(go version -m "$source_library")"
-            grep -Fq $'\tbuild\tGOOS='"$goos" <<< "$build_metadata"
-            grep -Fq $'\tbuild\tGOARCH='"$goarch" <<< "$build_metadata"
-
-            package_dir="dist/package-${goos}-${goarch}"
-            mkdir -p "$package_dir"
-            cp "$source_library" "$package_dir/model-router.$extension"
-          done
-
-          docker run --rm \
-            --user "$(id -u):$(id -g)" \
-            --env VERSION \
-            --env PLUGIN_ID=model-router \
-            --mount "type=bind,source=$PWD/dist,target=/dist" \
-            --entrypoint bash \
+          bash .github/xgo/release.sh \
             "$XGO_IMAGE" \
-            -lc '
-              set -euo pipefail
-              for package_dir in /dist/package-*; do
-                target="${package_dir##*/package-}"
-                goos="${target%-*}"
-                goarch="${target##*-}"
-                case "$goos" in
-                  windows) extension=dll ;;
-                  darwin) extension=dylib ;;
-                  *) extension=so ;;
-                esac
-                library="$PLUGIN_ID.$extension"
-                archive="/dist/${PLUGIN_ID}_${VERSION}_${goos}_${goarch}.zip"
-                (cd "$package_dir" && zip -q "$archive" "$library")
-                [[ "$(unzip -Z1 "$archive")" == "$library" ]]
-              done
-              cd /dist
-              sha256sum "${PLUGIN_ID}"_*.zip > checksums.txt
-            '
-
-          mapfile -t archives < <(find dist -maxdepth 1 -type f -name 'model-router_*.zip' -printf '%f\n' | sort)
-          if [[ "${#archives[@]}" -ne 5 ]]; then
-            echo "expected five release archives, found ${#archives[@]}"
-            exit 1
-          fi
+            github.com/markhuangai/cpa-plugin-model-router \
+            model-router \
+            "$VERSION"
       - uses: actions/upload-artifact@v7
         with:
           name: release-assets
