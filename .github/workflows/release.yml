@@ -30,8 +30,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
-          cache-dependency-path: go.sum
+          cache: false
       - run: go test ./...
       - run: go vet ./...
 
@@ -52,8 +51,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
-          cache-dependency-path: go.sum
+          cache: false
       - name: Validate release tag
         id: release
         shell: bash

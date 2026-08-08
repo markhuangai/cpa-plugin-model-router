@@ -18,8 +18,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
-          cache-dependency-path: go.sum
+          cache: false
       - name: Check formatting
         run: test -z "$(gofmt -l *.go)"
       - run: go test ./...
