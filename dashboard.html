@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model Router</title>
+<style>
+:root {
+  color-scheme: light;
+  --fog: #edf3f7;
+  --paper: #fbfdff;
+  --ink: #173042;
+  --muted: #62798a;
+  --line: #c8d6e0;
+  --line-strong: #99adbb;
+  --blue: #2d6cdf;
+  --blue-soft: #edf3ff;
+  --amber: #a96708;
+  --amber-soft: #fff5dc;
+  --teal: #24836b;
+  --danger: #b83b43;
+  --shadow: 0 12px 34px rgba(23, 48, 66, .09);
+  font-family: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+* { box-sizing: border-box; }
+html { min-width: 320px; background: var(--fog); }
+body {
+  min-height: 100vh;
+  margin: 0;
+  color: var(--ink);
+  background-color: var(--fog);
+  background-image:
+    linear-gradient(rgba(45, 108, 223, .045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(45, 108, 223, .045) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+button, input, select { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .48; }
+button, input, select { outline: none; }
+button:focus-visible, input:focus-visible, select:focus-visible {
+  box-shadow: 0 0 0 3px rgba(45, 108, 223, .2);
+  border-color: var(--blue);
+}
+.shell { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 28px 0 56px; }
+.masthead {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 430px);
+  gap: 24px;
+  align-items: end;
+  margin-bottom: 22px;
+}
+.eyebrow {
+  margin: 0 0 8px;
+  color: var(--blue);
+  font: 700 12px/1.2 "Cascadia Code", "SFMono-Regular", ui-monospace, monospace;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+}
+h1 { margin: 0; font-size: clamp(34px, 5vw, 58px); line-height: .98; letter-spacing: -.045em; }
+.lede { max-width: 700px; margin: 14px 0 0; color: var(--muted); font-size: 16px; line-height: 1.55; }
+.auth-dock {
+  padding: 18px;
+  color: #f5f9fb;
+  background: var(--ink);
+  border: 1px solid #27485d;
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+.auth-dock label { display: block; margin-bottom: 8px; font-size: 13px; font-weight: 700; }
+.auth-row { display: grid; grid-template-columns: 1fr auto; gap: 9px; }
+.auth-row input {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  color: #f5f9fb;
+  background: #0e2534;
+  border: 1px solid #456277;
+  border-radius: 8px;
+}
+.auth-row button, .primary {
+  padding: 10px 16px;
+  color: #fff;
+  font-weight: 750;
+  background: var(--blue);
+  border: 1px solid var(--blue);
+  border-radius: 8px;
+}
+.auth-note { min-height: 18px; margin: 9px 0 0; color: #b8c8d2; font-size: 12px; line-height: 1.4; }
+.auth-note[data-tone="error"] { color: #ffb4b8; }
+.workspace[hidden] { display: none; }
+.control-strip {
+  display: grid;
+  grid-template-columns: auto minmax(130px, 190px) 1fr;
+  gap: 18px;
+  align-items: center;
+  padding: 15px 18px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px 12px 0 0;
+}
+.toggle-wrap { display: flex; align-items: center; gap: 10px; font-weight: 750; }
+.toggle { position: relative; width: 42px; height: 24px; flex: 0 0 auto; }
+.toggle input { position: absolute; opacity: 0; pointer-events: none; }
+.toggle span { position: absolute; inset: 0; background: #aebdc6; border-radius: 99px; transition: background .16s ease; }
+.toggle span::after {
+  content: "";
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  left: 3px;
+  top: 3px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .24);
+  transition: transform .16s ease;
+}
+.toggle input:checked + span { background: var(--teal); }
+.toggle input:checked + span::after { transform: translateX(18px); }
+.toggle input:focus-visible + span { box-shadow: 0 0 0 3px rgba(45, 108, 223, .2); }
+.priority-field { display: grid; grid-template-columns: auto 76px; gap: 9px; align-items: center; }
+.priority-field label { color: var(--muted); font-size: 13px; font-weight: 700; }
+.priority-field input { width: 76px; }
+.save-state { justify-self: end; color: var(--muted); font: 650 12px/1.3 "Cascadia Code", "SFMono-Regular", ui-monospace, monospace; }
+.save-state[data-dirty="true"] { color: var(--blue); }
+.flow-rail {
+  display: grid;
+  grid-template-columns: auto 1fr auto 1fr auto 1fr auto;
+  gap: 9px;
+  align-items: center;
+  padding: 13px 18px;
+  background: #e2ebf2;
+  border: solid var(--line);
+  border-width: 0 1px 1px;
+}
+.flow-node {
+  padding: 5px 8px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  font: 700 11px/1.2 "Cascadia Code", "SFMono-Regular", ui-monospace, monospace;
+  white-space: nowrap;
+}
+.flow-node.action { color: var(--blue); border-color: #9db9ef; background: var(--blue-soft); }
+.flow-node.gate { color: var(--amber); border-color: #dfbd76; background: var(--amber-soft); }
+.flow-line { height: 1px; background: var(--line-strong); position: relative; }
+.flow-line::after { content: ""; position: absolute; right: -1px; top: -3px; border: 3px solid transparent; border-left-color: var(--line-strong); }
+.section-head { display: flex; justify-content: space-between; gap: 16px; align-items: center; margin: 30px 0 13px; }
+.section-title { display: flex; align-items: baseline; gap: 10px; }
+.section-title h2 { margin: 0; font-size: 20px; letter-spacing: -.02em; }
+.count { color: var(--muted); font: 700 12px/1 "Cascadia Code", "SFMono-Regular", ui-monospace, monospace; }
+.secondary, .icon-button, .danger-button {
+  padding: 8px 11px;
+  color: var(--ink);
+  font-weight: 700;
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+}
+.secondary:hover, .icon-button:hover { border-color: var(--blue); color: var(--blue); }
+.danger-button { color: var(--danger); }
+.danger-button:hover { color: #fff; background: var(--danger); border-color: var(--danger); }
+.routes { display: grid; gap: 14px; }
+.empty {
+  padding: 42px 24px;
+  text-align: center;
+  background: rgba(251, 253, 255, .74);
+  border: 1px dashed var(--line-strong);
+  border-radius: 12px;
+}
+.empty h3 { margin: 0 0 7px; }
+.empty p { margin: 0 0 18px; color: var(--muted); }
+.route-card {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  overflow: hidden;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 5px 18px rgba(23, 48, 66, .045);
+}
+.route-rail {
+  padding: 18px 12px;
+  text-align: center;
+  background: var(--blue-soft);
+  border-right: 1px solid #bfd0f4;
+}
+.ordinal { display: block; color: var(--blue); font: 800 23px/1 "Cascadia Code", "SFMono-Regular", ui-monospace, monospace; }
+.rail-label { display: block; margin-top: 7px; color: #4669a7; font-size: 10px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
+.route-body { min-width: 0; padding: 18px; }
+.route-top { display: grid; grid-template-columns: minmax(180px, 1fr) auto; gap: 14px; align-items: start; }
+.route-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.icon-button { min-width: 36px; padding: 8px; }
+.route-preview {
+  display: grid;
+  grid-template-columns: minmax(100px, auto) 1fr minmax(120px, auto);
+  gap: 10px;
+  align-items: center;
+  margin: 15px 0;
+  padding: 10px;
+  background: #f2f6fa;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.preview-alias, .preview-targets {
+  overflow: hidden;
+  padding: 5px 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 5px;
+  font: 700 11px/1.2 "Cascadia Code", "SFMono-Regular", ui-monospace, monospace;
+}
+.preview-alias { color: var(--blue); background: var(--blue-soft); border: 1px solid #b9ccf2; }
+.preview-targets { color: var(--amber); background: var(--amber-soft); border: 1px solid #e7ca8b; text-align: right; }
+.preview-line { height: 1px; background: var(--line-strong); position: relative; }
+.preview-line::after { content: ""; position: absolute; right: -1px; top: -3px; border: 3px solid transparent; border-left-color: var(--line-strong); }
+.field-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 13px; }
+.field { grid-column: span 4; min-width: 0; }
+.field label, .targets-head strong { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; font-weight: 800; letter-spacing: .02em; }
+input[type="text"], input[type="number"], input[type="password"], select {
+  width: 100%;
+  padding: 9px 10px;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+}
+.field small { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.35; }
+.targets { margin-top: 17px; }
+.targets-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 8px; }
+.targets-head strong { margin: 0; }
+.target-list { display: grid; gap: 7px; }
+.target-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; gap: 7px; align-items: center; }
+.target-number { width: 28px; color: var(--muted); text-align: center; font: 700 11px/1 "Cascadia Code", "SFMono-Regular", ui-monospace, monospace; }
+.target-empty { padding: 10px; color: var(--danger); font-size: 12px; background: #fff4f5; border: 1px dashed #ddaeb2; border-radius: 7px; }
+.footer-bar {
+  position: sticky;
+  bottom: 12px;
+  z-index: 5;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  margin-top: 24px;
+  padding: 13px 15px;
+  background: rgba(251, 253, 255, .96);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(10px);
+}
+.footer-hint { color: var(--muted); font-size: 12px; }
+.footer-actions { display: flex; gap: 8px; }
+.toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 20;
+  max-width: min(430px, calc(100% - 40px));
+  padding: 12px 14px;
+  color: #fff;
+  background: var(--ink);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  transform: translateY(16px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .16s ease, transform .16s ease;
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast[data-tone="error"] { background: var(--danger); }
+.toast[data-tone="success"] { background: var(--teal); }
+@media (max-width: 800px) {
+  .shell { width: min(100% - 20px, 680px); padding-top: 18px; }
+  .masthead { grid-template-columns: 1fr; align-items: start; }
+  .control-strip { grid-template-columns: 1fr 1fr; }
+  .save-state { grid-column: 1 / -1; justify-self: start; }
+  .flow-rail { grid-template-columns: auto 1fr auto; }
+  .flow-rail > :nth-child(n+4) { display: none; }
+  .route-card { grid-template-columns: 1fr; }
+  .route-rail { display: flex; align-items: center; gap: 8px; padding: 10px 14px; text-align: left; border-right: 0; border-bottom: 1px solid #bfd0f4; }
+  .rail-label { margin: 0; }
+  .route-top { grid-template-columns: 1fr; }
+  .route-actions { justify-content: flex-start; }
+  .field { grid-column: 1 / -1; }
+  .target-row { grid-template-columns: 28px 1fr; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }
+  .target-row .icon-button, .target-row .danger-button { grid-row: 2; }
+  .target-row .icon-button:first-of-type { grid-column: 2; }
+  .footer-bar { align-items: flex-start; flex-direction: column; }
+  .footer-actions { width: 100%; }
+  .footer-actions button { flex: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="masthead">
+    <div>
+      <p class="eyebrow">CPA execution map</p>
+      <h1>Model Router</h1>
+      <p class="lede">Map stable client aliases to ordered CPA model targets. Choose priority or round-robin selection and control how long failed targets cool down.</p>
+    </div>
+    <section class="auth-dock" aria-labelledby="auth-title">
+      <label id="auth-title" for="management-key">Management key</label>
+      <div class="auth-row">
+        <input id="management-key" type="password" autocomplete="current-password" placeholder="Enter the CPA management key">
+        <button id="connect" type="button">Load configuration</button>
+      </div>
+      <p id="auth-note" class="auth-note" aria-live="polite">The key is kept only in this page's memory.</p>
+    </section>
+  </header>
+
+  <main id="workspace" class="workspace" hidden>
+    <section class="control-strip" aria-label="Plugin settings">
+      <label class="toggle-wrap">
+        <span class="toggle">
+          <input id="plugin-enabled" type="checkbox">
+          <span aria-hidden="true"></span>
+        </span>
+        Plugin enabled
+      </label>
+      <div class="priority-field">
+        <label for="plugin-priority">Priority</label>
+        <input id="plugin-priority" type="number" step="1" inputmode="numeric">
+      </div>
+      <span id="save-state" class="save-state" data-dirty="false">Loaded from CPA</span>
+    </section>
+
+    <section class="flow-rail" aria-label="Model routing flow">
+      <span class="flow-node">Client alias</span><span class="flow-line"></span>
+      <span class="flow-node action">Select target</span><span class="flow-line"></span>
+      <span class="flow-node gate">Cooldown gate</span><span class="flow-line"></span>
+      <span class="flow-node">CPA executor</span>
+    </section>
+
+    <div class="section-head">
+      <div class="section-title"><h2>Route table</h2><span id="route-count" class="count">0 routes</span></div>
+      <button id="add-route" class="secondary" type="button">Add route</button>
+    </div>
+    <section id="routes" class="routes" aria-live="polite"></section>
+
+    <div class="footer-bar">
+      <span class="footer-hint">Save checks duplicate aliases, recursion, target pools, and cooldowns with the plugin's Go parser.</span>
+      <div class="footer-actions">
+        <button id="reload" class="secondary" type="button">Discard and reload</button>
+        <button id="save" class="primary" type="button">Save changes</button>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<template id="empty-template">
+  <div class="empty">
+    <h3>No model routes yet</h3>
+    <p>Add an alias and at least one physical CPA model target.</p>
+    <button class="primary" type="button" data-action="add-route">Add first route</button>
+  </div>
+</template>
+
+<template id="route-template">
+  <article class="route-card">
+    <aside class="route-rail"><span class="ordinal"></span><span class="rail-label">Route</span></aside>
+    <div class="route-body">
+      <div class="route-top">
+        <div class="field">
+          <label>Client alias</label>
+          <input type="text" data-field="alias" placeholder="auto" autocomplete="off">
+          <small>The name clients send in the model field.</small>
+        </div>
+        <div class="route-actions">
+          <button class="icon-button" type="button" data-action="up" aria-label="Move route up">↑</button>
+          <button class="icon-button" type="button" data-action="down" aria-label="Move route down">↓</button>
+          <button class="danger-button" type="button" data-action="remove">Remove</button>
+        </div>
+      </div>
+
+      <div class="route-preview" aria-hidden="true">
+        <span class="preview-alias"></span><span class="preview-line"></span><span class="preview-targets"></span>
+      </div>
+
+      <div class="field-grid">
+        <div class="field">
+          <label>Selection strategy</label>
+          <select data-field="strategy"><option value="priority">Priority order</option><option value="round-robin">Round robin</option></select>
+        </div>
+        <div class="field">
+          <label>Cooldown seconds</label>
+          <input type="number" data-field="cooldown_seconds" min="0" step="1" inputmode="numeric">
+          <small>Zero uses the 60-second default.</small>
+        </div>
+      </div>
+
+      <div class="targets">
+        <div class="targets-head">
+          <strong>Ordered model targets</strong>
+          <button class="secondary" type="button" data-action="add-target">Add target</button>
+        </div>
+        <div class="target-list"></div>
+      </div>
+    </div>
+  </article>
+</template>
+
+<template id="target-template">
+  <div class="target-row">
+    <span class="target-number"></span>
+    <input type="text" data-target-field="model" placeholder="provider/model" aria-label="CPA model target">
+    <button class="icon-button" type="button" data-action="target-up" aria-label="Move target up">↑</button>
+    <button class="icon-button" type="button" data-action="target-down" aria-label="Move target down">↓</button>
+    <button class="danger-button" type="button" data-action="remove-target">Remove</button>
+  </div>
+</template>
+
+<script>
+'use strict';
+const CONFIG_API='/v0/management/plugins/model-router/config';
+const VALIDATE_API='/v0/management/plugins/model-router/validate';
+const state={enabled:true,priority:'0',routes:[],dirty:false,busy:false};
+const keyEl=document.getElementById('management-key');
+const connectEl=document.getElementById('connect');
+const authNoteEl=document.getElementById('auth-note');
+const workspaceEl=document.getElementById('workspace');
+const enabledEl=document.getElementById('plugin-enabled');
+const priorityEl=document.getElementById('plugin-priority');
+const saveStateEl=document.getElementById('save-state');
+const routesEl=document.getElementById('routes');
+const countEl=document.getElementById('route-count');
+const saveEl=document.getElementById('save');
+const reloadEl=document.getElementById('reload');
+const addRouteEl=document.getElementById('add-route');
+const toastEl=document.getElementById('toast');
+let toastTimer=0;
+
+function managementKey(){return keyEl.value.trim()}
+function setBusy(value){
+  state.busy=value;
+  connectEl.disabled=value;
+  saveEl.disabled=value;
+  reloadEl.disabled=value;
+  addRouteEl.disabled=value;
+}
+function showToast(message,tone='info'){
+  window.clearTimeout(toastTimer);
+  toastEl.textContent=message;
+  toastEl.dataset.tone=tone;
+  toastEl.classList.add('show');
+  toastTimer=window.setTimeout(()=>toastEl.classList.remove('show'),4200);
+}
+function setAuthNote(message,tone='info'){
+  authNoteEl.textContent=message;
+  authNoteEl.dataset.tone=tone;
+}
+function setDirty(value){
+  state.dirty=value;
+  saveStateEl.dataset.dirty=String(value);
+  saveStateEl.textContent=value?'Unsaved changes':'Saved in CPA';
+}
+async function requestJSON(url,options={}){
+  const key=managementKey();
+  if(!key)throw new Error('Enter the CPA management key.');
+  const headers=Object.assign({Authorization:'Bearer '+key,Accept:'application/json'},options.headers||{});
+  const response=await fetch(url,Object.assign({},options,{headers}));
+  const text=await response.text();
+  let payload={};
+  if(text){try{payload=JSON.parse(text)}catch(_error){payload={message:text}}}
+  if(!response.ok){
+    if(response.status===401)setAuthNote('Management key rejected.','error');
+    throw new Error(payload.message||payload.error||('CPA returned HTTP '+response.status));
+  }
+  return payload;
+}
+function normalizeRoute(value,index){
+  const route=value&&typeof value==='object'?value:{};
+  const canonicalCooldown=Number.isInteger(route.cooldown_seconds)?route.cooldown_seconds:null;
+  const legacyCooldown=Number.isInteger(route['cooldown-seconds'])?route['cooldown-seconds']:null;
+  const cooldown=canonicalCooldown!==null?canonicalCooldown:(legacyCooldown!==null?legacyCooldown:60);
+  return{
+    alias:String(route.alias||('route-'+(index+1))),
+    strategy:route.strategy==='round-robin'?'round-robin':'priority',
+    cooldown_seconds:String(cooldown),
+    models:Array.isArray(route.models)?route.models.map(model=>String(model||'')):[]
+  };
+}
+async function loadConfiguration(){
+  setBusy(true);
+  setAuthNote('Loading configuration…');
+  try{
+    const config=await requestJSON(CONFIG_API);
+    const source=Array.isArray(config.routes)?config.routes:(Array.isArray(config['model-routes'])?config['model-routes']:[]);
+    state.enabled=config.enabled!==false;
+    state.priority=Number.isInteger(config.priority)?String(config.priority):'0';
+    state.routes=source.map(normalizeRoute);
+    enabledEl.checked=state.enabled;
+    priorityEl.value=state.priority;
+    renderRoutes();
+    workspaceEl.hidden=false;
+    setDirty(false);
+    setAuthNote('Connected. The key remains only in this page.');
+  }catch(error){
+    setAuthNote(error.message,'error');
+    showToast(error.message,'error');
+  }finally{setBusy(false)}
+}
+function createTargetRow(model,targetIndex,targetCount){
+  const row=document.getElementById('target-template').content.firstElementChild.cloneNode(true);
+  row.dataset.targetIndex=String(targetIndex);
+  row.querySelector('.target-number').textContent=String(targetIndex+1).padStart(2,'0');
+  row.querySelector('[data-target-field="model"]').value=model;
+  row.querySelector('[data-action="target-up"]').disabled=targetIndex===0;
+  row.querySelector('[data-action="target-down"]').disabled=targetIndex===targetCount-1;
+  return row;
+}
+function createRouteCard(route,index){
+  const card=document.getElementById('route-template').content.firstElementChild.cloneNode(true);
+  card.dataset.index=String(index);
+  card.querySelector('.ordinal').textContent=String(index+1).padStart(2,'0');
+  card.querySelector('[data-field="alias"]').value=route.alias;
+  card.querySelector('[data-field="strategy"]').value=route.strategy;
+  card.querySelector('[data-field="cooldown_seconds"]').value=route.cooldown_seconds;
+  card.querySelector('[data-action="up"]').disabled=index===0;
+  card.querySelector('[data-action="down"]').disabled=index===state.routes.length-1;
+  card.querySelector('.preview-alias').textContent=route.alias||'unnamed alias';
+  card.querySelector('.preview-targets').textContent=route.models.length+(route.models.length===1?' target':' targets');
+  const targetList=card.querySelector('.target-list');
+  if(route.models.length===0){
+    const empty=document.createElement('div');
+    empty.className='target-empty';
+    empty.textContent='A route needs at least one model target.';
+    targetList.appendChild(empty);
+  }else route.models.forEach((model,targetIndex)=>targetList.appendChild(createTargetRow(model,targetIndex,route.models.length)));
+  return card;
+}
+function renderRoutes(){
+  routesEl.replaceChildren();
+  countEl.textContent=state.routes.length+' '+(state.routes.length===1?'route':'routes');
+  if(state.routes.length===0){
+    routesEl.appendChild(document.getElementById('empty-template').content.cloneNode(true));
+    return;
+  }
+  state.routes.forEach((route,index)=>routesEl.appendChild(createRouteCard(route,index)));
+}
+function newRoute(){return{alias:'route-'+(state.routes.length+1),strategy:'priority',cooldown_seconds:'60',models:['']}}
+function addRoute(){state.routes.push(newRoute());renderRoutes();setDirty(true)}
+function routeIndexFrom(target){
+  const card=target.closest('.route-card');
+  return card?Number.parseInt(card.dataset.index,10):-1;
+}
+function moveRoute(index,delta){
+  const next=index+delta;
+  if(next<0||next>=state.routes.length)return;
+  const moved=state.routes.splice(index,1)[0];
+  state.routes.splice(next,0,moved);
+  renderRoutes();
+  setDirty(true);
+}
+function moveTarget(routeIndex,targetIndex,delta){
+  const models=state.routes[routeIndex].models;
+  const next=targetIndex+delta;
+  if(next<0||next>=models.length)return;
+  const moved=models.splice(targetIndex,1)[0];
+  models.splice(next,0,moved);
+  renderRoutes();
+  setDirty(true);
+}
+function updateFromInput(target){
+  const index=routeIndexFrom(target);
+  if(index<0||!state.routes[index])return;
+  const route=state.routes[index];
+  const targetRow=target.closest('.target-row');
+  if(targetRow&&target.dataset.targetField==='model'){
+    const targetIndex=Number.parseInt(targetRow.dataset.targetIndex,10);
+    if(targetIndex>=0)route.models[targetIndex]=target.value;
+  }else if(target.dataset.field)route[target.dataset.field]=target.value;
+  const card=target.closest('.route-card');
+  if(card&&target.dataset.field==='alias')card.querySelector('.preview-alias').textContent=target.value||'unnamed alias';
+  setDirty(true);
+}
+routesEl.addEventListener('input',event=>updateFromInput(event.target));
+routesEl.addEventListener('change',event=>updateFromInput(event.target));
+routesEl.addEventListener('click',event=>{
+  const button=event.target.closest('button[data-action]');
+  if(!button)return;
+  const action=button.dataset.action;
+  if(action==='add-route'){addRoute();return}
+  const index=routeIndexFrom(button);
+  if(index<0)return;
+  if(action==='up')moveRoute(index,-1);
+  if(action==='down')moveRoute(index,1);
+  if(action==='remove'){state.routes.splice(index,1);renderRoutes();setDirty(true)}
+  if(action==='add-target'){state.routes[index].models.push('');renderRoutes();setDirty(true)}
+  const row=button.closest('.target-row');
+  const targetIndex=row?Number.parseInt(row.dataset.targetIndex,10):-1;
+  if(action==='target-up'&&targetIndex>=0)moveTarget(index,targetIndex,-1);
+  if(action==='target-down'&&targetIndex>=0)moveTarget(index,targetIndex,1);
+  if(action==='remove-target'&&targetIndex>=0){state.routes[index].models.splice(targetIndex,1);renderRoutes();setDirty(true)}
+});
+function serializeRoutes(){
+  return state.routes.map(route=>({
+    alias:route.alias.trim(),
+    strategy:route.strategy,
+    cooldown_seconds:Number.parseInt(route.cooldown_seconds,10),
+    models:route.models.map(model=>model.trim())
+  }));
+}
+function baseModel(value){
+  const match=/^(.*)\([^()]+\)$/.exec(value);
+  return (match?match[1]:value).trim().toLowerCase();
+}
+function validateClient(routes){
+  const errors=[];
+  const aliases=new Map();
+  routes.forEach((route,index)=>{
+    const label='Route '+(index+1);
+    const aliasKey=route.alias.toLowerCase();
+    if(!route.alias)errors.push(label+': alias is required.');
+    else if(/\([^()]+\)$/.test(route.alias))errors.push(label+': aliases cannot include a thinking suffix.');
+    else if(aliases.has(aliasKey))errors.push(label+': alias duplicates route '+aliases.get(aliasKey)+'.');
+    else aliases.set(aliasKey,index+1);
+    if(route.strategy!=='priority'&&route.strategy!=='round-robin')errors.push(label+': choose a strategy.');
+    if(!Number.isInteger(route.cooldown_seconds)||route.cooldown_seconds<0)errors.push(label+': cooldown must be a non-negative integer.');
+    if(route.models.length===0)errors.push(label+': add at least one target.');
+    const models=new Map();
+    route.models.forEach((model,targetIndex)=>{
+      const modelKey=model.toLowerCase();
+      if(!model)errors.push(label+', target '+(targetIndex+1)+': model is required.');
+      else if(models.has(modelKey))errors.push(label+', target '+(targetIndex+1)+': model duplicates target '+models.get(modelKey)+'.');
+      else models.set(modelKey,targetIndex+1);
+    });
+  });
+  routes.forEach((route,index)=>route.models.forEach((model,targetIndex)=>{
+    const targetAlias=aliases.get(baseModel(model));
+    if(targetAlias)errors.push('Route '+(index+1)+', target '+(targetIndex+1)+': target references route alias '+targetAlias+'.');
+  }));
+  if(!/^-?\d+$/.test(state.priority.trim()))errors.push('Priority must be an integer.');
+  return errors;
+}
+async function saveConfiguration(){
+  if(state.busy)return;
+  const routes=serializeRoutes();
+  const errors=validateClient(routes);
+  if(errors.length){showToast(errors[0]+(errors.length>1?' '+(errors.length-1)+' more issue(s).':''),'error');return}
+  setBusy(true);
+  saveStateEl.textContent='Validating…';
+  try{
+    await requestJSON(VALIDATE_API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:state.enabled,routes})});
+    saveStateEl.textContent='Saving…';
+    await requestJSON(CONFIG_API,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:state.enabled,priority:Number.parseInt(state.priority,10),routes,'model-routes':null})});
+    setDirty(false);
+    showToast('Model routes saved and CPA reload requested.','success');
+  }catch(error){
+    saveStateEl.textContent='Save failed';
+    saveStateEl.dataset.dirty='true';
+    showToast(error.message,'error');
+  }finally{setBusy(false)}
+}
+connectEl.addEventListener('click',loadConfiguration);
+keyEl.addEventListener('keydown',event=>{if(event.key==='Enter')loadConfiguration()});
+enabledEl.addEventListener('change',()=>{state.enabled=enabledEl.checked;setDirty(true)});
+priorityEl.addEventListener('input',()=>{state.priority=priorityEl.value;setDirty(true)});
+addRouteEl.addEventListener('click',addRoute);
+reloadEl.addEventListener('click',()=>{if(!state.dirty||window.confirm('Discard unsaved changes and reload from CPA?'))loadConfiguration()});
+saveEl.addEventListener('click',saveConfiguration);
+document.addEventListener('keydown',event=>{
+  if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'&&!workspaceEl.hidden){event.preventDefault();saveConfiguration()}
+});
+</script>
+</body>
+</html>

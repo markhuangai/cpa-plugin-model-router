@@ -1,0 +1,144 @@
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+)
+
+func TestModelRouterABIAdvertisesConfigurationResource(t *testing.T) {
+	resetModelRouterABIState(t)
+	lifecycle, err := json.Marshal(lifecycleRequest{ConfigYAML: []byte("routes: []\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handleModelRouterABIMethod(t.Context(), pluginabi.MethodPluginRegister, lifecycle); err != nil {
+		t.Fatalf("plugin.register error = %v", err)
+	}
+	raw, err := handleModelRouterABIMethod(t.Context(), pluginabi.MethodManagementRegister, nil)
+	if err != nil {
+		t.Fatalf("management.register error = %v", err)
+	}
+	var envelope abiEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatalf("decode management envelope: %v", err)
+	}
+	var management managementRegistrationResponse
+	if err := json.Unmarshal(envelope.Result, &management); err != nil {
+		t.Fatalf("decode management result: %v", err)
+	}
+	if len(management.Resources) != 1 || management.Resources[0].Path != "/config" || management.Resources[0].Menu != "Model Router" {
+		t.Fatalf("resources = %#v", management.Resources)
+	}
+	if len(management.Routes) != 1 || management.Routes[0].Method != http.MethodPost || management.Routes[0].Path != "/plugins/model-router/validate" {
+		t.Fatalf("routes = %#v", management.Routes)
+	}
+}
+
+func TestModelRouterManagementDashboardUsesAuthenticatedConfigAPI(t *testing.T) {
+	request, err := json.Marshal(managementRPCRequest{ManagementRequest: pluginapi.ManagementRequest{
+		Method: http.MethodGet,
+		Path:   modelRouterDashboardPath,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := handleModelRouterABIMethod(t.Context(), pluginabi.MethodManagementHandle, request)
+	if err != nil {
+		t.Fatalf("management.handle error = %v", err)
+	}
+	var envelope abiEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	var response pluginapi.ManagementResponse
+	if err := json.Unmarshal(envelope.Result, &response); err != nil {
+		t.Fatalf("decode management response: %v", err)
+	}
+	if response.StatusCode != http.StatusOK || !strings.Contains(response.Headers.Get("Content-Type"), "text/html") {
+		t.Fatalf("response status=%d headers=%v", response.StatusCode, response.Headers)
+	}
+	page := string(response.Body)
+	for _, required := range []string{
+		"<title>Model Router</title>",
+		"/v0/management/plugins/model-router/config",
+		"/v0/management/plugins/model-router/validate",
+		"Authorization:'Bearer '+key",
+		"data-action=\"add-target\"",
+	} {
+		if !strings.Contains(page, required) {
+			t.Fatalf("dashboard missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"localStorage", "sessionStorage", "http://", "https://", "innerHTML"} {
+		if strings.Contains(page, forbidden) {
+			t.Fatalf("dashboard contains forbidden text %q", forbidden)
+		}
+	}
+	if csp := response.Headers.Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'none'") || !strings.Contains(csp, "connect-src 'self'") {
+		t.Fatalf("Content-Security-Policy = %q", csp)
+	}
+}
+
+func TestModelRouterManagementValidationUsesPluginParser(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+		wantText   string
+	}{
+		{
+			name:       "valid",
+			body:       `{"enabled":true,"routes":[{"alias":"auto","strategy":"priority","cooldown_seconds":60,"models":["provider-a/model","provider-b/model"]}]}`,
+			wantStatus: http.StatusOK,
+			wantText:   `"valid":true`,
+		},
+		{
+			name:       "recursive target",
+			body:       `{"enabled":true,"routes":[{"alias":"auto","strategy":"priority","cooldown_seconds":60,"models":["auto(high)"]}]}`,
+			wantStatus: http.StatusBadRequest,
+			wantText:   "target must not reference route alias",
+		},
+		{
+			name:       "empty target pool",
+			body:       `{"enabled":true,"routes":[{"alias":"auto","strategy":"priority","cooldown_seconds":60,"models":[]}]}`,
+			wantStatus: http.StatusBadRequest,
+			wantText:   "at least one model is required",
+		},
+		{
+			name:       "unknown route field",
+			body:       `{"enabled":true,"routes":[{"alias":"auto","models":["provider/model"],"unknown":true}]}`,
+			wantStatus: http.StatusBadRequest,
+			wantText:   "unknown field",
+		},
+		{
+			name:       "multiple documents",
+			body:       `{"enabled":true,"routes":[]} {"enabled":true,"routes":[]}`,
+			wantStatus: http.StatusBadRequest,
+			wantText:   "multiple JSON values",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := handleModelRouterManagement(pluginapi.ManagementRequest{
+				Method: http.MethodPost,
+				Path:   modelRouterValidationPath,
+				Body:   []byte(test.body),
+			})
+			if response.StatusCode != test.wantStatus || !strings.Contains(string(response.Body), test.wantText) {
+				t.Fatalf("status=%d body=%s, want status=%d containing %q", response.StatusCode, response.Body, test.wantStatus, test.wantText)
+			}
+		})
+	}
+}
+
+func TestModelRouterManagementRejectsUnsupportedMethod(t *testing.T) {
+	response := handleModelRouterManagement(pluginapi.ManagementRequest{Method: http.MethodDelete, Path: modelRouterDashboardPath})
+	if response.StatusCode != http.StatusMethodNotAllowed || !strings.Contains(string(response.Body), "method_not_allowed") {
+		t.Fatalf("response = %#v, body=%s", response, response.Body)
+	}
+}

@@ -104,6 +104,7 @@ type abiCapabilities struct {
 	ModelRegistrar        bool                         `json:"model_registrar"`
 	ModelRouter           bool                         `json:"model_router"`
 	Executor              bool                         `json:"executor"`
+	ManagementAPI         bool                         `json:"management_api"`
 	ExecutorModelScope    pluginapi.ExecutorModelScope `json:"executor_model_scope"`
 	ExecutorInputFormats  []string                     `json:"executor_input_formats"`
 	ExecutorOutputFormats []string                     `json:"executor_output_formats"`
@@ -186,6 +187,16 @@ func handleModelRouterABIMethod(ctx context.Context, method string, request []by
 	if method == pluginabi.MethodPluginRegister || method == pluginabi.MethodPluginReconfigure {
 		return registerModelRouter(request)
 	}
+	switch method {
+	case pluginabi.MethodManagementRegister:
+		return okEnvelope(modelRouterManagementRegistration())
+	case pluginabi.MethodManagementHandle:
+		var rpcRequest managementRPCRequest
+		if err := json.Unmarshal(request, &rpcRequest); err != nil {
+			return nil, fmt.Errorf("decode management.handle request: %w", err)
+		}
+		return okEnvelope(handleModelRouterManagement(rpcRequest.ManagementRequest))
+	}
 	plugin, metadata, done, err := beginModelRouterCall()
 	if err != nil {
 		return nil, err
@@ -260,6 +271,7 @@ func registerModelRouter(raw []byte) ([]byte, error) {
 			ModelRegistrar:        true,
 			ModelRouter:           true,
 			Executor:              true,
+			ManagementAPI:         true,
 			ExecutorModelScope:    pluginapi.ExecutorModelScopeStatic,
 			ExecutorInputFormats:  formats,
 			ExecutorOutputFormats: formats,

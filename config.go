@@ -25,11 +25,11 @@ type modelRoute struct {
 }
 
 type modelRouteYAML struct {
-	Alias                 string   `yaml:"alias"`
-	Strategy              string   `yaml:"strategy,omitempty"`
-	CooldownSeconds       *int     `yaml:"cooldown_seconds,omitempty"`
-	LegacyCooldownSeconds *int     `yaml:"cooldown-seconds,omitempty"`
-	Models                []string `yaml:"models"`
+	Alias                 string   `yaml:"alias" json:"alias"`
+	Strategy              string   `yaml:"strategy,omitempty" json:"strategy,omitempty"`
+	CooldownSeconds       *int     `yaml:"cooldown_seconds,omitempty" json:"cooldown_seconds,omitempty"`
+	LegacyCooldownSeconds *int     `yaml:"cooldown-seconds,omitempty" json:"cooldown-seconds,omitempty"`
+	Models                []string `yaml:"models" json:"models"`
 }
 
 type routerConfig struct {

@@ -18,10 +18,11 @@ The plugin does not call providers directly. For each selected physical model it
 - Rewrite non-streaming and streaming response model fields back to the requested alias.
 - Retry a stream only before the first upstream payload is received.
 - Preserve unchanged cooldown and round-robin state when CPA reconfigures the plugin.
+- Configure ordered routes and target pools through a dedicated CPA management page.
 
 ## Compatibility
 
-The module is built against `github.com/router-for-me/CLIProxyAPI/v7` v7.2.123. It advertises RPC schema v1 because it does not use the schema-v2 request-lifecycle additions. The CPA host must support native plugins, `model_router`, `executor`, `model_registrar`, and the `host.model.*` callback methods.
+The module is built against `github.com/router-for-me/CLIProxyAPI/v7` v7.2.123. It advertises RPC schema v1 because it does not use the schema-v2 request-lifecycle additions. The CPA host must support native plugins, `model_router`, `executor`, `model_registrar`, and the `host.model.*` callback methods. The configuration page also requires CPA's `management_api` capability and plugin resource menus.
 
 Build the plugin for the same operating system and architecture as CPA. A Go `c-shared` library is not portable across OS or CPU targets.
 
@@ -53,6 +54,18 @@ plugins:
 ```
 
 `plugins.enabled` and `plugins.configs.model-router.enabled` must both be true. The library basename must be exactly `model-router` with the host extension: `.so`, `.dylib`, or `.dll`.
+
+### Configuration UI
+
+Version `0.2.0` registers a **Model Router** page in CPA's management frontend. Open the Plugins section, select **Model Router**, enter the CPA management key, and choose **Load configuration**. The page provides typed controls for route order, aliases, priority or round-robin strategy, cooldowns, and ordered target pools.
+
+**Save changes** checks duplicate aliases, recursive routes, empty pools, duplicate targets, and cooldown values with the plugin's Go configuration parser before applying a shallow patch through CPA. The patch updates `enabled`, `priority`, and `routes` without replacing plugin-store metadata or unrelated config fields. The same page is available directly at:
+
+```text
+/v0/resource/plugins/model-router/config
+```
+
+The dashboard HTML is a public plugin resource so CPA can embed it in the frontend. Reading or changing configuration still requires the management key. The page keeps that key only in memory and does not use browser storage. CPA's Management API must be enabled and reachable from the browser.
 
 ### Route fields
 
@@ -119,7 +132,7 @@ plugins:
 
 For staged migration, the plugin accepts `model-routes` instead of `routes` and `cooldown-seconds` instead of `cooldown_seconds` inside its config. Do not provide both forms of either field; registration fails rather than choosing one silently.
 
-The fork-specific `/v0/management/model-routes` endpoints are not part of this plugin. Use CPA's generic plugin endpoints instead:
+The fork-specific `/v0/management/model-routes` endpoints are not part of this plugin. The configuration page uses CPA's generic plugin endpoints, which remain available for automation:
 
 ```text
 GET   /v0/management/plugins/model-router/config
@@ -137,7 +150,7 @@ make check
 make build
 ```
 
-`make build` writes the host-platform library to `dist/model-router.<ext>`. The default suite covers strict config parsing, priority and round-robin state, reconfiguration, failure classification, header sanitization, model rewriting, non-stream failover, stream boundaries, and native RPC registration.
+`make build` writes the host-platform library to `dist/model-router.<ext>`. The default suite covers strict config parsing, priority and round-robin state, reconfiguration, failure classification, header sanitization, model rewriting, non-stream failover, stream boundaries, the management page, and native RPC registration.
 
 Run the opt-in black-box test against a local CPA source checkout:
 
@@ -149,6 +162,7 @@ CPA_SOURCE=../CLIProxyAPI \
 The black-box test builds CPA and the native plugin in a temporary directory, starts two logical providers on a local mock OpenAI-compatible server, loads the library through CPA, and verifies all of the following without real provider credentials:
 
 - the logical alias appears in `/v1/models`;
+- the Model Router menu and parser-backed validation endpoint are available;
 - a `429` from the first target fails over to the second target;
 - the client sees the requested alias in the response;
 - the failed target remains on cooldown for the next request.
@@ -159,7 +173,7 @@ The test currently runs on Linux and macOS.
 
 1. Run `make build` on the CPA host machine.
 2. Copy `dist/model-router.so` on Linux, `dist/model-router.dylib` on macOS, or `dist/model-router.dll` on Windows into the configured `plugins.dir`. CPA also scans `plugins.dir/<goos>/<goarch>`.
-3. Add the `plugins.configs.model-router` configuration shown above. Every target model must already be routable by CPA.
+3. Add `plugins.configs.model-router.enabled: true`. Add routes in YAML or through the Model Router management page. Every target model must already be routable by CPA.
 4. Start CPA with `go run ./cmd/server --config /path/to/config.yaml` or your normal CPA binary.
 5. Verify that the alias is listed:
 
@@ -195,14 +209,14 @@ Native plugins execute in the CPA process with CPA's permissions. Only load arti
 
 ## Publishing And Plugin Store Registration
 
-The release workflow accepts tags such as `v0.1.0` and builds these CPA Plugin Store assets:
+The release workflow accepts tags such as `v0.2.0` and builds these CPA Plugin Store assets:
 
 ```text
-model-router_0.1.0_linux_amd64.zip
-model-router_0.1.0_linux_arm64.zip
-model-router_0.1.0_darwin_amd64.zip
-model-router_0.1.0_darwin_arm64.zip
-model-router_0.1.0_windows_amd64.zip
+model-router_0.2.0_linux_amd64.zip
+model-router_0.2.0_linux_arm64.zip
+model-router_0.2.0_darwin_amd64.zip
+model-router_0.2.0_darwin_arm64.zip
+model-router_0.2.0_windows_amd64.zip
 checksums.txt
 ```
 
@@ -231,7 +245,7 @@ To register the plugin publicly:
 
 Do not add a `version` field unless the store maintainers request it. CPA discovers the latest version from the repository's newest published `v*` release.
 
-After the registry PR is merged, install through the CPA management UI or `POST /v0/management/plugin-store/model-router/install`, then set the route configuration through the generic plugin config API.
+After the registry PR is merged, install through the CPA management UI or `POST /v0/management/plugin-store/model-router/install`, then configure routes from the plugin's **Model Router** page or the generic config API.
 
 ## License
 

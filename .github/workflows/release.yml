@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing tag to publish or refresh, for example v0.1.0.
+        description: Existing tag to publish or refresh, for example v0.2.0.
         required: true
         type: string
 

@@ -30,7 +30,7 @@ func TestABIRegistrationRoutingAndCountTokens(t *testing.T) {
 	if err := json.Unmarshal(registrationEnvelope.Result, &registration); err != nil {
 		t.Fatalf("decode registration result: %v", err)
 	}
-	if !registrationEnvelope.OK || registration.SchemaVersion != registrationSchemaVersion || registration.Metadata.Name != pluginName || !registration.Capabilities.ModelRegistrar || !registration.Capabilities.ModelRouter || !registration.Capabilities.Executor {
+	if !registrationEnvelope.OK || registration.SchemaVersion != registrationSchemaVersion || registration.Metadata.Name != pluginName || registration.Metadata.Version != "0.2.0" || !registration.Capabilities.ModelRegistrar || !registration.Capabilities.ModelRouter || !registration.Capabilities.Executor || !registration.Capabilities.ManagementAPI {
 		t.Fatalf("registration = %#v", registration)
 	}
 
