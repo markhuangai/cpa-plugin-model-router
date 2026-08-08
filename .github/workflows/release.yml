@@ -1,0 +1,185 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to publish or refresh, for example v0.1.0.
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test ./...
+      - run: go vet ./...
+
+  build-unix:
+    name: build ${{ matrix.target }}
+    needs: test
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            runs_on: ubuntu-24.04
+            goos: linux
+            goarch: amd64
+            cc: ""
+          - target: linux-arm64
+            runs_on: ubuntu-24.04
+            goos: linux
+            goarch: arm64
+            cc: aarch64-linux-gnu-gcc
+          - target: darwin-amd64
+            runs_on: macos-14
+            goos: darwin
+            goarch: amd64
+            cc: ""
+          - target: darwin-arm64
+            runs_on: macos-14
+            goos: darwin
+            goarch: arm64
+            cc: ""
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      TARGET_GOOS: ${{ matrix.goos }}
+      TARGET_GOARCH: ${{ matrix.goarch }}
+      TARGET_CC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install Linux arm64 cross compiler
+        if: matrix.target == 'linux-arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Build store-compatible archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "release tag must be v<major>.<minor>.<patch>"
+            exit 1
+          fi
+          extension=so
+          if [[ "$TARGET_GOOS" == "darwin" ]]; then extension=dylib; fi
+          package_dir="dist/package-${TARGET_GOOS}-${TARGET_GOARCH}"
+          archive="dist/model-router_${version}_${TARGET_GOOS}_${TARGET_GOARCH}.zip"
+          mkdir -p "$package_dir"
+          export CGO_ENABLED=1 GOOS="$TARGET_GOOS" GOARCH="$TARGET_GOARCH"
+          if [[ -n "$TARGET_CC" ]]; then export CC="$TARGET_CC"; fi
+          go build -trimpath -buildmode=c-shared -ldflags="-s -w -X main.pluginVersion=$version" -o "$package_dir/model-router.$extension" .
+          (cd "$package_dir" && zip -q "../$(basename "$archive")" "model-router.$extension")
+          test "$(unzip -Z1 "$archive" | wc -l | tr -d ' ')" = "1"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  build-windows:
+    name: build windows-amd64
+    needs: test
+    runs-on: windows-2022
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: mingw-w64-x86_64-gcc
+      - name: Add MinGW to PATH
+        shell: pwsh
+        run: '"C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append'
+      - name: Build store-compatible archive
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$') {
+            throw 'release tag must be v<major>.<minor>.<patch>'
+          }
+          $version = $env:RELEASE_TAG.Substring(1)
+          $packageDir = 'dist/package-windows-amd64'
+          $archive = "dist/model-router_${version}_windows_amd64.zip"
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+          $env:CGO_ENABLED = '1'
+          $env:GOOS = 'windows'
+          $env:GOARCH = 'amd64'
+          $env:CC = 'gcc'
+          go build -trimpath -buildmode=c-shared -ldflags="-s -w -X main.pluginVersion=$version" -o "$packageDir/model-router.dll" .
+          Compress-Archive -LiteralPath "$packageDir/model-router.dll" -DestinationPath $archive -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-amd64
+          path: dist/*.zip
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: [build-unix, build-windows]
+    runs-on: ubuntu-24.04
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Validate archives and create checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          for archive in *.zip; do
+            entries="$(unzip -Z1 "$archive")"
+            test "$(printf '%s\n' "$entries" | wc -l | tr -d ' ')" = "1"
+            case "$archive" in
+              *_windows_*) test "$entries" = "model-router.dll" ;;
+              *_darwin_*) test "$entries" = "model-router.dylib" ;;
+              *) test "$entries" = "model-router.so" ;;
+            esac
+          done
+          sha256sum *.zip > checksums.txt
+      - name: Create or update GitHub release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t assets < <(find release-assets -maxdepth 1 -type f -printf '%p\n' | sort)
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" --title "$RELEASE_TAG" --generate-notes --verify-tag
+          fi

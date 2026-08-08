@@ -1,0 +1,6 @@
+/dist/
+/.test-cpa/
+*.h
+*.so
+*.dylib
+*.dll
