@@ -39,7 +39,7 @@ func TestModelRouterABIAdvertisesConfigurationResource(t *testing.T) {
 	}
 }
 
-func TestModelRouterManagementDashboardUsesAuthenticatedConfigAPI(t *testing.T) {
+func TestModelRouterManagementDashboardReusesCPAMCSessionAndTheme(t *testing.T) {
 	request, err := json.Marshal(managementRPCRequest{ManagementRequest: pluginapi.ManagementRequest{
 		Method: http.MethodGet,
 		Path:   modelRouterDashboardPath,
@@ -68,13 +68,19 @@ func TestModelRouterManagementDashboardUsesAuthenticatedConfigAPI(t *testing.T) 
 		"/v0/management/plugins/model-router/config",
 		"/v0/management/plugins/model-router/validate",
 		"Authorization:'Bearer '+key",
+		"'cli-proxy-auth'",
+		"CPA_STORAGE_PREFIX='enc::v1::'",
+		":root[data-host-theme=\"dark\"]",
+		"new MutationObserver(refresh)",
+		"class=\"auth-dock\" aria-labelledby=\"auth-title\" hidden",
+		"if(managementKey())loadConfiguration()",
 		"data-action=\"add-target\"",
 	} {
 		if !strings.Contains(page, required) {
 			t.Fatalf("dashboard missing %q", required)
 		}
 	}
-	for _, forbidden := range []string{"localStorage", "sessionStorage", "http://", "https://", "innerHTML"} {
+	for _, forbidden := range []string{"http://", "https://", "innerHTML"} {
 		if strings.Contains(page, forbidden) {
 			t.Fatalf("dashboard contains forbidden text %q", forbidden)
 		}

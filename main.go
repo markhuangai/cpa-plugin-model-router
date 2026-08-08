@@ -12,7 +12,7 @@ const (
 	pluginName = "Model Router"
 )
 
-var pluginVersion = "0.2.0"
+var pluginVersion = "0.2.1"
 
 type modelRouterPlugin struct {
 	config  routerConfig
