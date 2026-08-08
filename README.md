@@ -1,7 +1,7 @@
 # CPA Model Router
 
-[![test](https://github.com/Z-M-Huang/cpa-plugin-model-router/actions/workflows/test.yml/badge.svg)](https://github.com/Z-M-Huang/cpa-plugin-model-router/actions/workflows/test.yml)
-[![release](https://github.com/Z-M-Huang/cpa-plugin-model-router/actions/workflows/release.yml/badge.svg)](https://github.com/Z-M-Huang/cpa-plugin-model-router/actions/workflows/release.yml)
+[![test](https://github.com/markhuangai/cpa-plugin-model-router/actions/workflows/test.yml/badge.svg)](https://github.com/markhuangai/cpa-plugin-model-router/actions/workflows/test.yml)
+[![release](https://github.com/markhuangai/cpa-plugin-model-router/actions/workflows/release.yml/badge.svg)](https://github.com/markhuangai/cpa-plugin-model-router/actions/workflows/release.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 CPA Model Router is a native [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) model-router and executor plugin. It ports the configured model alias, priority routing, round-robin routing, cooldown, and failover behavior from `Z-M-Huang/CLIProxyAPI` into a standalone plugin for upstream CPA.
@@ -210,7 +210,7 @@ Each zip contains exactly one root-level library named `model-router.so`, `model
 
 To register the plugin publicly:
 
-1. Push this repository to `https://github.com/Z-M-Huang/cpa-plugin-model-router`.
+1. Push this repository to `https://github.com/markhuangai/cpa-plugin-model-router`.
 2. Create and push a `v<major>.<minor>.<patch>` tag. Confirm the GitHub release contains all five zips plus `checksums.txt`.
 3. Fork `router-for-me/CLIProxyAPI-Plugins-Store` and add this object to `registry.json`:
 
@@ -219,9 +219,9 @@ To register the plugin publicly:
   "id": "model-router",
   "name": "Model Router",
   "description": "Adds logical model aliases with priority or round-robin selection, cooldowns, and failover across CPA model targets.",
-  "author": "Z-M-Huang",
-  "repository": "https://github.com/Z-M-Huang/cpa-plugin-model-router",
-  "homepage": "https://github.com/Z-M-Huang/cpa-plugin-model-router",
+  "author": "markhuangai",
+  "repository": "https://github.com/markhuangai/cpa-plugin-model-router",
+  "homepage": "https://github.com/markhuangai/cpa-plugin-model-router",
   "license": "MIT",
   "tags": ["Router", "Model Router", "Fallback"]
 }

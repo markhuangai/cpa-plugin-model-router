@@ -1,4 +1,4 @@
-module github.com/Z-M-Huang/cpa-plugin-model-router
+module github.com/markhuangai/cpa-plugin-model-router
 
 go 1.26.0
 

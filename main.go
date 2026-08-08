@@ -40,8 +40,8 @@ func newModelRouterPlugin(configYAML []byte, previous *routeRuntime) (*modelRout
 	metadata := pluginapi.Metadata{
 		Name:             pluginName,
 		Version:          pluginVersion,
-		Author:           "Z-M-Huang",
-		GitHubRepository: "https://github.com/Z-M-Huang/cpa-plugin-model-router",
+		Author:           "markhuangai",
+		GitHubRepository: "https://github.com/markhuangai/cpa-plugin-model-router",
 		ConfigFields: []pluginapi.ConfigField{
 			{Name: "routes", Type: pluginapi.ConfigFieldTypeArray, Description: "Logical model aliases backed by priority or round-robin target pools."},
 		},
