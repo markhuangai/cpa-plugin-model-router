@@ -67,20 +67,24 @@ func TestModelRouterManagementDashboardReusesCPAMCSessionAndTheme(t *testing.T) 
 		"<title>Model Router</title>",
 		"/v0/management/plugins/model-router/config",
 		"/v0/management/plugins/model-router/validate",
-		"Authorization:'Bearer '+key",
+		"/v0/management/api-keys",
+		"/v1/models",
+		"headers.Authorization='Bearer '+key",
 		"'cli-proxy-auth'",
 		"CPA_STORAGE_PREFIX='enc::v1::'",
 		":root[data-host-theme=\"dark\"]",
 		"new MutationObserver(refresh)",
 		"class=\"auth-dock\" aria-labelledby=\"auth-title\" hidden",
 		"if(managementKey())loadConfiguration()",
+		"<select data-target-field=\"model\"",
+		"model+' (unavailable)'",
 		"data-action=\"add-target\"",
 	} {
 		if !strings.Contains(page, required) {
 			t.Fatalf("dashboard missing %q", required)
 		}
 	}
-	for _, forbidden := range []string{"http://", "https://", "innerHTML"} {
+	for _, forbidden := range []string{"http://", "https://", "innerHTML", "<input type=\"text\" data-target-field=\"model\""} {
 		if strings.Contains(page, forbidden) {
 			t.Fatalf("dashboard contains forbidden text %q", forbidden)
 		}

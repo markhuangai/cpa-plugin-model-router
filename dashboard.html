@@ -180,9 +180,13 @@ h1 { margin: 0; font-size: clamp(34px, 5vw, 58px); line-height: .98; letter-spac
 .flow-line { height: 1px; background: var(--line-strong); position: relative; }
 .flow-line::after { content: ""; position: absolute; right: -1px; top: -3px; border: 3px solid transparent; border-left-color: var(--line-strong); }
 .section-head { display: flex; justify-content: space-between; gap: 16px; align-items: center; margin: 30px 0 13px; }
-.section-title { display: flex; align-items: baseline; gap: 10px; }
+.section-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
 .section-title h2 { margin: 0; font-size: 20px; letter-spacing: -.02em; }
 .count { color: var(--muted); font: 700 12px/1 "Cascadia Code", "SFMono-Regular", ui-monospace, monospace; }
+.catalog-status { padding-left: 10px; border-left: 1px solid var(--line-strong); }
+.catalog-status[data-tone="ready"] { color: var(--teal); }
+.catalog-status[data-tone="loading"] { color: var(--amber); }
+.catalog-status[data-tone="error"] { color: var(--danger); }
 .secondary, .icon-button, .danger-button {
   padding: 8px 11px;
   color: var(--ink);
@@ -266,6 +270,7 @@ input[type="text"], input[type="number"], input[type="password"], select {
 .target-list { display: grid; gap: 7px; }
 .target-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; gap: 7px; align-items: center; }
 .target-number { width: 28px; color: var(--muted); text-align: center; font: 700 11px/1 "Cascadia Code", "SFMono-Regular", ui-monospace, monospace; }
+.target-row[data-model-availability="unavailable"] select { background: var(--amber-soft); border-color: var(--amber-border); }
 .target-empty { padding: 10px; color: var(--danger); font-size: 12px; background: var(--danger-soft); border: 1px dashed var(--danger-border); border-radius: 7px; }
 .footer-bar {
   position: sticky;
@@ -371,7 +376,11 @@ input[type="text"], input[type="number"], input[type="password"], select {
     </section>
 
     <div class="section-head">
-      <div class="section-title"><h2>Route table</h2><span id="route-count" class="count">0 routes</span></div>
+      <div class="section-title">
+        <h2>Route table</h2>
+        <span id="route-count" class="count">0 routes</span>
+        <span id="model-status" class="count catalog-status" data-tone="loading" aria-live="polite">Loading CPA models…</span>
+      </div>
       <button id="add-route" class="secondary" type="button">Add route</button>
     </div>
     <section id="routes" class="routes" aria-live="polite"></section>
@@ -443,7 +452,7 @@ input[type="text"], input[type="number"], input[type="password"], select {
 <template id="target-template">
   <div class="target-row">
     <span class="target-number"></span>
-    <input type="text" data-target-field="model" placeholder="provider/model" aria-label="CPA model target">
+    <select data-target-field="model" aria-label="CPA model target"></select>
     <button class="icon-button" type="button" data-action="target-up" aria-label="Move target up">↑</button>
     <button class="icon-button" type="button" data-action="target-down" aria-label="Move target down">↓</button>
     <button class="danger-button" type="button" data-action="remove-target">Remove</button>
@@ -454,12 +463,14 @@ input[type="text"], input[type="number"], input[type="password"], select {
 'use strict';
 const CONFIG_API='/v0/management/plugins/model-router/config';
 const VALIDATE_API='/v0/management/plugins/model-router/validate';
+const API_KEYS_API='/v0/management/api-keys';
+const MODELS_API='/v1/models';
 const CPA_STORAGE_PREFIX='enc::v1::';
 const CPA_STORAGE_SALT='cli-proxy-api-webui::secure-storage';
 const SESSION_KEY='cpa_model_router_key';
 const REJECTED_KEY='cpa_model_router_rejected_key';
 const REJECTED_AT='cpa_model_router_rejected_at';
-const state={enabled:true,priority:'0',routes:[],dirty:false,busy:false};
+const state={enabled:true,priority:'0',routes:[],availableModels:[],catalogLoaded:false,catalogError:'',dirty:false,busy:false};
 const mastheadEl=document.getElementById('masthead');
 const authDockEl=document.getElementById('auth-dock');
 const keyEl=document.getElementById('management-key');
@@ -471,6 +482,7 @@ const priorityEl=document.getElementById('plugin-priority');
 const saveStateEl=document.getElementById('save-state');
 const routesEl=document.getElementById('routes');
 const countEl=document.getElementById('route-count');
+const modelStatusEl=document.getElementById('model-status');
 const saveEl=document.getElementById('save');
 const reloadEl=document.getElementById('reload');
 const addRouteEl=document.getElementById('add-route');
@@ -666,19 +678,62 @@ function setDirty(value){
   saveStateEl.dataset.dirty=String(value);
   saveStateEl.textContent=value?'Unsaved changes':'Saved in CPA';
 }
-async function requestJSON(url,options={}){
-  const key=managementKey();
-  if(!key)throw new Error('Enter the CPA management key.');
-  const headers=Object.assign({Authorization:'Bearer '+key,Accept:'application/json'},options.headers||{});
+async function requestCPAJSON(url,key,options={},rejectKey=false){
+  const headers=Object.assign({Accept:'application/json'},options.headers||{});
+  if(key)headers.Authorization='Bearer '+key;
   const response=await fetch(url,Object.assign({},options,{headers}));
   const text=await response.text();
   let payload={};
   if(text){try{payload=JSON.parse(text)}catch(_error){payload={message:text}}}
   if(!response.ok){
-    if(response.status===401)rejectManagementKey(key);
-    throw new Error(payload.message||payload.error||('CPA returned HTTP '+response.status));
+    if(rejectKey&&response.status===401)rejectManagementKey(key);
+    const error=new Error(payload.message||payload.error||('CPA returned HTTP '+response.status));
+    error.status=response.status;
+    throw error;
   }
   return payload;
+}
+async function requestManagementJSON(url,options={}){
+  const key=managementKey();
+  if(!key)throw new Error('Enter the CPA management key.');
+  return requestCPAJSON(url,key,options,true);
+}
+async function loadModelCatalog(){
+  const keyPayload=await requestManagementJSON(API_KEYS_API);
+  const keys=Array.isArray(keyPayload['api-keys'])?keyPayload['api-keys']:[];
+  const clientKey=keys.map(value=>String(value||'').trim()).find(Boolean)||'';
+  return requestCPAJSON(MODELS_API,clientKey);
+}
+function normalizeModelCatalog(payload,routes){
+  if(!payload||!Array.isArray(payload.data))throw new Error('CPA returned an invalid model catalog.');
+  const aliases=new Set(routes.map(route=>route.alias.trim().toLowerCase()).filter(Boolean));
+  const seen=new Set();
+  const models=[];
+  payload.data.forEach(item=>{
+    const id=item&&typeof item.id==='string'?item.id.trim():'';
+    const owner=item&&typeof item.owned_by==='string'?item.owned_by.trim().toLowerCase():'';
+    if(!id||owner==='model-router'||aliases.has(id.toLowerCase())||seen.has(id))return;
+    seen.add(id);
+    models.push(id);
+  });
+  models.sort((left,right)=>left.localeCompare(right));
+  if(models.length===0)throw new Error('CPA returned no selectable models.');
+  return models;
+}
+function updateModelStatus(){
+  if(state.catalogError){
+    modelStatusEl.textContent='Models unavailable';
+    modelStatusEl.dataset.tone='error';
+    modelStatusEl.title=state.catalogError;
+  }else if(state.catalogLoaded){
+    modelStatusEl.textContent=state.availableModels.length+' '+(state.availableModels.length===1?'model':'models')+' available';
+    modelStatusEl.dataset.tone='ready';
+    modelStatusEl.removeAttribute('title');
+  }else{
+    modelStatusEl.textContent='Loading CPA models…';
+    modelStatusEl.dataset.tone='loading';
+    modelStatusEl.removeAttribute('title');
+  }
 }
 function normalizeRoute(value,index){
   const route=value&&typeof value==='object'?value:{};
@@ -695,19 +750,36 @@ function normalizeRoute(value,index){
 async function loadConfiguration(){
   setBusy(true);
   setAuthNote('Loading configuration…');
+  state.availableModels=[];
+  state.catalogLoaded=false;
+  state.catalogError='';
+  updateModelStatus();
   try{
-    const config=await requestJSON(CONFIG_API);
+    const [configResult,catalogResult]=await Promise.allSettled([
+      requestManagementJSON(CONFIG_API),
+      loadModelCatalog()
+    ]);
+    if(configResult.status==='rejected')throw configResult.reason;
+    const config=configResult.value;
     const source=Array.isArray(config.routes)?config.routes:(Array.isArray(config['model-routes'])?config['model-routes']:[]);
     state.enabled=config.enabled!==false;
     state.priority=Number.isInteger(config.priority)?String(config.priority):'0';
     state.routes=source.map(normalizeRoute);
+    if(catalogResult.status==='fulfilled'){
+      try{
+        state.availableModels=normalizeModelCatalog(catalogResult.value,state.routes);
+        state.catalogLoaded=true;
+      }catch(error){state.catalogError=error.message}
+    }else state.catalogError=catalogResult.reason.message||'CPA models could not be loaded.';
     enabledEl.checked=state.enabled;
     priorityEl.value=state.priority;
+    updateModelStatus();
     renderRoutes();
     workspaceEl.hidden=false;
     setDirty(false);
     hideFallbackKeyInput();
     setAuthNote('Connected with the CPAMC session.');
+    if(state.catalogError)showToast('Configuration loaded, but CPA models are unavailable. '+state.catalogError,'error');
   }catch(error){
     setAuthNote(error.message,'error');
     showToast(error.message,'error');
@@ -717,7 +789,32 @@ function createTargetRow(model,targetIndex,targetCount){
   const row=document.getElementById('target-template').content.firstElementChild.cloneNode(true);
   row.dataset.targetIndex=String(targetIndex);
   row.querySelector('.target-number').textContent=String(targetIndex+1).padStart(2,'0');
-  row.querySelector('[data-target-field="model"]').value=model;
+  const select=row.querySelector('[data-target-field="model"]');
+  const placeholder=document.createElement('option');
+  placeholder.value='';
+  placeholder.textContent=state.catalogError?'Models unavailable':'Select a CPA model';
+  placeholder.disabled=true;
+  placeholder.selected=!model;
+  select.appendChild(placeholder);
+  const available=new Set(state.availableModels);
+  if(model&&!available.has(model)){
+    const unavailable=document.createElement('option');
+    unavailable.value=model;
+    unavailable.textContent=model+' (unavailable)';
+    unavailable.disabled=true;
+    unavailable.selected=true;
+    select.appendChild(unavailable);
+    select.title='This configured model is not currently available in CPA. Choose a live model to replace it.';
+    row.dataset.modelAvailability='unavailable';
+  }
+  state.availableModels.forEach(availableModel=>{
+    const option=document.createElement('option');
+    option.value=availableModel;
+    option.textContent=availableModel;
+    select.appendChild(option);
+  });
+  if(model&&available.has(model))select.value=model;
+  select.disabled=!state.catalogLoaded;
   row.querySelector('[data-action="target-up"]').disabled=targetIndex===0;
   row.querySelector('[data-action="target-down"]').disabled=targetIndex===targetCount-1;
   return row;
@@ -731,6 +828,9 @@ function createRouteCard(route,index){
   card.querySelector('[data-field="cooldown_seconds"]').value=route.cooldown_seconds;
   card.querySelector('[data-action="up"]').disabled=index===0;
   card.querySelector('[data-action="down"]').disabled=index===state.routes.length-1;
+  const addTarget=card.querySelector('[data-action="add-target"]');
+  addTarget.disabled=!state.catalogLoaded;
+  if(!state.catalogLoaded)addTarget.title=state.catalogError||'CPA models are still loading.';
   card.querySelector('.preview-alias').textContent=route.alias||'unnamed alias';
   card.querySelector('.preview-targets').textContent=route.models.length+(route.models.length===1?' target':' targets');
   const targetList=card.querySelector('.target-list');
@@ -745,6 +845,7 @@ function createRouteCard(route,index){
 function renderRoutes(){
   routesEl.replaceChildren();
   countEl.textContent=state.routes.length+' '+(state.routes.length===1?'route':'routes');
+  updateModelStatus();
   if(state.routes.length===0){
     routesEl.appendChild(document.getElementById('empty-template').content.cloneNode(true));
     return;
@@ -782,6 +883,10 @@ function updateFromInput(target){
   if(targetRow&&target.dataset.targetField==='model'){
     const targetIndex=Number.parseInt(targetRow.dataset.targetIndex,10);
     if(targetIndex>=0)route.models[targetIndex]=target.value;
+    if(state.availableModels.includes(target.value)){
+      delete targetRow.dataset.modelAvailability;
+      target.removeAttribute('title');
+    }
   }else if(target.dataset.field)route[target.dataset.field]=target.value;
   const card=target.closest('.route-card');
   if(card&&target.dataset.field==='alias')card.querySelector('.preview-alias').textContent=target.value||'unnamed alias';
@@ -799,7 +904,7 @@ routesEl.addEventListener('click',event=>{
   if(action==='up')moveRoute(index,-1);
   if(action==='down')moveRoute(index,1);
   if(action==='remove'){state.routes.splice(index,1);renderRoutes();setDirty(true)}
-  if(action==='add-target'){state.routes[index].models.push('');renderRoutes();setDirty(true)}
+  if(action==='add-target'&&state.catalogLoaded){state.routes[index].models.push('');renderRoutes();setDirty(true)}
   const row=button.closest('.target-row');
   const targetIndex=row?Number.parseInt(row.dataset.targetIndex,10):-1;
   if(action==='target-up'&&targetIndex>=0)moveTarget(index,targetIndex,-1);
@@ -854,9 +959,9 @@ async function saveConfiguration(){
   setBusy(true);
   saveStateEl.textContent='Validating…';
   try{
-    await requestJSON(VALIDATE_API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:state.enabled,routes})});
+    await requestManagementJSON(VALIDATE_API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:state.enabled,routes})});
     saveStateEl.textContent='Saving…';
-    await requestJSON(CONFIG_API,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:state.enabled,priority:Number.parseInt(state.priority,10),routes,'model-routes':null})});
+    await requestManagementJSON(CONFIG_API,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:state.enabled,priority:Number.parseInt(state.priority,10),routes,'model-routes':null})});
     setDirty(false);
     showToast('Model routes saved and CPA reload requested.','success');
   }catch(error){

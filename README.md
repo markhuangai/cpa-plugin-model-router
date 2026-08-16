@@ -57,7 +57,9 @@ plugins:
 
 ### Configuration UI
 
-The plugin registers a **Model Router** page in CPA's management frontend. Open the Plugins section and select **Model Router**. When CPAMC has a persisted authenticated session, the page reuses its management key and loads configuration automatically. It also follows CPAMC's selected light, white, or dark theme and updates when that selection changes. The page provides typed controls for route order, aliases, priority or round-robin strategy, cooldowns, and ordered target pools.
+The plugin registers a **Model Router** page in CPA's management frontend. Open the Plugins section and select **Model Router**. When CPAMC has a persisted authenticated session, the page reuses its management key and loads configuration automatically. It also follows CPAMC's selected light, white, or dark theme and updates when that selection changes. The page provides typed controls for route order, aliases, priority or round-robin strategy, cooldowns, and ordered target pools. Target dropdowns are populated with the model IDs currently returned by CPA's `/v1/models` endpoint.
+
+Model discovery uses the management session to read CPA's configured client API keys, then keeps the first non-empty key in browser memory only while requesting `/v1/models`. The client key is not rendered or stored. If no client key is configured, the page attempts the model request without authorization for CPA installations without frontend authentication. Existing targets that are absent from the live catalog remain visible as disabled `<model> (unavailable)` choices until they are replaced, so loading the page never changes saved routes. New UI targets must be selected from the live catalog; custom or suffixed targets can still be managed through YAML or the Management API.
 
 **Save changes** checks duplicate aliases, recursive routes, empty pools, duplicate targets, and cooldown values with the plugin's Go configuration parser before applying a shallow patch through CPA. The patch updates `enabled`, `priority`, and `routes` without replacing plugin-store metadata or unrelated config fields. The same page is available directly at:
 
@@ -209,14 +211,14 @@ Native plugins execute in the CPA process with CPA's permissions. Only load arti
 
 ## Publishing And Plugin Store Registration
 
-The release workflow accepts tags such as `v0.2.1` and builds these CPA Plugin Store assets:
+The release workflow accepts tags such as `v0.2.2` and builds these CPA Plugin Store assets:
 
 ```text
-model-router_0.2.1_linux_amd64.zip
-model-router_0.2.1_linux_arm64.zip
-model-router_0.2.1_darwin_amd64.zip
-model-router_0.2.1_darwin_arm64.zip
-model-router_0.2.1_windows_amd64.zip
+model-router_0.2.2_linux_amd64.zip
+model-router_0.2.2_linux_arm64.zip
+model-router_0.2.2_darwin_amd64.zip
+model-router_0.2.2_darwin_arm64.zip
+model-router_0.2.2_windows_amd64.zip
 checksums.txt
 ```
 

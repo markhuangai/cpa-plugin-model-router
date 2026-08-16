@@ -213,6 +213,64 @@ func verifyModelRouterManagementUI(t *testing.T, baseURL string, logs *smokeSync
 	if resourceResponse.StatusCode != http.StatusOK || !strings.Contains(string(resourceBody), "<title>Model Router</title>") {
 		t.Fatalf("dashboard status=%s body=%q", resourceResponse.Status, resourceBody)
 	}
+	for _, expected := range []string{"/v0/management/api-keys", "/v1/models", "<select data-target-field=\"model\""} {
+		if !strings.Contains(string(resourceBody), expected) {
+			t.Fatalf("dashboard missing %q", expected)
+		}
+	}
+
+	apiKeysRequest, err := http.NewRequest(http.MethodGet, baseURL+"/v0/management/api-keys", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiKeysRequest.Header.Set("Authorization", "Bearer local-management-key")
+	apiKeysResponse, err := client.Do(apiKeysRequest)
+	if err != nil {
+		t.Fatalf("get CPA API keys: %v\n%s", err, logs.String())
+	}
+	var apiKeys struct {
+		Keys []string `json:"api-keys"`
+	}
+	if err := json.NewDecoder(apiKeysResponse.Body).Decode(&apiKeys); err != nil {
+		apiKeysResponse.Body.Close()
+		t.Fatalf("decode CPA API keys: %v", err)
+	}
+	apiKeysResponse.Body.Close()
+	if apiKeysResponse.StatusCode != http.StatusOK || len(apiKeys.Keys) == 0 || apiKeys.Keys[0] != "local-test-key" {
+		t.Fatalf("CPA API keys status=%s keys=%#v", apiKeysResponse.Status, apiKeys.Keys)
+	}
+
+	modelsRequest, err := http.NewRequest(http.MethodGet, baseURL+"/v1/models", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelsRequest.Header.Set("Authorization", "Bearer "+apiKeys.Keys[0])
+	modelsResponse, err := client.Do(modelsRequest)
+	if err != nil {
+		t.Fatalf("get CPA models: %v\n%s", err, logs.String())
+	}
+	var models struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(modelsResponse.Body).Decode(&models); err != nil {
+		modelsResponse.Body.Close()
+		t.Fatalf("decode CPA models: %v", err)
+	}
+	modelsResponse.Body.Close()
+	if modelsResponse.StatusCode != http.StatusOK {
+		t.Fatalf("CPA models status=%s", modelsResponse.Status)
+	}
+	modelIDs := make(map[string]bool, len(models.Data))
+	for _, model := range models.Data {
+		modelIDs[model.ID] = true
+	}
+	for _, expected := range []string{"fail/fail-model", "work/working-model"} {
+		if !modelIDs[expected] {
+			t.Fatalf("CPA models missing %q: %#v", expected, modelIDs)
+		}
+	}
 
 	validation := []byte(`{"enabled":true,"routes":[{"alias":"smoke","strategy":"priority","cooldown_seconds":60,"models":["provider/model"]}]}`)
 	unauthenticatedRequest, err := http.NewRequest(http.MethodPost, baseURL+modelRouterValidationPath, bytes.NewReader(validation))
