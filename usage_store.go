@@ -583,7 +583,7 @@ func safeStoredUsageSource(record pluginapi.UsageRecord) string {
 	if source == "" {
 		return fallback
 	}
-	if isAPIKeyAuthType(record.AuthType) || sameNonemptyValue(source, record.APIKey) || looksLikeCredential(source) {
+	if isAPIKeyAuthType(record.AuthType) || sameNonemptyValue(source, record.APIKey) {
 		return fallback
 	}
 	parsed, err := url.Parse(source)
@@ -593,6 +593,9 @@ func safeStoredUsageSource(record pluginapi.UsageRecord) string {
 		parsed.ForceQuery = false
 		parsed.Fragment = ""
 		return strings.TrimRight(parsed.String(), "/")
+	}
+	if looksLikeCredential(source) {
+		return fallback
 	}
 	return source
 }
@@ -619,7 +622,7 @@ func looksLikeCredential(value string) bool {
 			return true
 		}
 	}
-	if len(value) < 8 || strings.ContainsAny(value, " /\\:@") {
+	if len(value) < 8 || strings.ContainsAny(value, " \t\r\n:@") {
 		return false
 	}
 	letters, digits := 0, 0
@@ -629,7 +632,7 @@ func looksLikeCredential(value string) bool {
 			letters++
 		case character >= '0' && character <= '9':
 			digits++
-		case character == '-' || character == '_' || character == '.':
+		case character == '-' || character == '_' || character == '.' || character == '+' || character == '/' || character == '=':
 		default:
 			return false
 		}

@@ -86,7 +86,7 @@ func TestAttributionTrackerDoesNotGuessAmongActiveTimestampLessUsage(t *testing.
 	tracker.MarkRouted("first", "gpt-5.4", headers)
 	now = now.Add(time.Second)
 	tracker.MarkRouted("second", "gpt-5.4", headers)
-	if got := tracker.Match(pluginapi.UsageRecord{Model: "gpt-5.4", APIKey: "key-one"}); got.Kind != attributionUnresolved {
+	if got := tracker.Match(pluginapi.UsageRecord{Model: "gpt-5.4", APIKey: "key-one"}); got.Kind != attributionUnresolved || !got.Suppress {
 		t.Fatalf("ambiguous timestamp-less attribution = %#v", got)
 	}
 	if len(tracker.markers) != 2 || tracker.markers[0].fallback || tracker.markers[1].fallback {

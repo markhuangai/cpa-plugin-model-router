@@ -156,6 +156,23 @@ func TestRoutedFallbackRecordsEachAttemptAndSuppressesLateUsage(t *testing.T) {
 	}
 }
 
+func TestAmbiguousTimestampLessUsageIsSuppressed(t *testing.T) {
+	plugin := testUsageCapturePlugin(t)
+	headers := http.Header{"X-Api-Key": {"local-client-secret"}}
+	plugin.attribution.MarkRouted("first", "gpt-5.4", headers)
+	plugin.attribution.MarkRouted("second", "gpt-5.4", headers)
+	plugin.HandleUsage(t.Context(), pluginapi.UsageRecord{
+		Model: "gpt-5.4", APIKey: "local-client-secret", Detail: pluginapi.UsageDetail{TotalTokens: 9},
+	})
+	page := captureRequestPage(t, plugin)
+	if page.Total != 0 {
+		t.Fatalf("ambiguous official usage page = %#v, want no persisted callback", page)
+	}
+	if len(plugin.attribution.markers) != 2 || plugin.attribution.markers[0].fallback || plugin.attribution.markers[1].fallback {
+		t.Fatalf("markers after ambiguous official usage = %#v", plugin.attribution.markers)
+	}
+}
+
 func testUsageCapturePlugin(t *testing.T, routes ...modelRoute) *modelRouterPlugin {
 	t.Helper()
 	store, err := openUsageStore(filepath.Join(t.TempDir(), "usage.db"), 30)

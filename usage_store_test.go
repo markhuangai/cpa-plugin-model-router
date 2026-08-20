@@ -82,7 +82,7 @@ func TestUsageStorePersistsAndResetPreservesSettings(t *testing.T) {
 }
 
 func TestSafeStoredUsageSourceRejectsCredentialShapedValues(t *testing.T) {
-	for _, source := range []string{"abcdefgh12345678", "abcdefghijklmno", "123456789012345"} {
+	for _, source := range []string{"abcdefgh12345678", "abcdefghijklmno", "123456789012345", "AbCd+1234==", "Ab/Cd+1234=="} {
 		record := pluginapi.UsageRecord{Provider: "openai", ExecutorType: "openai", Source: source}
 		if got := safeStoredUsageSource(record); got != "openai" {
 			t.Errorf("safe source for %q = %q, want provider fallback", source, got)

@@ -94,7 +94,7 @@ official usage arrives in time --------> consume marker and store official recor
 fallback stores first -----------------> retain tombstone and suppress late official record
 ```
 
-Correlation uses request time, provider model, and an in-memory keyed fingerprint of the client credential when available. The fingerprint secret is random for the process and is never persisted. Ambiguous markers with conflicting router identities are not guessed; the official record is stored as unattributed.
+Correlation uses request time, provider model, and an in-memory keyed fingerprint of the client credential when available. The fingerprint secret is random for the process and is never persisted. Ambiguous markers with conflicting router identities are not guessed; an unassignable timestamp-less callback is suppressed so each attempt's fallback remains the sole record, while other unmatched records are stored as unattributed.
 
 Fallback parsing supports the usage shapes used by:
 

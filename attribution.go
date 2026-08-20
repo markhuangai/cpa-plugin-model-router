@@ -167,7 +167,7 @@ func (tracker *attributionTracker) Match(record pluginapi.UsageRecord) attributi
 			}
 		}
 		if len(activeIndexes) > 1 {
-			return attributionResult{Kind: attributionUnresolved}
+			return attributionResult{Kind: attributionUnresolved, Suppress: true}
 		}
 	}
 	index := tracker.closestIndexLocked(indexes, requestedAt)
