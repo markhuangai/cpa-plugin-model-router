@@ -455,9 +455,10 @@ dialog::backdrop { background: rgba(10, 18, 25, .46); backdrop-filter: blur(2px)
 .pricing-status { margin: 0 0 10px; color: var(--muted); font-size: 11px; }
 .price-list { display: grid; gap: 8px; max-height: 430px; overflow: auto; padding-right: 2px; }
 .price-row { padding: 11px; border: 1px solid var(--line); border-radius: 8px; }
-.price-grid { display: grid; grid-template-columns: minmax(170px, 1.5fr) repeat(4, minmax(80px, .7fr)) minmax(150px, 1fr) auto; gap: 7px; align-items: end; }
+.price-grid { display: grid; grid-template-columns: minmax(170px, 1.5fr) repeat(4, minmax(80px, .7fr)) minmax(150px, 1fr) auto; gap: 7px; align-items: start; }
 .price-grid label { color: var(--muted); font-size: 10px; font-weight: 750; }
 .price-grid input, .price-grid select { margin-top: 5px; }
+.price-grid > .danger-button { margin-top: 19px; }
 .price-model-field input { font: 700 11px/1.3 "Cascadia Code", "SFMono-Regular", ui-monospace, monospace; }
 .price-source { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
 .price-advanced { margin-top: 9px; }
@@ -509,6 +510,7 @@ dialog::backdrop { background: rgba(10, 18, 25, .46); backdrop-filter: blur(2px)
   .pricing-toolbar { grid-template-columns: 1fr; }
   .price-grid { grid-template-columns: 1fr; }
   .price-grid .price-model-field { grid-column: auto; }
+  .price-grid > .danger-button { margin-top: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
