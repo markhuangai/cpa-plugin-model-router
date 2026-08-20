@@ -65,7 +65,7 @@ func (store *usageStore) Overview(filter usageFilter, granularity string) (usage
 			}
 			point.CacheReadIncludedTokens += cacheRead
 		}
-		if reasoningIncludedInOutput(record.Provider, record.ExecutorType) {
+		if reasoningIncludedInOutput(record) {
 			point.ReasoningIncludedTokens += record.ReasoningTokens
 		}
 		point.latencyTotal += record.LatencyNS

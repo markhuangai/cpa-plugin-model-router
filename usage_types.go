@@ -37,6 +37,8 @@ type storedUsageRecord struct {
 	RouterModel         string    `json:"router_model,omitempty"`
 	Provider            string    `json:"provider,omitempty"`
 	ExecutorType        string    `json:"executor_type,omitempty"`
+	AccountingMode      string    `json:"accounting_mode,omitempty"`
+	ReasoningMode       string    `json:"reasoning_mode,omitempty"`
 	ProviderModel       string    `json:"provider_model"`
 	ProviderAlias       string    `json:"provider_alias,omitempty"`
 	Source              string    `json:"source,omitempty"`

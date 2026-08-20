@@ -40,7 +40,7 @@ func TestParseUsagePayloadProtocols(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, tier, ok := parseUsagePayload([]byte(test.body))
+			got, tier, _, ok := parseUsagePayload([]byte(test.body))
 			if !ok || got != test.want || tier != test.tier {
 				t.Fatalf("parseUsagePayload() = %#v, %q, %v; want %#v, %q, true", got, tier, ok, test.want, test.tier)
 			}
@@ -59,6 +59,24 @@ func TestUsageCaptureParsesSplitStream(t *testing.T) {
 	}
 	if got := durationBetween(capture.requestedAt, capture.firstTokenAt); got != 100*time.Millisecond {
 		t.Fatalf("TTFT = %v", got)
+	}
+}
+
+func TestUsageCaptureInfersProviderAccountingFromPayload(t *testing.T) {
+	start := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	claude := newRoutedUsageCapture(pluginapi.ExecutorRequest{Format: "openai"}, "claude-sonnet-4-5", start)
+	claude.observePayload([]byte(`{"usage":{"input_tokens":5,"cache_read_input_tokens":3,"output_tokens":4}}`))
+	if claude.accountingMode != accountingModeInputExcludesCache {
+		t.Fatalf("Claude accounting mode = %q", claude.accountingMode)
+	}
+	gemini := newRoutedUsageCapture(pluginapi.ExecutorRequest{Format: "openai"}, "gemini-2.5-pro", start)
+	gemini.observePayload([]byte(`{"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":4,"thoughtsTokenCount":3}}`))
+	if gemini.accountingMode != accountingModeInputIncludesCache || gemini.reasoningMode != reasoningModeSeparate {
+		t.Fatalf("Gemini accounting metadata = %#v", gemini)
+	}
+	stored := gemini.storedRecord(attributionMarker{routerModel: "smart"})
+	if stored.AccountingMode != accountingModeInputIncludesCache || stored.ReasoningMode != reasoningModeSeparate {
+		t.Fatalf("stored Gemini accounting metadata = %#v", stored)
 	}
 }
 

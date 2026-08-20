@@ -33,6 +33,13 @@ func TestEstimateUsageCostAccountingTiersAndServiceTier(t *testing.T) {
 	if cost.PriceServiceTier != "priority" || cost.TierThreshold != 0 || !near(cost.InputUSD, .00033) {
 		t.Fatalf("service-tier cost = %#v", cost)
 	}
+	geminiResolver := newModelPriceResolver(map[string]modelPrice{
+		"gemini-model": {tokenRates: tokenRates{Output: 2}, Source: priceSourceManual},
+	}, defaultPriceSyncSettings())
+	geminiCost := estimateUsageCost(storedUsageRecord{ProviderModel: "gemini-model", Provider: "google", OutputTokens: 4, ReasoningTokens: 3}, geminiResolver)
+	if !near(geminiCost.OutputUSD, .000014) {
+		t.Fatalf("separately reported reasoning output cost = %#v", geminiCost)
+	}
 }
 
 func TestModelPriceResolverMappingsAndAmbiguity(t *testing.T) {

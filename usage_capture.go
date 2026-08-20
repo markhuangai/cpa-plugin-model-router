@@ -21,6 +21,8 @@ type directUsageCapture struct {
 	source          string
 	reasoningEffort string
 	serviceTier     string
+	accountingMode  string
+	reasoningMode   string
 	maskedAPIKey    string
 	generate        bool
 	failed          bool
@@ -171,9 +173,15 @@ func (capture *directUsageCapture) flushStreamPending() {
 
 func (capture *directUsageCapture) observePayload(body []byte) {
 	for _, payload := range usageJSONPayloads(body) {
-		detail, tier, ok := parseUsagePayload(payload)
+		detail, tier, accounting, ok := parseUsagePayload(payload)
 		if tier != "" {
 			capture.serviceTier = tier
+		}
+		if accounting.AccountingMode != "" {
+			capture.accountingMode = accounting.AccountingMode
+		}
+		if accounting.ReasoningMode != "" {
+			capture.reasoningMode = accounting.ReasoningMode
 		}
 		if ok {
 			mergeUsageDetail(&capture.detail, detail)
@@ -205,7 +213,12 @@ func usageJSONPayloads(body []byte) [][]byte {
 	return result
 }
 
-func parseUsagePayload(payload []byte) (pluginapi.UsageDetail, string, bool) {
+type usagePayloadAccounting struct {
+	AccountingMode string
+	ReasoningMode  string
+}
+
+func parseUsagePayload(payload []byte) (pluginapi.UsageDetail, string, usagePayloadAccounting, bool) {
 	root := gjson.ParseBytes(payload)
 	tier := firstGJSONText(root, "response.service_tier", "service_tier", "interaction.service_tier")
 	node := firstGJSONNode(root,
@@ -222,7 +235,7 @@ func parseUsagePayload(payload []byte) (pluginapi.UsageDetail, string, bool) {
 		node = firstGJSONNode(root, "response.usageMetadata", "usageMetadata", "usage_metadata")
 	}
 	if !node.Exists() || !node.IsObject() {
-		return pluginapi.UsageDetail{}, tier, false
+		return pluginapi.UsageDetail{}, tier, usagePayloadAccounting{}, false
 	}
 
 	if node.Get("promptTokenCount").Exists() || node.Get("candidatesTokenCount").Exists() {
@@ -237,7 +250,7 @@ func parseUsagePayload(payload []byte) (pluginapi.UsageDetail, string, bool) {
 		if detail.TotalTokens == 0 {
 			detail.TotalTokens = saturatingTokenSum(detail.InputTokens, detail.OutputTokens, detail.ReasoningTokens)
 		}
-		return detail, tier, hasUsageTokens(detail)
+		return detail, tier, usagePayloadAccounting{AccountingMode: accountingModeInputIncludesCache, ReasoningMode: reasoningModeSeparate}, hasUsageTokens(detail)
 	}
 
 	cacheRead := firstGJSONInt(node, "cache_read_input_tokens", "cache_read_tokens", "cacheReadTokens")
@@ -285,7 +298,14 @@ func parseUsagePayload(payload []byte) (pluginapi.UsageDetail, string, bool) {
 			detail.TotalTokens = saturatingTokenSum(input, output)
 		}
 	}
-	return detail, tier, hasUsageTokens(detail)
+	accounting := usagePayloadAccounting{}
+	if node.Get("cache_read_input_tokens").Exists() || node.Get("cache_creation_input_tokens").Exists() {
+		accounting.AccountingMode = accountingModeInputExcludesCache
+	}
+	if node.Get("thinking_tokens").Exists() || node.Get("total_thought_tokens").Exists() {
+		accounting.ReasoningMode = reasoningModeSeparate
+	}
+	return detail, tier, accounting, hasUsageTokens(detail)
 }
 
 func mergeUsageDetail(current *pluginapi.UsageDetail, next pluginapi.UsageDetail) {
@@ -332,6 +352,8 @@ func (capture directUsageCapture) storedRecord(marker attributionMarker) storedU
 		RouterModel:         marker.routerModel,
 		Provider:            capture.provider,
 		ExecutorType:        capture.executorType,
+		AccountingMode:      capture.accountingMode,
+		ReasoningMode:       capture.reasoningMode,
 		ProviderModel:       firstNonEmpty(providerModel, "unknown"),
 		Source:              capture.source,
 		ReasoningEffort:     capture.reasoningEffort,

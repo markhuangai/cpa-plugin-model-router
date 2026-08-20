@@ -13,6 +13,8 @@ import (
 const (
 	accountingModeInputExcludesCache = "input_excludes_cache"
 	accountingModeInputIncludesCache = "input_includes_cache"
+	reasoningModeIncluded            = "included"
+	reasoningModeSeparate            = "separate"
 	priceSourceManual                = "manual"
 	priceSourceModelsDev             = "models.dev"
 	maxModelPriceEntries             = 10_000
@@ -376,6 +378,9 @@ func estimateUsageCost(record storedUsageRecord, resolver modelPriceResolver) es
 	cacheCreation := record.CacheCreationTokens
 	mode := price.AccountingMode
 	if mode == "" {
+		mode = record.AccountingMode
+	}
+	if mode == "" {
 		mode = defaultAccountingMode(record.Provider, record.ExecutorType)
 	}
 	billableInput, contextTokens := record.InputTokens, record.InputTokens
@@ -401,6 +406,10 @@ func estimateUsageCost(record storedUsageRecord, resolver modelPriceResolver) es
 			rates, selectedThreshold = tier.tokenRates, tier.Threshold
 		}
 	}
+	outputTokens := record.OutputTokens
+	if !reasoningIncludedInOutput(record) {
+		outputTokens = saturatingAdd(outputTokens, record.ReasoningTokens)
+	}
 	result := estimatedCost{
 		Priced:                true,
 		Source:                price.Source,
@@ -411,7 +420,7 @@ func estimateUsageCost(record storedUsageRecord, resolver modelPriceResolver) es
 		BillableInputTokens:   billableInput,
 		BilledCacheReadTokens: cacheRead,
 		InputUSD:              tokenCostUSD(billableInput, rates.Input),
-		OutputUSD:             tokenCostUSD(record.OutputTokens, rates.Output),
+		OutputUSD:             tokenCostUSD(outputTokens, rates.Output),
 		CacheReadUSD:          tokenCostUSD(cacheRead, rates.CacheRead),
 		CacheCreationUSD:      tokenCostUSD(cacheCreation, rates.CacheCreation),
 	}
@@ -426,8 +435,15 @@ func defaultAccountingMode(provider, executor string) string {
 	return accountingModeInputIncludesCache
 }
 
-func reasoningIncludedInOutput(provider, executor string) bool {
-	return !equalFold(provider, "google") && !equalFold(provider, "gemini") && !equalFold(executor, "gemini")
+func reasoningIncludedInOutput(record storedUsageRecord) bool {
+	switch record.ReasoningMode {
+	case reasoningModeIncluded:
+		return true
+	case reasoningModeSeparate:
+		return false
+	default:
+		return !equalFold(record.Provider, "google") && !equalFold(record.Provider, "gemini") && !equalFold(record.ExecutorType, "gemini")
+	}
 }
 
 func tokenCostUSD(tokens uint64, perMillion float64) float64 {
