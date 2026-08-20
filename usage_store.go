@@ -91,6 +91,10 @@ func (store *usageStore) Reconfigure(path string, retentionDays int) error {
 	if err != nil {
 		return fmt.Errorf("open usage database: %w", err)
 	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		_ = database.Close()
+		return fmt.Errorf("restrict usage database permissions: %w", err)
+	}
 	if err := initializeUsageDatabase(database); err != nil {
 		_ = database.Close()
 		return err

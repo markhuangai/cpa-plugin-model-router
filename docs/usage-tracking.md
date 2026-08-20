@@ -131,7 +131,7 @@ The plugin does not persist:
 
 CPA can place an API key in `UsageRecord.Source`. For API-key authentication, source values equal to the API key, values with common credential prefixes, and token-shaped strings with at least eight characters fall back to a provider/executor label. HTTP(S) sources retain only scheme, host, port, and path; URL user info, query strings, and fragments are removed.
 
-The database is not encrypted. Protect its directory with filesystem permissions and volume access controls.
+The database is not encrypted. The plugin creates and reopens it with `0600` file permissions; protect its directory with filesystem permissions and volume access controls as well.
 
 ## Pricing
 
