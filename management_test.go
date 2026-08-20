@@ -171,7 +171,8 @@ func TestModelRouterManagementDashboardReusesCPAMCSessionAndTheme(t *testing.T) 
 		"function chartItemKey(id,item)",
 		"function remapChartActive(id,items)",
 		"focusedKey",
-		"if(entry)entry.focus()",
+		"if(entry)entry.focus({preventScroll:true})",
+		"key:'model:'+item.model",
 		"key:'aggregate:other'",
 	} {
 		if !strings.Contains(page, required) {

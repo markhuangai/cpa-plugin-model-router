@@ -1818,7 +1818,7 @@ function renderModelLegend(items,total,focusedKey=''){
     legend.replaceChildren(fragment);legend.dataset.signature=signature;
     if(focusedKey){
       const index=items.findIndex(item=>item.key===focusedKey),entry=index<0?null:legend.querySelector('[data-model-index="'+index+'"]');
-      if(entry)entry.focus();
+      if(entry)entry.focus({preventScroll:true});
     }
   }
   legend.querySelectorAll('[data-model-index]').forEach(entry=>{const index=Number(entry.dataset.modelIndex),item=items[index];entry.classList.toggle('is-active',activeChartIndex('model-chart',items.length)===index);if(item&&item.filterable)entry.setAttribute('aria-pressed',String(usageState.providerModel===item.model))});
@@ -1827,7 +1827,7 @@ function renderModelChart(){
   const previousInteraction=chartInteractions.get('model-chart'),focusedEntry=document.activeElement&&document.activeElement.closest('#model-legend [data-model-index]'),focusedKey=focusedEntry&&previousInteraction?((previousInteraction.items[Number(focusedEntry.dataset.modelIndex)]||{}).key||''):'',chart=prepareChart('model-chart'),source=(usageState.overview&&usageState.overview.provider_models||[]).filter(item=>Number(item.requests||0)>0).sort((left,right)=>Number(right.requests||0)-Number(left.requests||0)),legend=document.getElementById('model-legend');
   if(!source.length){clearChartInteraction('model-chart');drawEmptyChart(chart,'No provider model requests.');legend.replaceChildren();legend.dataset.signature='';return}
   const palette=['#2d6cdf','#24836b','#a96708','#8657c8','#b83b43','#47a7dc','#70a84f','#b88755'];
-  const items=source.slice(0,7).map((item,index)=>({model:item.model,key:item.model,requests:Number(item.requests||0),total_tokens:Number(item.total_tokens||0),cost_usd:Number(item.cost_usd||0),filterable:true,color:palette[index%palette.length]}));
+  const items=source.slice(0,7).map((item,index)=>({model:item.model,key:'model:'+item.model,requests:Number(item.requests||0),total_tokens:Number(item.total_tokens||0),cost_usd:Number(item.cost_usd||0),filterable:true,color:palette[index%palette.length]}));
   if(source.length>7){const rest=source.slice(7);items.push({model:'Other',key:'aggregate:other',requests:rest.reduce((sum,item)=>sum+Number(item.requests||0),0),total_tokens:rest.reduce((sum,item)=>sum+Number(item.total_tokens||0),0),cost_usd:rest.reduce((sum,item)=>sum+Number(item.cost_usd||0),0),filterable:false,color:palette[7%palette.length]})}
   const total=items.reduce((sum,item)=>sum+item.requests,0),context=chart.context,cx=chart.width/2,cy=chart.height/2-4,radius=Math.min(chart.width,chart.height)*.31,lineWidth=Math.max(22,radius*.28),remappedActive=remapChartActive('model-chart',items);
   context.lineWidth=lineWidth;context.strokeStyle=chartColor('--surface-soft');context.beginPath();context.arc(cx,cy,radius,0,Math.PI*2);context.stroke();
