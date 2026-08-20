@@ -147,6 +147,25 @@ func TestModelRouterManagementDashboardReusesCPAMCSessionAndTheme(t *testing.T) 
 			t.Fatalf("dashboard missing %q", required)
 		}
 	}
+	refreshStart := strings.Index(page, "async function refreshUsage")
+	refreshEndRelative := -1
+	if refreshStart >= 0 {
+		refreshEndRelative = strings.Index(page[refreshStart:], "function validHiddenColumns")
+	}
+	refreshEnd := refreshStart + refreshEndRelative
+	if refreshStart < 0 || refreshEnd < 0 || strings.Contains(page[refreshStart:refreshEnd], "resetChartInteractions()") {
+		t.Fatal("refreshUsage must preserve active chart interactions while redrawing data")
+	}
+	for _, required := range []string{
+		"pricingDialogGeneration:0",
+		"const dialogGeneration=++usageState.pricingDialogGeneration",
+		"if(dialogGeneration!==usageState.pricingDialogGeneration)return",
+		"if(dialogGeneration===usageState.pricingDialogGeneration&&pricingDialogEl.open)",
+	} {
+		if !strings.Contains(page, required) {
+			t.Fatalf("dashboard missing async pricing guard %q", required)
+		}
+	}
 	for _, forbidden := range []string{"http://", "https://", "innerHTML", "<input type=\"text\" data-target-field=\"model\""} {
 		if strings.Contains(page, forbidden) {
 			t.Fatalf("dashboard contains forbidden text %q", forbidden)

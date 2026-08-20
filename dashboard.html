@@ -821,7 +821,7 @@ const REJECTED_AT='cpa_model_router_rejected_at';
 const state={enabled:true,priority:'0',routes:[],availableModels:[],catalogLoaded:false,catalogError:'',dirty:false,busy:false};
 const usageState={
   active:false,initialized:false,preferencesLoaded:false,loading:false,generation:0,controller:null,timer:0,preferenceTimer:0,preferenceSaveGeneration:0,preferenceSaveInFlight:false,preferenceSaveQueued:false,resizeTimer:0,
-  overview:null,groupPage:null,requestPage:null,range:'24h',granularity:'hour',customFrom:'',customTo:'',attribution:'',routerModel:'',providerModel:'',source:'',serviceTier:'',result:'',
+  overview:null,groupPage:null,requestPage:null,range:'24h',granularity:'hour',customFrom:'',customTo:'',attribution:'',routerModel:'',providerModel:'',source:'',serviceTier:'',result:'',pricingDialogGeneration:0,
   group:{dimension:'provider_model',sort:'total_tokens',order:'desc',offset:0,limit:100},
   request:{sort:'time',order:'desc',offset:0,limit:100},
   hiddenRequestColumns:new Set(),hiddenGroupColumns:new Set(DEFAULT_HIDDEN_GROUP_COLUMNS),hiddenTokenSeries:new Set(),zoom:{tokens:1,cost:1,efficiency:1},priceBook:null,priceDraft:null,pricingSettingsDirty:false,priceCollectionDirty:false
@@ -1224,7 +1224,6 @@ async function refreshUsage(resetOffsets=false){
       requestManagementJSON(USAGE_API+'/requests?'+requestQuery.toString(),options)
     ]);
     if(generation!==usageState.generation||!usageState.active||document.hidden)return;
-    resetChartInteractions();
     usageState.overview=overview;
     usageState.groupPage=groups;
     usageState.requestPage=requests;
@@ -1942,14 +1941,18 @@ function buildPriceSaveRequest(){
   return{revision:Number(usageState.priceBook&&usageState.priceBook.revision||0),prices,sync_settings:pricingSyncSettings()};
 }
 async function openPricingDialog(){
+  const dialogGeneration=++usageState.pricingDialogGeneration;
   setPricingError();document.getElementById('pricing-status').textContent='Loading saved model prices…';
   usageState.priceBook=null;usageState.priceDraft=null;usageState.pricingSettingsDirty=false;usageState.priceCollectionDirty=false;
   document.getElementById('pricing-list').replaceChildren();setPricingEditorEnabled(false);
   if(!pricingDialogEl.open)pricingDialogEl.showModal();
-  try{applyPriceBook(await requestManagementJSON(freshManagementURL(USAGE_API+'/prices'),{cache:'no-store'}));setPricingEditorEnabled(true)}
-  catch(error){setPricingError(error.message)}
+  try{
+    const book=await requestManagementJSON(freshManagementURL(USAGE_API+'/prices'),{cache:'no-store'});
+    if(dialogGeneration!==usageState.pricingDialogGeneration)return;
+    applyPriceBook(book);setPricingEditorEnabled(true);
+  }catch(error){if(dialogGeneration===usageState.pricingDialogGeneration)setPricingError(error.message)}
 }
-function closePricingDialog(){if(pricingDialogEl.open)pricingDialogEl.close();usageState.priceDraft=null;setPricingError()}
+function closePricingDialog(){usageState.pricingDialogGeneration++;if(pricingDialogEl.open)pricingDialogEl.close();usageState.priceDraft=null;setPricingError()}
 function requestClosePricingDialog(){if(pricingDraftDirty()&&!window.confirm('Discard unsaved pricing changes?'))return;closePricingDialog()}
 function addPriceModel(){
   const input=document.getElementById('pricing-model-name'),name=input.value.trim();
@@ -1963,12 +1966,14 @@ function addPriceModel(){
 async function savePricing(){
   let payload;
   try{payload=buildPriceSaveRequest()}catch(error){setPricingError(error.message);return}
+  const dialogGeneration=usageState.pricingDialogGeneration;
   setPricingEditorEnabled(false);setPricingError();
   try{
     const book=await requestManagementJSON(USAGE_API+'/prices',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(dialogGeneration!==usageState.pricingDialogGeneration)return;
     applyPriceBook(book);closePricingDialog();showToast('Model pricing saved.','success');
     if(usageState.active)refreshUsage(false);
-  }catch(error){setPricingError(error.message)}finally{if(pricingDialogEl.open)setPricingEditorEnabled(true)}
+  }catch(error){if(dialogGeneration===usageState.pricingDialogGeneration)setPricingError(error.message)}finally{if(dialogGeneration===usageState.pricingDialogGeneration&&pricingDialogEl.open)setPricingEditorEnabled(true)}
 }
 async function syncPricing(){
   if(!usageState.priceBook){setPricingError('Load the price book before synchronizing.');return}
@@ -1979,11 +1984,13 @@ async function syncPricing(){
   for(const item of usageState.overview&&usageState.overview.provider_models||[]){if(item.model)models.add(item.model)}
   for(const name of Object.keys(usageState.priceBook.prices||{}))models.add(name);
   if(!models.size){setPricingError('No CPA provider models are available to synchronize.');return}
+  const dialogGeneration=usageState.pricingDialogGeneration;
   setPricingEditorEnabled(false);setPricingError();document.getElementById('pricing-status').textContent='Synchronizing '+formatNumber(models.size)+' models from models.dev…';
   try{
     const book=await requestManagementJSON(USAGE_API+'/prices/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:'models.dev',revision:Number(usageState.priceBook.revision||0),models:Array.from(models),sync_settings:settings})});
+    if(dialogGeneration!==usageState.pricingDialogGeneration)return;
     applyPriceBook(book);showToast('Model prices synchronized.','success');if(usageState.active)refreshUsage(false);
-  }catch(error){setPricingError(error.message);document.getElementById('pricing-status').textContent=priceBookStatus(usageState.priceBook)}finally{setPricingEditorEnabled(true)}
+  }catch(error){if(dialogGeneration===usageState.pricingDialogGeneration){setPricingError(error.message);document.getElementById('pricing-status').textContent=priceBookStatus(usageState.priceBook)}}finally{if(dialogGeneration===usageState.pricingDialogGeneration)setPricingEditorEnabled(true)}
 }
 function openResetDialog(){
   document.getElementById('reset-confirmation').value='';document.getElementById('reset-error').textContent='';document.getElementById('reset-confirm').disabled=true;
