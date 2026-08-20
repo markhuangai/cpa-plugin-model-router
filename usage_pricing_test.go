@@ -51,6 +51,26 @@ func TestModelPriceResolverMappingsAndAmbiguity(t *testing.T) {
 	}
 }
 
+func TestNormalizePriceSyncSettingsRejectsConflictingMappingTargets(t *testing.T) {
+	settings := defaultPriceSyncSettings()
+	settings.Mappings = []priceSyncMapping{
+		{Source: "Foo", Target: "bar"},
+		{Source: "provider/foo", Target: "baz"},
+	}
+	if _, err := normalizePriceSyncSettings(settings); err == nil || !strings.Contains(err.Error(), "targets both") {
+		t.Fatalf("normalizePriceSyncSettings() error = %v", err)
+	}
+
+	settings.Mappings[1].Target = "provider/bar"
+	normalized, err := normalizePriceSyncSettings(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(normalized.Mappings) != 1 || normalized.Mappings[0] != (priceSyncMapping{Source: "foo", Target: "bar"}) {
+		t.Fatalf("normalized mappings = %#v", normalized.Mappings)
+	}
+}
+
 func TestNormalizeModelPricesRejectsNormalizedDuplicateNames(t *testing.T) {
 	for _, prices := range []map[string]modelPrice{
 		{"gpt-5": {}, " gpt-5 ": {}},

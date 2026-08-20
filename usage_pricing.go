@@ -124,17 +124,19 @@ func normalizePriceSyncSettings(input priceSyncSettings) (priceSyncSettings, err
 	if len(input.Mappings) > maxModelPriceEntries {
 		return priceSyncSettings{}, fmt.Errorf("model price mappings must contain at most %d entries", maxModelPriceEntries)
 	}
-	seen := make(map[string]struct{}, len(input.Mappings))
+	targetsBySource := make(map[string]string, len(input.Mappings))
 	for _, mapping := range input.Mappings {
 		source, target := normalizeCatalogName(mapping.Source), normalizeCatalogName(mapping.Target)
 		if source == "" || target == "" {
 			return priceSyncSettings{}, fmt.Errorf("model price mappings require non-empty source and target")
 		}
-		key := source + "\x00" + target
-		if _, exists := seen[key]; exists {
+		if previousTarget, exists := targetsBySource[source]; exists {
+			if previousTarget != target {
+				return priceSyncSettings{}, fmt.Errorf("model price mapping source %q targets both %q and %q", source, previousTarget, target)
+			}
 			continue
 		}
-		seen[key] = struct{}{}
+		targetsBySource[source] = target
 		result.Mappings = append(result.Mappings, priceSyncMapping{Source: source, Target: target})
 	}
 	return result, nil
