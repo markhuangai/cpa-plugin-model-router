@@ -79,6 +79,21 @@ func TestAttributionTrackerTimestampLessUsagePrefersFallbackTombstone(t *testing
 	}
 }
 
+func TestAttributionTrackerDoesNotGuessAmongActiveTimestampLessUsage(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	tracker := newAttributionTracker(func() time.Time { return now })
+	headers := http.Header{"X-Api-Key": {"key-one"}}
+	tracker.MarkRouted("first", "gpt-5.4", headers)
+	now = now.Add(time.Second)
+	tracker.MarkRouted("second", "gpt-5.4", headers)
+	if got := tracker.Match(pluginapi.UsageRecord{Model: "gpt-5.4", APIKey: "key-one"}); got.Kind != attributionUnresolved {
+		t.Fatalf("ambiguous timestamp-less attribution = %#v", got)
+	}
+	if len(tracker.markers) != 2 || tracker.markers[0].fallback || tracker.markers[1].fallback {
+		t.Fatalf("active markers after ambiguous match = %#v", tracker.markers)
+	}
+}
+
 func TestAttributionTrackerExpiresAndCapsMarkers(t *testing.T) {
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	tracker := newAttributionTracker(func() time.Time { return now })

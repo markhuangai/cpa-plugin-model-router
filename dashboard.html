@@ -1541,6 +1541,12 @@ function drawXLabels(chart,points){
   context.fillStyle=chartColor('--muted');context.font='10px "Segoe UI",sans-serif';context.textAlign='center';context.textBaseline='top';
   points.forEach((point,index)=>{if(index%step&&index!==points.length-1)return;const x=chart.left+chart.plotWidth*(index+.5)/points.length;context.fillText(bucketLabel(point.time),x,chart.top+chart.plotHeight+8)});
 }
+function tokenChartValue(point,item,definitions){
+  let value=Number(point[item.field]||(item.fallback&&point[item.fallback])||0);
+  if(item.key==='input'&&definitions.some(definition=>definition.key==='cache_read'))value=Math.max(0,value-Number(point.cache_read_tokens||point.cached_tokens||0));
+  if(item.key==='output'&&definitions.some(definition=>definition.key==='reasoning'))value=Math.max(0,value-Number(point.reasoning_tokens||0));
+  return value;
+}
 function renderTokenChart(){
   const chart=prepareChart('token-chart'),points=visibleChartPoints('tokens');
   const definitions=[
@@ -1551,14 +1557,14 @@ function renderTokenChart(){
   ].filter(item=>!usageState.hiddenTokenSeries.has(item.key));
   if(!points.length){drawEmptyChart(chart,'No token usage in this range.');return}
   if(!definitions.length){drawEmptyChart(chart,'All token series are hidden.');return}
-  const total=point=>definitions.reduce((sum,item)=>sum+Number(point[item.field]||(item.fallback&&point[item.fallback])||0),0);
+  const total=point=>definitions.reduce((sum,item)=>sum+tokenChartValue(point,item,definitions),0);
   const max=Math.max(1,...points.map(total));
   drawGrid(chart,max);
   const slot=chart.plotWidth/points.length,barWidth=Math.max(3,Math.min(30,slot*.65));
   points.forEach((point,index)=>{
     let bottom=chart.top+chart.plotHeight;
     definitions.forEach(item=>{
-      const value=Number(point[item.field]||(item.fallback&&point[item.fallback])||0),height=value/max*chart.plotHeight;
+      const value=tokenChartValue(point,item,definitions),height=value/max*chart.plotHeight;
       if(height>0){chart.context.fillStyle=chartColor(item.color);chart.context.fillRect(chart.left+slot*index+(slot-barWidth)/2,bottom-height,barWidth,height)}
       bottom-=height;
     });

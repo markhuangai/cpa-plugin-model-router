@@ -160,6 +160,15 @@ func (tracker *attributionTracker) Match(record pluginapi.UsageRecord) attributi
 			tracker.removeIndexesLocked([]int{index})
 			return attributionResult{Suppress: true}
 		}
+		activeIndexes := make([]int, 0, len(indexes))
+		for _, candidate := range indexes {
+			if !tracker.markers[candidate].fallback {
+				activeIndexes = append(activeIndexes, candidate)
+			}
+		}
+		if len(activeIndexes) > 1 {
+			return attributionResult{Kind: attributionUnresolved}
+		}
 	}
 	index := tracker.closestIndexLocked(indexes, requestedAt)
 	closest := tracker.equallyCloseIndexesLocked(indexes, requestedAt, index)
