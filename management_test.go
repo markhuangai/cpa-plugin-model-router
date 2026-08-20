@@ -164,8 +164,9 @@ func TestModelRouterManagementDashboardReusesCPAMCSessionAndTheme(t *testing.T) 
 		"const chartActive={id:'',index:-1,anchor:null,key:null}",
 		"function chartItemKey(id,item)",
 		"function remapChartActive(id,items)",
-		"focusedModel",
+		"focusedKey",
 		"if(entry)entry.focus()",
+		"key:'aggregate:other'",
 	} {
 		if !strings.Contains(page, required) {
 			t.Fatalf("dashboard missing async pricing guard %q", required)
