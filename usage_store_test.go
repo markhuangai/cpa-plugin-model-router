@@ -84,8 +84,11 @@ func TestUsageStorePersistsAndResetPreservesSettings(t *testing.T) {
 }
 
 func TestDashboardPreferenceColumnDefaults(t *testing.T) {
-	want := []string{"provider", "result", "service_tier", "source"}
+	want := []string{"provider", "result", "router_model", "service_tier", "source"}
 	defaults := defaultDashboardPreferences()
+	if defaults.RequestPageSize != 50 || defaults.GroupPageSize != 50 {
+		t.Fatalf("default dashboard page sizes = %d/%d, want 50/50", defaults.RequestPageSize, defaults.GroupPageSize)
+	}
 	if !slices.Equal(defaults.HiddenGroupColumns, want) {
 		t.Fatalf("default hidden group columns = %#v, want %#v", defaults.HiddenGroupColumns, want)
 	}

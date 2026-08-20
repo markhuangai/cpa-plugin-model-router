@@ -36,6 +36,9 @@
   --chart-cache: #a96708;
   --chart-reasoning: #8657c8;
   --chart-cost: #b83b43;
+  --chart-grid: color-mix(in srgb, var(--muted) 14%, transparent);
+  --chart-backdrop: color-mix(in srgb, var(--surface-soft) 42%, transparent);
+  --chart-highlight: color-mix(in srgb, var(--blue) 12%, transparent);
   --shadow: 0 12px 34px rgba(23, 48, 66, .09);
   font-family: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
 }
@@ -58,6 +61,9 @@
   --chart-cache: #f0bd57;
   --chart-reasoning: #c4a2ff;
   --chart-cost: #ff9b8f;
+  --chart-grid: color-mix(in srgb, var(--muted) 24%, transparent);
+  --chart-backdrop: color-mix(in srgb, var(--surface-soft) 60%, transparent);
+  --chart-highlight: color-mix(in srgb, var(--blue) 18%, transparent);
   --toggle-off: #5a544d;
   --toggle-knob: #f6f4f1;
   --shadow: 0 14px 34px rgba(0, 0, 0, .3);
@@ -396,16 +402,16 @@ input[type="text"], input[type="number"], input[type="password"], select {
 .metric-value.metric-value-wrap { line-height: 1.15; overflow-wrap: anywhere; white-space: normal; }
 .metric-detail { display: block; margin-top: 6px; color: var(--muted); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
 .chart-grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(290px, .85fr); gap: 12px; margin-top: 12px; }
-.chart-card { min-width: 0; padding: 15px; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; }
+.chart-card { min-width: 0; padding: 15px; background: linear-gradient(145deg, var(--paper), color-mix(in srgb, var(--chart-backdrop) 72%, var(--paper))); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 8px 24px color-mix(in srgb, var(--ink) 5%, transparent); }
 .chart-card header { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 12px; }
 .chart-card h3 { margin: 0; font-size: 15px; }
 .chart-card p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
 .chart-tools { display: flex; gap: 4px; }
 .chart-tools button { min-width: 30px; padding: 5px 7px; }
-.chart-canvas { display: block; width: 100%; height: 260px; border-radius: 6px; cursor: crosshair; }
+.chart-canvas { display: block; width: 100%; height: 260px; border: 1px solid color-mix(in srgb, var(--line) 65%, transparent); border-radius: 10px; background: linear-gradient(180deg, color-mix(in srgb, var(--chart-backdrop) 62%, transparent), transparent 68%); cursor: crosshair; }
 .chart-canvas:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 24%, transparent); }
 .chart-card.compact .chart-canvas { height: 260px; }
-.chart-legend { display: flex; flex-wrap: wrap; gap: 8px 13px; margin-top: 9px; color: var(--muted); font-size: 11px; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 8px 13px; margin-top: 10px; color: var(--muted); font-size: 11px; }
 .legend-item { display: inline-flex; gap: 5px; align-items: center; }
 .legend-swatch { width: 9px; height: 9px; border-radius: 2px; }
 .legend-swatch[data-color="input"] { background: var(--chart-input); }
@@ -414,11 +420,11 @@ input[type="text"], input[type="number"], input[type="password"], select {
 .legend-swatch[data-color="reasoning"] { background: var(--chart-reasoning); }
 .legend-swatch[data-color="cost"] { background: var(--chart-cost); }
 .legend-toggle { display: inline-flex; gap: 5px; align-items: center; padding: 3px 6px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 99px; font-size: 11px; }
-.legend-toggle:hover { color: var(--ink); background: var(--surface-soft); }
+.legend-toggle:hover, .legend-toggle:focus-visible { color: var(--ink); background: var(--chart-highlight); border-color: var(--blue-border); }
 .legend-toggle[aria-pressed="false"] { opacity: .48; }
 .legend-toggle[aria-pressed="false"] .legend-swatch { background: transparent; border: 1px solid currentColor; }
-.model-legend-entry { display: inline-flex; gap: 5px; align-items: center; min-width: 0; padding: 3px 6px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 99px; font-size: 11px; }
-button.model-legend-entry:hover, button.model-legend-entry:focus-visible, .model-legend-entry.is-active { color: var(--ink); background: var(--surface-soft); border-color: var(--line); }
+.model-legend-entry { display: inline-flex; gap: 5px; align-items: center; min-width: 0; padding: 3px 6px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 99px; font-size: 11px; transition: transform .16s ease, background-color .16s ease, border-color .16s ease, color .16s ease; }
+button.model-legend-entry:hover, button.model-legend-entry:focus-visible, .model-legend-entry.is-active { color: var(--ink); background: var(--chart-highlight); border-color: var(--blue-border); transform: translateY(-1px); }
 button.model-legend-entry[aria-pressed="true"] { color: var(--blue); border-color: var(--blue-border); }
 .model-legend-entry .legend-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chart-tooltip { position: fixed; z-index: 30; display: grid; gap: 7px; width: max-content; min-width: 190px; max-width: min(310px, calc(100vw - 16px)); padding: 10px 11px; color: var(--ink); background: var(--paper); border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: var(--shadow); pointer-events: none; }
@@ -689,7 +695,7 @@ dialog::backdrop { background: rgba(10, 18, 25, .46); backdrop-filter: blur(2px)
           <div class="usage-section-title"><h3 id="breakdown-title">Usage breakdown</h3><p>Group the selected range by router identity, provider identity, source, tier, or result.</p></div>
           <div class="table-tools">
             <label class="sr-only" for="group-dimension">Group dimension</label><select id="group-dimension"><option value="router_model">Router model</option><option value="provider_model" selected>Provider model</option><option value="provider">Provider</option><option value="source">Source</option><option value="service_tier">Service tier</option><option value="result">Result</option></select>
-            <label class="sr-only" for="group-page-size">Groups per page</label><select id="group-page-size"><option value="25">25 rows</option><option value="50">50 rows</option><option value="100" selected>100 rows</option><option value="250">250 rows</option></select>
+            <label class="sr-only" for="group-page-size">Groups per page</label><select id="group-page-size"><option value="25">25 rows</option><option value="50" selected>50 rows</option><option value="100">100 rows</option><option value="250">250 rows</option></select>
             <details id="group-columns" class="column-picker"><summary>Columns</summary><div id="group-column-options" class="column-menu"></div></details>
           </div>
         </div>
@@ -701,7 +707,7 @@ dialog::backdrop { background: rgba(10, 18, 25, .46); backdrop-filter: blur(2px)
         <div class="usage-section-head">
           <div class="usage-section-title"><h3 id="request-title">Request details</h3><p>Router model and physical provider model remain separate for each CPA request.</p></div>
           <div class="table-tools">
-            <label class="sr-only" for="request-page-size">Requests per page</label><select id="request-page-size"><option value="25">25 rows</option><option value="50">50 rows</option><option value="100" selected>100 rows</option><option value="250">250 rows</option></select>
+            <label class="sr-only" for="request-page-size">Requests per page</label><select id="request-page-size"><option value="25">25 rows</option><option value="50" selected>50 rows</option><option value="100">100 rows</option><option value="250">250 rows</option></select>
             <details id="request-columns" class="column-picker"><summary>Columns</summary><div id="request-column-options" class="column-menu"></div></details>
           </div>
         </div>
@@ -812,7 +818,7 @@ const MODELS_API='/v1/models';
 const USAGE_API='/v0/management/plugins/model-router/usage';
 const ROUTER_FILTER_MODEL_PREFIX='model:';
 const ROUTER_FILTER_ATTRIBUTION_PREFIX='attribution:';
-const DEFAULT_HIDDEN_GROUP_COLUMNS=['provider','result','service_tier','source'];
+const DEFAULT_HIDDEN_GROUP_COLUMNS=['provider','result','router_model','service_tier','source'];
 const CPA_STORAGE_PREFIX='enc::v1::';
 const CPA_STORAGE_SALT='cli-proxy-api-webui::secure-storage';
 const SESSION_KEY='cpa_model_router_key';
@@ -822,8 +828,8 @@ const state={enabled:true,priority:'0',routes:[],availableModels:[],catalogLoade
 const usageState={
   active:false,initialized:false,preferencesLoaded:false,loading:false,generation:0,controller:null,timer:0,preferenceTimer:0,preferenceSaveGeneration:0,preferenceSaveInFlight:false,preferenceSaveQueued:false,resizeTimer:0,
   overview:null,groupPage:null,requestPage:null,range:'24h',granularity:'hour',customFrom:'',customTo:'',attribution:'',routerModel:'',providerModel:'',source:'',serviceTier:'',result:'',pricingDialogGeneration:0,pricingWriteInFlight:null,
-  group:{dimension:'provider_model',sort:'total_tokens',order:'desc',offset:0,limit:100},
-  request:{sort:'time',order:'desc',offset:0,limit:100},
+  group:{dimension:'provider_model',sort:'total_tokens',order:'desc',offset:0,limit:50},
+  request:{sort:'time',order:'desc',offset:0,limit:50},
   hiddenRequestColumns:new Set(),hiddenGroupColumns:new Set(DEFAULT_HIDDEN_GROUP_COLUMNS),hiddenTokenSeries:new Set(),zoom:{tokens:1,cost:1,efficiency:1},priceBook:null,priceDraft:null,pricingSettingsDirty:false,priceCollectionDirty:false
 };
 const requestColumns=[
@@ -1256,8 +1262,8 @@ function applyUsagePreferences(preferences){
   preferences=preferences||{};
   usageState.range=['5h','24h','7d','30d','month','custom'].includes(preferences.time_range)?preferences.time_range:'24h';
   usageState.granularity=['minute','hour','day'].includes(preferences.granularity)?preferences.granularity:'hour';
-  usageState.request.limit=Number(preferences.request_page_size)||100;
-  usageState.group.limit=Number(preferences.group_page_size)||100;
+  usageState.request.limit=Number(preferences.request_page_size)||50;
+  usageState.group.limit=Number(preferences.group_page_size)||50;
   usageState.request.sort=String(preferences.request_sort||'time');
   usageState.request.order=preferences.request_order==='asc'?'asc':'desc';
   usageState.group.dimension=String(preferences.group_dimension||'provider_model');
@@ -1589,17 +1595,34 @@ function drawEmptyChart(chart,message){
   chart.context.textAlign='center';chart.context.textBaseline='middle';
   chart.context.fillText(message,chart.width/2,chart.height/2);
 }
+function roundedRectPath(context,x,y,width,height,radius){
+  const corner=Math.max(0,Math.min(radius,width/2,height/2));
+  context.beginPath();context.moveTo(x+corner,y);context.lineTo(x+width-corner,y);context.quadraticCurveTo(x+width,y,x+width,y+corner);context.lineTo(x+width,y+height-corner);context.quadraticCurveTo(x+width,y+height,x+width-corner,y+height);context.lineTo(x+corner,y+height);context.quadraticCurveTo(x,y+height,x,y+height-corner);context.lineTo(x,y+corner);context.quadraticCurveTo(x,y,x+corner,y);context.closePath();
+}
+function fillRoundedRect(context,x,y,width,height,radius){
+  if(width<=0||height<=0)return;
+  roundedRectPath(context,x,y,width,height,radius);context.fill();
+}
+function strokeRoundedRect(context,x,y,width,height,radius){
+  if(width<=0||height<=0)return;
+  roundedRectPath(context,x,y,width,height,radius);context.stroke();
+}
+function drawPlotBackdrop(chart){
+  const context=chart.context;context.save();context.fillStyle=chartColor('--chart-backdrop');fillRoundedRect(context,chart.left,chart.top,chart.plotWidth,chart.plotHeight,9);context.restore();
+}
 function drawGrid(chart,maxValue,formatter=formatCompact,rightFormatter=null){
   const context=chart.context;
+  drawPlotBackdrop(chart);
   context.font='10px "Segoe UI",sans-serif';context.textBaseline='middle';
   for(let index=0;index<=4;index++){
     const y=chart.top+chart.plotHeight*index/4;
-    context.strokeStyle=chartColor('--line');context.lineWidth=1;
+    context.strokeStyle=chartColor('--chart-grid');context.lineWidth=1;context.setLineDash(index===4?[]:[2,4]);
     context.beginPath();context.moveTo(chart.left,y);context.lineTo(chart.left+chart.plotWidth,y);context.stroke();
     const value=maxValue*(1-index/4);
     context.fillStyle=chartColor('--muted');context.textAlign='right';context.fillText(formatter(value),chart.left-7,y);
     if(rightFormatter){context.textAlign='left';context.fillText(rightFormatter(1-index/4),chart.left+chart.plotWidth+6,y)}
   }
+  context.setLineDash([]);
 }
 function bucketLabel(value){
   const date=new Date(value);
@@ -1738,32 +1761,36 @@ function renderTokenChart(){
   if(!points.length){clearChartInteraction('token-chart');drawEmptyChart(chart,'No token usage in this range.');return}
   if(!definitions.length){clearChartInteraction('token-chart');drawEmptyChart(chart,'All token series are hidden.');return}
   const total=point=>definitions.reduce((sum,item)=>sum+tokenChartValue(point,item,definitions),0),max=Math.max(1,...points.map(total));
-  const slot=chart.plotWidth/points.length,barWidth=Math.max(3,Math.min(30,slot*.65)),items=points.map((point,index)=>({point,anchor:{x:chart.left+slot*(index+.5),y:chart.top+10}})),active=remapChartActive('token-chart',items);
+  const slot=chart.plotWidth/points.length,barWidth=Math.max(4,Math.min(30,slot*.62)),items=points.map((point,index)=>({point,anchor:{x:chart.left+slot*(index+.5),y:chart.top+10}})),active=remapChartActive('token-chart',items);
   drawGrid(chart,max);
-  if(active>=0){chart.context.save();chart.context.globalAlpha=.1;chart.context.fillStyle=chartColor('--blue');chart.context.fillRect(chart.left+slot*active,chart.top,slot,chart.plotHeight);chart.context.restore()}
+  if(active>=0){chart.context.save();chart.context.globalAlpha=.9;chart.context.fillStyle=chartColor('--chart-highlight');fillRoundedRect(chart.context,chart.left+slot*active+1,chart.top+1,Math.max(0,slot-2),chart.plotHeight-2,8);chart.context.restore()}
   points.forEach((point,index)=>{
+    const activeBucket=index===active,currentBarWidth=activeBucket?Math.min(slot*.84,barWidth*1.2):barWidth,barX=chart.left+slot*index+(slot-currentBarWidth)/2;
     let bottom=chart.top+chart.plotHeight;
     definitions.forEach(item=>{
       const value=tokenChartValue(point,item,definitions),height=value/max*chart.plotHeight;
-      if(height>0){chart.context.fillStyle=chartColor(item.color);chart.context.fillRect(chart.left+slot*index+(slot-barWidth)/2,bottom-height,barWidth,height)}
+      if(height>0){const context=chart.context,gap=Math.min(2,height*.16),segmentHeight=Math.max(1,height-gap);context.save();context.fillStyle=chartColor(item.color);context.globalAlpha=activeBucket?.98:.9;if(activeBucket){context.shadowColor=chartColor(item.color);context.shadowBlur=10}fillRoundedRect(context,barX,bottom-height+gap/2,currentBarWidth,segmentHeight,Math.min(5,currentBarWidth/3,segmentHeight/2));context.restore()}
       bottom-=height;
     });
-    if(index===active&&total(point)>0){const height=total(point)/max*chart.plotHeight;chart.context.strokeStyle=chartColor('--blue');chart.context.lineWidth=1.5;chart.context.strokeRect(chart.left+slot*index+(slot-barWidth)/2-2,chart.top+chart.plotHeight-height-2,barWidth+4,height+4)}
+    if(activeBucket&&total(point)>0){const height=total(point)/max*chart.plotHeight,context=chart.context;context.save();context.strokeStyle=chartColor('--blue');context.lineWidth=1.5;context.shadowColor=chartColor('--blue');context.shadowBlur=8;strokeRoundedRect(context,barX-3,chart.top+chart.plotHeight-height-3,currentBarWidth+6,height+6,6);context.shadowBlur=0;context.fillStyle=chartColor('--blue');context.beginPath();context.arc(barX+currentBarWidth/2,chart.top+chart.plotHeight-height-8,3.5,0,Math.PI*2);context.fill();context.restore()}
   });
   drawXLabels(chart,points);
   setChartInteraction('token-chart',{canvas:chart.canvas,width:chart.width,height:chart.height,items,hitTest:(x,y)=>x>=chart.left&&x<=chart.left+chart.plotWidth&&y>=chart.top&&y<=chart.top+chart.plotHeight+18?Math.min(points.length-1,Math.floor((x-chart.left)/slot)):-1,describe:item=>({title:chartBucketTitle(item.point.time),rows:[...definitions.map(definition=>({label:definition.label,value:formatNumber(tokenChartValue(item.point,definition,definitions)),color:definition.color})),{label:'Visible total',value:formatNumber(total(item.point))},{label:'Requests',value:formatNumber(item.point.requests)},{label:'Estimated cost',value:formatUSD(item.point.cost_usd)}]})});
 }
 function linePointX(chart,count,index){return chart.left+chart.plotWidth*(count===1?.5:index/(count-1))}
-function drawLine(chart,points,value,color,maxValue){
-  const context=chart.context;
-  context.strokeStyle=color;context.lineWidth=2;context.lineJoin='round';context.lineCap='round';context.beginPath();
-  points.forEach((point,index)=>{const x=linePointX(chart,points.length,index),y=chart.top+chart.plotHeight-Math.max(0,value(point))/maxValue*chart.plotHeight;if(index===0)context.moveTo(x,y);else context.lineTo(x,y)});
-  context.stroke();
-  if(points.length<=24)points.forEach((point,index)=>{const x=linePointX(chart,points.length,index),y=chart.top+chart.plotHeight-Math.max(0,value(point))/maxValue*chart.plotHeight;context.fillStyle=chartColor('--paper');context.strokeStyle=color;context.lineWidth=2;context.beginPath();context.arc(x,y,3,0,Math.PI*2);context.fill();context.stroke()});
+function linePointY(chart,point,value,maxValue){return chart.top+chart.plotHeight-Math.max(0,value(point))/maxValue*chart.plotHeight}
+function drawLine(chart,points,value,color,maxValue,activeIndex=-1){
+  const context=chart.context,coordinates=points.map((point,index)=>({x:linePointX(chart,points.length,index),y:linePointY(chart,point,value,maxValue)}));
+  if(!coordinates.length)return;
+  context.save();context.lineJoin='round';context.lineCap='round';context.beginPath();coordinates.forEach((coordinate,index)=>{if(index===0)context.moveTo(coordinate.x,coordinate.y);else context.lineTo(coordinate.x,coordinate.y)});
+  context.strokeStyle=color;context.globalAlpha=.28;context.lineWidth=9;context.shadowColor=color;context.shadowBlur=14;context.stroke();
+  context.globalAlpha=1;context.shadowBlur=0;context.lineWidth=2.5;context.stroke();
+  if(points.length<=24)coordinates.forEach((coordinate,index)=>{const active=index===activeIndex;context.save();context.fillStyle=chartColor('--paper');context.strokeStyle=color;context.lineWidth=active?2.8:2;context.shadowColor=color;context.shadowBlur=active?11:0;context.beginPath();context.arc(coordinate.x,coordinate.y,active?4.8:3.2,0,Math.PI*2);context.fill();context.stroke();context.restore()});
+  context.restore();
 }
 function drawActiveLineGuide(chart,x,markers){
-  const context=chart.context;context.save();context.strokeStyle=chartColor('--blue');context.lineWidth=1;context.setLineDash([3,4]);context.beginPath();context.moveTo(x,chart.top);context.lineTo(x,chart.top+chart.plotHeight);context.stroke();context.setLineDash([]);
-  for(const marker of markers){context.fillStyle=chartColor('--paper');context.strokeStyle=marker.color;context.lineWidth=2.5;context.beginPath();context.arc(x,marker.y,5,0,Math.PI*2);context.fill();context.stroke()}
+  const context=chart.context;context.save();context.strokeStyle=chartColor('--blue');context.globalAlpha=.7;context.lineWidth=1.5;context.setLineDash([2,5]);context.beginPath();context.moveTo(x,chart.top);context.lineTo(x,chart.top+chart.plotHeight);context.stroke();context.setLineDash([]);
+  for(const marker of markers){context.save();context.fillStyle=chartColor('--paper');context.strokeStyle=marker.color;context.lineWidth=3;context.shadowColor=marker.color;context.shadowBlur=15;context.beginPath();context.arc(x,marker.y,7,0,Math.PI*2);context.fill();context.stroke();context.shadowBlur=0;context.lineWidth=2;context.beginPath();context.arc(x,marker.y,4,0,Math.PI*2);context.stroke();context.restore()}
   context.restore();
 }
 function lineHitIndex(chart,count,x,y){
@@ -1775,7 +1802,7 @@ function renderCostChart(){
   const chart=prepareChart('cost-chart'),points=visibleChartPoints('cost');
   if(!points.length){clearChartInteraction('cost-chart');drawEmptyChart(chart,'No cost data in this range.');return}
   const value=point=>Number(point.cost_usd||0),max=Math.max(.000001,...points.map(value)),items=points.map((point,index)=>({point,anchor:{x:linePointX(chart,points.length,index),y:chart.top+chart.plotHeight-value(point)/max*chart.plotHeight}})),active=remapChartActive('cost-chart',items);
-  drawGrid(chart,max,item=>formatUSD(item));drawLine(chart,points,value,chartColor('--chart-cost'),max);drawXLabels(chart,points,false);
+  drawGrid(chart,max,item=>formatUSD(item));drawLine(chart,points,value,chartColor('--chart-cost'),max,active);drawXLabels(chart,points,false);
   if(active>=0){const x=linePointX(chart,points.length,active),y=chart.top+chart.plotHeight-value(points[active])/max*chart.plotHeight;drawActiveLineGuide(chart,x,[{y,color:chartColor('--chart-cost')}])}
   setChartInteraction('cost-chart',{canvas:chart.canvas,width:chart.width,height:chart.height,items,hitTest:(x,y)=>lineHitIndex(chart,points.length,x,y),describe:item=>({title:chartBucketTitle(item.point.time),rows:[{label:'Estimated cost',value:formatUSD(item.point.cost_usd),color:'--chart-cost'},{label:'Requests',value:formatNumber(item.point.requests)}]})});
 }
@@ -1786,7 +1813,7 @@ function renderEfficiencyChart(){
   const timingMax=Math.max(1,...points.map(point=>Math.max(latency(point),ttft(point)))),tpsMax=Math.max(1,...points.map(tps)),scaledTPS=point=>tps(point)*timingMax/tpsMax;
   const items=points.map((point,index)=>({point,anchor:{x:linePointX(chart,points.length,index),y:chart.top+10}})),active=remapChartActive('efficiency-chart',items);
   drawGrid(chart,timingMax,value=>value>=1000?(value/1000).toFixed(1)+'s':Math.round(value)+'ms',ratio=>(tpsMax*ratio).toFixed(0));
-  drawLine(chart,points,latency,chartColor('--chart-input'),timingMax);drawLine(chart,points,ttft,chartColor('--chart-cache'),timingMax);drawLine(chart,points,scaledTPS,chartColor('--chart-output'),timingMax);drawXLabels(chart,points,false);
+  drawLine(chart,points,latency,chartColor('--chart-input'),timingMax,active);drawLine(chart,points,ttft,chartColor('--chart-cache'),timingMax,active);drawLine(chart,points,scaledTPS,chartColor('--chart-output'),timingMax,active);drawXLabels(chart,points,false);
   if(active>=0){const point=points[active],x=linePointX(chart,points.length,active),toY=value=>chart.top+chart.plotHeight-value/timingMax*chart.plotHeight;drawActiveLineGuide(chart,x,[{y:toY(latency(point)),color:chartColor('--chart-input')},{y:toY(ttft(point)),color:chartColor('--chart-cache')},{y:toY(scaledTPS(point)),color:chartColor('--chart-output')}])}
   setChartInteraction('efficiency-chart',{canvas:chart.canvas,width:chart.width,height:chart.height,items,hitTest:(x,y)=>lineHitIndex(chart,points.length,x,y),describe:item=>({title:chartBucketTitle(item.point.time),rows:[{label:'Avg latency',value:formatDuration(item.point.average_latency_ns),color:'--chart-input'},{label:'Avg TTFT',value:formatDuration(item.point.average_ttft_ns),color:'--chart-cache'},{label:'Tokens/sec',value:formatTPS(item.point.average_tps),color:'--chart-output'},{label:'Requests',value:formatNumber(item.point.requests)}]})});
 }
@@ -1821,7 +1848,7 @@ function renderModelLegend(items,total,focusedKey=''){
       if(entry)entry.focus({preventScroll:true});
     }
   }
-  legend.querySelectorAll('[data-model-index]').forEach(entry=>{const index=Number(entry.dataset.modelIndex),item=items[index];entry.classList.toggle('is-active',activeChartIndex('model-chart',items.length)===index);if(item&&item.filterable)entry.setAttribute('aria-pressed',String(usageState.providerModel===item.model))});
+  legend.querySelectorAll('[data-model-index]').forEach(entry=>{const index=Number(entry.dataset.modelIndex),item=items[index],active=activeChartIndex('model-chart',items.length)===index||Boolean(item&&item.filterable&&usageState.providerModel===item.model);entry.classList.toggle('is-active',active);if(item&&item.filterable)entry.setAttribute('aria-pressed',String(usageState.providerModel===item.model))});
 }
 function renderModelChart(){
   const previousInteraction=chartInteractions.get('model-chart'),focusedEntry=document.activeElement&&document.activeElement.closest('#model-legend [data-model-index]'),focusedKey=focusedEntry&&previousInteraction?((previousInteraction.items[Number(focusedEntry.dataset.modelIndex)]||{}).key||''):'',chart=prepareChart('model-chart'),source=(usageState.overview&&usageState.overview.provider_models||[]).filter(item=>Number(item.requests||0)>0).sort((left,right)=>Number(right.requests||0)-Number(left.requests||0)),legend=document.getElementById('model-legend');
@@ -1829,12 +1856,12 @@ function renderModelChart(){
   const palette=['#2d6cdf','#24836b','#a96708','#8657c8','#b83b43','#47a7dc','#70a84f','#b88755'];
   const items=source.slice(0,7).map((item,index)=>({model:item.model,key:'model:'+item.model,requests:Number(item.requests||0),total_tokens:Number(item.total_tokens||0),cost_usd:Number(item.cost_usd||0),filterable:true,color:palette[index%palette.length]}));
   if(source.length>7){const rest=source.slice(7);items.push({model:'Other',key:'aggregate:other',requests:rest.reduce((sum,item)=>sum+Number(item.requests||0),0),total_tokens:rest.reduce((sum,item)=>sum+Number(item.total_tokens||0),0),cost_usd:rest.reduce((sum,item)=>sum+Number(item.cost_usd||0),0),filterable:false,color:palette[7%palette.length]})}
-  const total=items.reduce((sum,item)=>sum+item.requests,0),context=chart.context,cx=chart.width/2,cy=chart.height/2-4,radius=Math.min(chart.width,chart.height)*.31,lineWidth=Math.max(22,radius*.28),remappedActive=remapChartActive('model-chart',items);
-  context.lineWidth=lineWidth;context.strokeStyle=chartColor('--surface-soft');context.beginPath();context.arc(cx,cy,radius,0,Math.PI*2);context.stroke();
+  const total=items.reduce((sum,item)=>sum+item.requests,0),context=chart.context,cx=chart.width/2,cy=chart.height/2-4,radius=Math.min(chart.width,chart.height)*.31,lineWidth=Math.max(22,radius*.28),remappedActive=remapChartActive('model-chart',items),gapAngle=Math.min(.07,Math.PI*2/items.length*.24);
+  context.save();context.lineWidth=lineWidth+4;context.strokeStyle=chartColor('--chart-backdrop');context.beginPath();context.arc(cx,cy,radius,0,Math.PI*2);context.stroke();context.restore();
   let angle=-Math.PI/2;
-  items.forEach((item,index)=>{item.start=angle;item.end=angle+item.requests/total*Math.PI*2;item.anchor={x:cx+Math.cos((item.start+item.end)/2)*radius,y:cy+Math.sin((item.start+item.end)/2)*radius};context.save();if((remappedActive>=0&&remappedActive!==index)||(usageState.providerModel&&usageState.providerModel!==item.model))context.globalAlpha=.28;context.lineWidth=index===remappedActive||usageState.providerModel===item.model?lineWidth+5:lineWidth;context.strokeStyle=item.color;context.beginPath();context.arc(cx,cy,radius,item.start,item.end);context.stroke();context.restore();angle=item.end});
+  items.forEach((item,index)=>{item.start=angle;item.end=angle+item.requests/total*Math.PI*2;const span=item.end-item.start,segmentGap=Math.min(gapAngle,span*.3);item.drawStart=item.start+segmentGap;item.drawEnd=item.end-segmentGap;const middle=(item.start+item.end)/2;item.anchor={x:cx+Math.cos(middle)*radius,y:cy+Math.sin(middle)*radius};const selected=item.filterable&&usageState.providerModel===item.model,isActive=index===remappedActive||selected,isDimmed=(remappedActive>=0&&remappedActive!==index)||(usageState.providerModel&&!selected);context.save();if(isDimmed)context.globalAlpha=.2;context.lineWidth=isActive?lineWidth+8:lineWidth;context.strokeStyle=item.color;context.lineCap='butt';context.shadowColor=isActive?item.color:'transparent';context.shadowBlur=isActive?14:0;const lift=isActive?5:0,offsetX=Math.cos(middle)*lift,offsetY=Math.sin(middle)*lift;context.beginPath();context.arc(cx+offsetX,cy+offsetY,radius,item.drawStart,item.drawEnd);context.stroke();context.restore();angle=item.end});
   context.fillStyle=chartColor('--ink');context.textAlign='center';context.textBaseline='middle';context.font='750 23px "Cascadia Code",monospace';context.fillText(formatCompact(total),cx,cy-5);context.fillStyle=chartColor('--muted');context.font='11px "Segoe UI",sans-serif';context.fillText('requests',cx,cy+17);
-  const hitTest=(x,y)=>{const distance=Math.hypot(x-cx,y-cy);if(distance<radius-lineWidth/2-6||distance>radius+lineWidth/2+6)return-1;let point=Math.atan2(y-cy,x-cx);if(point < -Math.PI/2)point+=Math.PI*2;return items.findIndex(item=>point>=item.start&&point<=item.end)};
+  const hitTest=(x,y)=>{const distance=Math.hypot(x-cx,y-cy);if(distance<radius-lineWidth/2-8||distance>radius+lineWidth/2+12)return-1;let point=Math.atan2(y-cy,x-cx);if(point < -Math.PI/2)point+=Math.PI*2;return items.findIndex(item=>point>=item.drawStart&&point<=item.drawEnd)};
   setChartInteraction('model-chart',{canvas:chart.canvas,width:chart.width,height:chart.height,items,hitTest,describe:item=>modelTooltip(item,total),activate:item=>{if(item.filterable)setProviderModelFilter(item.model)}});
   renderModelLegend(items,total,focusedKey);
 }
