@@ -111,6 +111,7 @@ func TestModelRouterManagementDashboardReusesCPAMCSessionAndTheme(t *testing.T) 
 		"const ROUTER_FILTER_MODEL_PREFIX='model:'",
 		"const ROUTER_FILTER_ATTRIBUTION_PREFIX='attribution:'",
 		"['attribution',usageState.attribution]",
+		".price-grid .price-model-field { grid-column: 1 / -1; }",
 		"const controller=new AbortController()",
 		"generation!==usageState.generation",
 		"document.addEventListener('visibilitychange'",
