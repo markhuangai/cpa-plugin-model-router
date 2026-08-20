@@ -158,12 +158,13 @@ func TestModelRouterManagementDashboardReusesCPAMCSessionAndTheme(t *testing.T) 
 	}
 	for _, required := range []string{
 		"pricingDialogGeneration:0",
-		"pricingSaveInFlight:null",
+		"pricingWriteInFlight:null",
 		"const dialogGeneration=++usageState.pricingDialogGeneration",
-		"const pendingSave=usageState.pricingSaveInFlight",
-		"if(pendingSave){try{await pendingSave}catch(_error){}}",
-		"const saveRequest=requestManagementJSON(USAGE_API+'/prices'",
-		"if(usageState.pricingSaveInFlight===saveRequest)usageState.pricingSaveInFlight=null",
+		"const pendingWrite=usageState.pricingWriteInFlight",
+		"if(pendingWrite){try{await pendingWrite}catch(_error){}}",
+		"const writeRequest=requestManagementJSON(USAGE_API+'/prices'",
+		"if(usageState.pricingWriteInFlight===writeRequest)usageState.pricingWriteInFlight=null",
+		"const writeRequest=requestManagementJSON(USAGE_API+'/prices/sync'",
 		"if(dialogGeneration!==usageState.pricingDialogGeneration)return",
 		"if(dialogGeneration===usageState.pricingDialogGeneration&&pricingDialogEl.open)",
 		"const chartActive={id:'',index:-1,anchor:null,key:null}",
