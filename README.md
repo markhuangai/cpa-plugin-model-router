@@ -19,10 +19,13 @@ The plugin does not call providers directly. For each selected physical model it
 - Retry a stream only before the first upstream payload is received.
 - Preserve unchanged cooldown and round-robin state when CPA reconfigures the plugin.
 - Configure ordered routes and target pools through a dedicated CPA management page.
+- Track routed attempts and direct provider requests with separate router-model and provider-model identities.
+- Persist request usage, minute aggregates, USD model prices, and dashboard preferences in a dedicated bbolt database.
+- Review tokens, estimated cost, latency, TTFT, throughput, failures, and pricing coverage without replacing visible data during refreshes.
 
 ## Compatibility
 
-The module is built against `github.com/router-for-me/CLIProxyAPI/v7` v7.2.123. It advertises RPC schema v1 because it does not use the schema-v2 request-lifecycle additions. The CPA host must support native plugins, `model_router`, `executor`, `model_registrar`, and the `host.model.*` callback methods. The configuration page also requires CPA's `management_api` capability and plugin resource menus.
+The module is built against `github.com/router-for-me/CLIProxyAPI/v7` v7.2.123. It negotiates RPC schema v2 with older compatible hosts and schema v3 when offered; schema v3 avoids resending the full request body with every streaming response chunk. The CPA host must support native plugins, `model_router`, `executor`, `model_registrar`, request lifecycle and response interceptors, `usage_plugin`, and the `host.model.*` callback methods. The configuration and usage page also requires CPA's `management_api` capability and plugin resource menus.
 
 Build the plugin for the same operating system and architecture as CPA. A Go `c-shared` library is not portable across OS or CPU targets.
 
@@ -36,6 +39,8 @@ plugins:
     model-router:
       enabled: true
       priority: 100
+      data_path: "/var/lib/cliproxyapi/model-router-usage.db"
+      retention_days: 365
       routes:
         - alias: auto
           strategy: priority
@@ -55,9 +60,20 @@ plugins:
 
 `plugins.enabled` and `plugins.configs.model-router.enabled` must both be true. The library basename must be exactly `model-router` with the host extension: `.so`, `.dylib`, or `.dll`.
 
+Only two usage-storage settings are supported:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `data_path` | CPA `data/model-router-usage.db` | Dedicated bbolt database path. Explicit relative paths resolve from the CPA process working directory. |
+| `retention_days` | `365` | UTC days of request details and aggregates to retain, from 1 through 3650. |
+
+When `data_path` is omitted, the plugin locates the CPA root from the loaded library, then the CPA executable, then the current working directory. It stores the database under that root's `data` directory and falls back to `./data/model-router-usage.db` only when no CPA layout can be identified. For containers, set an absolute `data_path` inside a mounted persistent volume; a writable container layer does not survive container replacement.
+
+Every completed attempt is committed synchronously. Usage history, prices, and dashboard preferences therefore survive a normal CPA restart when the same database file remains mounted and writable. Retention deletes expired records and lets bbolt reuse their pages, but it does not guarantee that the file shrinks on disk. High-volume installations should monitor the database file and choose retention based on request rate and available storage.
+
 ### Configuration UI
 
-The plugin registers a **Model Router** page in CPA's management frontend. Open the Plugins section and select **Model Router**. When CPAMC has a persisted authenticated session, the page reuses its management key and loads configuration automatically. It also follows CPAMC's selected light, white, or dark theme and updates when that selection changes. The page provides typed controls for route order, aliases, priority or round-robin strategy, cooldowns, and ordered target pools. Target dropdowns are populated with the model IDs currently returned by CPA's `/v1/models` endpoint.
+The plugin registers a **Model Router** page in CPA's management frontend. Open the Plugins section and select **Model Router**. The centered **Configuration** and **Usage tracking** tabs appear above the route controls; Configuration is selected by default. When CPAMC has a persisted authenticated session, the page reuses its management key and loads configuration automatically. It also follows CPAMC's selected light, white, or dark theme and updates when that selection changes. The Configuration tab provides typed controls for route order, aliases, priority or round-robin strategy, cooldowns, and ordered target pools. Target dropdowns are populated with the model IDs currently returned by CPA's `/v1/models` endpoint.
 
 Model discovery uses the management session to read CPA's configured client API keys, then keeps the first non-empty key in browser memory only while requesting `/v1/models`. The client key is not rendered or stored. If no client key is configured, the page attempts the model request without authorization for CPA installations without frontend authentication. Existing targets that are absent from the live catalog remain visible as disabled `<model> (unavailable)` choices until they are replaced, so loading the page never changes saved routes. New UI targets must be selected from the live catalog; custom or suffixed targets can still be managed through YAML or the Management API.
 
@@ -68,6 +84,18 @@ Model discovery uses the management session to read CPA's configured client API 
 ```
 
 The dashboard HTML is a public plugin resource so CPA can embed it in the frontend. Reading or changing configuration still requires the management key. The page reads CPAMC's persisted `cli-proxy-auth` value from same-origin browser storage; it does not change CPAMC's stored session. If **Remember password** is disabled, the persisted session has no key, so the page reveals a fallback key field. A fallback key is cached only in that tab's session storage and is removed when CPA rejects it. CPA's Management API must be enabled and reachable from the browser.
+
+### Usage tracking
+
+Usage tracking records one row for every physical routed attempt, including failed attempts before failover, and one row for direct provider requests. A routed row keeps the client-visible router alias in `router_model` and the physical CPA target in `provider_model`; direct rows have no router alias. This separation is used consistently in filters, summaries, grouped results, and request details.
+
+The dashboard provides preset or custom time ranges, minute/hour/day trends, router/provider/source/tier/result filters, USD cost estimates, configurable columns, server-side sorting and pagination, and model pricing with optional models.dev synchronization. Manual prices take precedence over synchronized catalog prices. Pricing units are USD per one million tokens; context tiers, service tiers, and cache accounting modes are supported.
+
+Refreshes keep the previous dashboard visible while three fenced requests load in parallel. Starting a newer refresh aborts the older one, and only the newest generation may update the page. Automatic refresh runs every 15 seconds only while Usage tracking is selected and the document is visible. Reset deletes request history and aggregates but preserves prices and dashboard preferences.
+
+The plugin prefers CPA's official usage record when it arrives in time. Because some CPA versions enqueue that record with a request context that is canceled at response completion, the plugin also captures usage from non-streaming responses, streaming chunks, and request-completion callbacks. A short-lived attribution marker suppresses a late official record after fallback storage, preventing double-counting.
+
+See [docs/usage-tracking.md](docs/usage-tracking.md) for the data contract, operational guidance, API routes, and implementation map.
 
 ### Route fields
 
@@ -152,7 +180,7 @@ make check
 make build
 ```
 
-`make build` writes the host-platform library to `dist/model-router.<ext>`. The default suite covers strict config parsing, priority and round-robin state, reconfiguration, failure classification, header sanitization, model rewriting, non-stream failover, stream boundaries, the management page, and native RPC registration.
+`make build` writes the host-platform library to `dist/model-router.<ext>`. The default suite covers strict config parsing, priority and round-robin state, reconfiguration, failure classification, header sanitization, model rewriting, non-stream failover, stream boundaries, usage parsing and attribution, persistence, pricing, management endpoints, the management page, and native RPC registration.
 
 Run the opt-in black-box test against a local CPA source checkout:
 
@@ -167,7 +195,9 @@ The black-box test builds CPA and the native plugin in a temporary directory, st
 - the Model Router menu and parser-backed validation endpoint are available;
 - a `429` from the first target fails over to the second target;
 - the client sees the requested alias in the response;
-- the failed target remains on cooldown for the next request.
+- the failed target remains on cooldown for the next request;
+- routed and direct streaming and non-streaming usage remain distinct and are not duplicated;
+- usage history, model prices, and dashboard preferences survive a CPA restart.
 
 The test currently runs on Linux and macOS.
 
@@ -199,7 +229,7 @@ curl -fsS http://127.0.0.1:8317/v0/management/plugins \
 
 - Routed token-count requests return HTTP `501` with code `model_route_count_tokens_unsupported`. The current host callback contract exposes model execution but not routed token counting. Returning an explicit error avoids reporting a false zero.
 - Host execution errors do not expose the upstream `Retry-After` header to the plugin. Cooldowns therefore use `cooldown_seconds`, even when a provider asks for a longer delay.
-- The host callback has no requested-model metadata field. CPA usage generated by nested execution is attributed to the selected physical target; the client response is still rewritten to the logical alias.
+- Nested host execution has no explicit requested-router metadata field. The plugin correlates official usage to a short-lived in-memory marker and falls back to response parsing when CPA does not deliver the official record.
 - Status-less errors lose some structured failure information at the ABI boundary. The fallback classifier is conservative and may stop on an unfamiliar transient error until that error is added explicitly.
 - Cooldown and round-robin state is process-local. It survives config reconfiguration when a route is unchanged, but not a CPA process restart.
 
@@ -207,7 +237,9 @@ curl -fsS http://127.0.0.1:8317/v0/management/plugins \
 
 The plugin removes client `Authorization`, proxy authorization, cookies, host/content-length, and headers whose names contain API key, token, secret, or credential markers before calling `host.model.*`. CPA selects and applies the target provider credential. Other request headers and query parameters are preserved.
 
-Native plugins execute in the CPA process with CPA's permissions. Only load artifacts you built or verified, and do not put credentials in route model names.
+Usage storage never includes prompt text, request or response bodies, failure bodies, response headers, or raw API keys. The request table can store a short masked API-key display value. Source URLs are stripped of user info, query strings, and fragments, while values that resemble credentials fall back to a provider label.
+
+The database is not encrypted by the plugin. Protect the configured path with filesystem permissions and volume access controls. Native plugins execute in the CPA process with CPA's permissions. Only load artifacts you built or verified, and do not put credentials in route model names.
 
 ## Publishing And Plugin Store Registration
 
@@ -251,4 +283,4 @@ After the registry PR is merged, install through the CPA management UI or `POST 
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). The usage dashboard and pricing workflow were adapted from AITNR's MIT-licensed CAP Token Usage Tracker; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -15,6 +15,7 @@ import (
 const (
 	modelRouterDashboardPath  = "/v0/resource/plugins/" + pluginID + "/config"
 	modelRouterValidationPath = "/v0/management/plugins/" + pluginID + "/validate"
+	modelRouterUsageBasePath  = "/v0/management/plugins/" + pluginID + "/usage"
 	maxManagementRequestBytes = 1 << 20
 )
 
@@ -47,11 +48,18 @@ type modelRouterValidationRequest struct {
 
 func modelRouterManagementRegistration() managementRegistrationResponse {
 	return managementRegistrationResponse{
-		Routes: []managementRoute{{
-			Method:      http.MethodPost,
-			Path:        "/plugins/" + pluginID + "/validate",
-			Description: "Validate Model Router configuration before saving it.",
-		}},
+		Routes: []managementRoute{
+			{Method: http.MethodPost, Path: "/plugins/" + pluginID + "/validate", Description: "Validate Model Router configuration before saving it."},
+			{Method: http.MethodGet, Path: "/plugins/" + pluginID + "/usage/overview", Description: "Read usage summaries, trends, costs, and model breakdowns."},
+			{Method: http.MethodGet, Path: "/plugins/" + pluginID + "/usage/groups", Description: "Read paginated usage dimension groups."},
+			{Method: http.MethodGet, Path: "/plugins/" + pluginID + "/usage/requests", Description: "Read paginated request-level usage."},
+			{Method: http.MethodGet, Path: "/plugins/" + pluginID + "/usage/prices", Description: "Read the persisted model price book."},
+			{Method: http.MethodPut, Path: "/plugins/" + pluginID + "/usage/prices", Description: "Persist a revision-protected model price book."},
+			{Method: http.MethodPost, Path: "/plugins/" + pluginID + "/usage/prices/sync", Description: "Synchronize CPA model prices from models.dev."},
+			{Method: http.MethodGet, Path: "/plugins/" + pluginID + "/usage/preferences", Description: "Read usage dashboard preferences."},
+			{Method: http.MethodPut, Path: "/plugins/" + pluginID + "/usage/preferences", Description: "Persist usage dashboard preferences."},
+			{Method: http.MethodPost, Path: "/plugins/" + pluginID + "/usage/reset", Description: "Clear usage aggregates and request history while preserving prices and preferences."},
+		},
 		Resources: []resourceRoute{{
 			Path:        "/config",
 			Menu:        "Model Router",
@@ -60,8 +68,11 @@ func modelRouterManagementRegistration() managementRegistrationResponse {
 	}
 }
 
-func handleModelRouterManagement(request pluginapi.ManagementRequest) pluginapi.ManagementResponse {
+func handleModelRouterManagement(plugin *modelRouterPlugin, request pluginapi.ManagementRequest) pluginapi.ManagementResponse {
 	path := strings.TrimRight(strings.TrimSpace(request.Path), "/")
+	if strings.HasPrefix(path, modelRouterUsageBasePath+"/") {
+		return handleUsageManagement(plugin, path, request)
+	}
 	switch path {
 	case modelRouterDashboardPath:
 		if !strings.EqualFold(request.Method, http.MethodGet) {

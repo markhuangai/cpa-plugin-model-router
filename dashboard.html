@@ -30,6 +30,11 @@
   --amber-border: color-mix(in srgb, var(--amber) 42%, var(--line));
   --danger-soft: color-mix(in srgb, var(--danger) 9%, var(--paper));
   --danger-border: color-mix(in srgb, var(--danger) 42%, var(--line));
+  --chart-input: #2d6cdf;
+  --chart-output: #24836b;
+  --chart-cache: #a96708;
+  --chart-reasoning: #8657c8;
+  --chart-cost: #b83b43;
   --shadow: 0 12px 34px rgba(23, 48, 66, .09);
   font-family: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
 }
@@ -47,6 +52,11 @@
   --amber: #f0bd57;
   --teal: #34c99a;
   --danger: #e47c70;
+  --chart-input: #8eafff;
+  --chart-output: #49d7aa;
+  --chart-cache: #f0bd57;
+  --chart-reasoning: #c4a2ff;
+  --chart-cost: #ff9b8f;
   --toggle-off: #5a544d;
   --toggle-knob: #f6f4f1;
   --shadow: 0 14px 34px rgba(0, 0, 0, .3);
@@ -63,14 +73,15 @@ body {
     linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
   background-size: 24px 24px;
 }
-button, input, select { font: inherit; }
+button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .48; }
-button, input, select { outline: none; }
-button:focus-visible, input:focus-visible, select:focus-visible {
+button, input, select, textarea { outline: none; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 24%, transparent);
   border-color: var(--blue);
 }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .shell { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 28px 0 56px; }
 .masthead {
   display: block;
@@ -122,6 +133,41 @@ h1 { margin: 0; font-size: clamp(34px, 5vw, 58px); line-height: .98; letter-spac
 .auth-note { min-height: 18px; margin: 9px 0 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
 .auth-note[data-tone="error"] { color: var(--danger); }
 .workspace[hidden] { display: none; }
+.page-tabs {
+  display: flex;
+  justify-content: center;
+  gap: 2px;
+  margin: 0 auto 22px;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.page-tabs::-webkit-scrollbar { display: none; }
+.page-tab {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 9px 15px 12px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  background: transparent;
+  border: 0;
+  border-radius: 8px 8px 0 0;
+}
+.page-tab::after {
+  content: "";
+  position: absolute;
+  right: 11px;
+  bottom: -1px;
+  left: 11px;
+  height: 2px;
+  background: transparent;
+  border-radius: 99px;
+}
+.page-tab:hover { color: var(--ink); background: color-mix(in srgb, var(--surface-soft) 55%, transparent); }
+.page-tab[aria-selected="true"] { color: var(--ink); font-weight: 700; }
+.page-tab[aria-selected="true"]::after { background: var(--ink); }
+.tab-panel[hidden] { display: none; }
 .control-strip {
   display: grid;
   grid-template-columns: auto minmax(130px, 190px) 1fr;
@@ -309,6 +355,119 @@ input[type="text"], input[type="number"], input[type="password"], select {
 .toast.show { opacity: 1; transform: translateY(0); }
 .toast[data-tone="error"] { background: var(--danger); }
 .toast[data-tone="success"] { background: var(--teal); }
+.usage-panel { min-width: 0; }
+.usage-toolbar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr)) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 15px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 5px 18px rgba(23, 48, 66, .045);
+}
+.usage-control { min-width: 0; }
+.usage-control label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; }
+.usage-actions { display: flex; justify-content: flex-end; gap: 7px; align-items: center; }
+.usage-actions .secondary, .usage-actions .danger-button { min-height: 38px; white-space: nowrap; }
+.usage-filter-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+  padding: 12px 15px;
+  background: var(--translucent-paper);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.custom-range { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; padding: 12px 15px; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 10px; }
+.custom-range[hidden] { display: none; }
+.usage-status-row { display: flex; justify-content: space-between; gap: 15px; align-items: center; min-height: 34px; padding: 8px 2px 4px; color: var(--muted); font-size: 12px; }
+.usage-status[data-tone="error"] { color: var(--danger); }
+.usage-status[data-tone="loading"] { color: var(--amber); }
+.usage-live { display: inline-flex; gap: 7px; align-items: center; white-space: nowrap; }
+.usage-live::before { content: ""; width: 7px; height: 7px; background: var(--teal); border-radius: 50%; }
+.metric-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+.metric-card { min-width: 0; padding: 15px; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; }
+.metric-label { display: block; color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; }
+.metric-value { display: block; overflow: hidden; margin-top: 8px; font: 750 clamp(20px, 2.5vw, 30px)/1.05 "Cascadia Code", "SFMono-Regular", ui-monospace, monospace; letter-spacing: -.04em; text-overflow: ellipsis; white-space: nowrap; }
+.metric-detail { display: block; overflow: hidden; margin-top: 6px; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.chart-grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(290px, .85fr); gap: 12px; margin-top: 12px; }
+.chart-card { min-width: 0; padding: 15px; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; }
+.chart-card header { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 12px; }
+.chart-card h3 { margin: 0; font-size: 15px; }
+.chart-card p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+.chart-tools { display: flex; gap: 4px; }
+.chart-tools button { min-width: 30px; padding: 5px 7px; }
+.chart-canvas { display: block; width: 100%; height: 260px; }
+.chart-card.compact .chart-canvas { height: 260px; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 8px 13px; margin-top: 9px; color: var(--muted); font-size: 11px; }
+.legend-item { display: inline-flex; gap: 5px; align-items: center; }
+.legend-swatch { width: 9px; height: 9px; border-radius: 2px; }
+.legend-swatch[data-color="input"] { background: var(--chart-input); }
+.legend-swatch[data-color="output"] { background: var(--chart-output); }
+.legend-swatch[data-color="cache"] { background: var(--chart-cache); }
+.legend-swatch[data-color="reasoning"] { background: var(--chart-reasoning); }
+.legend-swatch[data-color="cost"] { background: var(--chart-cost); }
+.legend-toggle { display: inline-flex; gap: 5px; align-items: center; padding: 3px 6px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 99px; font-size: 11px; }
+.legend-toggle:hover { color: var(--ink); background: var(--surface-soft); }
+.legend-toggle[aria-pressed="false"] { opacity: .48; }
+.legend-toggle[aria-pressed="false"] .legend-swatch { background: transparent; border: 1px solid currentColor; }
+.usage-section { margin-top: 12px; padding: 15px; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; }
+.usage-section-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 11px; }
+.usage-section-title h3 { margin: 0; font-size: 16px; }
+.usage-section-title p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+.table-tools { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; align-items: center; }
+.table-tools select { width: auto; min-width: 105px; padding: 7px 9px; }
+.table-scroll { overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.usage-table { width: 100%; min-width: 940px; border-collapse: collapse; font-size: 12px; }
+.usage-table th, .usage-table td { padding: 9px 10px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.usage-table th { position: sticky; top: 0; z-index: 1; color: var(--muted); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; background: var(--surface-soft); }
+.usage-table th:first-child, .usage-table td:first-child, .usage-table .text-cell { text-align: left; }
+.usage-table tbody tr:last-child td { border-bottom: 0; }
+.usage-table tbody tr:hover { background: var(--blue-soft); }
+.sort-button { display: inline-flex; gap: 5px; align-items: center; padding: 0; color: inherit; font: inherit; font-weight: inherit; letter-spacing: inherit; text-transform: inherit; background: transparent; border: 0; }
+.sort-button:hover { color: var(--ink); }
+.status-pill { display: inline-block; padding: 3px 7px; font-size: 10px; font-weight: 750; border-radius: 99px; background: var(--surface-soft); }
+.status-pill.failure { color: var(--danger); background: var(--danger-soft); }
+.pagination { display: flex; justify-content: flex-end; gap: 8px; align-items: center; margin-top: 10px; color: var(--muted); font-size: 11px; }
+.pagination button { padding: 6px 9px; }
+.empty-row { padding: 30px 15px !important; color: var(--muted); text-align: center !important; }
+.column-picker { position: relative; }
+.column-picker summary { list-style: none; padding: 7px 10px; color: var(--ink); font-weight: 700; background: var(--paper); border: 1px solid var(--line-strong); border-radius: 7px; cursor: pointer; }
+.column-picker summary::-webkit-details-marker { display: none; }
+.column-menu { position: absolute; top: calc(100% + 5px); right: 0; z-index: 8; display: grid; gap: 7px; min-width: 210px; max-height: 310px; overflow: auto; padding: 11px; background: var(--paper); border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: var(--shadow); }
+.column-menu label { display: flex; gap: 7px; align-items: center; font-size: 11px; white-space: nowrap; }
+dialog { width: min(980px, calc(100% - 28px)); max-height: calc(100vh - 32px); padding: 0; color: var(--ink); background: var(--paper); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 22px 70px rgba(0,0,0,.3); }
+dialog::backdrop { background: rgba(10, 18, 25, .46); backdrop-filter: blur(2px); }
+.dialog-shell { padding: 18px; }
+.dialog-head { display: flex; justify-content: space-between; gap: 12px; align-items: start; padding-bottom: 13px; border-bottom: 1px solid var(--line); }
+.dialog-head h2 { margin: 0; font-size: 21px; }
+.dialog-head p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+.dialog-body { max-height: calc(100vh - 210px); overflow: auto; padding: 15px 1px; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 13px; border-top: 1px solid var(--line); }
+.pricing-toolbar { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto; gap: 8px; margin-bottom: 13px; }
+.pricing-sync-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 13px; padding: 12px; background: var(--surface-soft); border-radius: 8px; }
+.pricing-sync-settings .wide { grid-column: 1 / -1; }
+.pricing-sync-settings label, .price-advanced label { color: var(--muted); font-size: 10px; font-weight: 750; }
+.pricing-sync-settings textarea, .price-advanced textarea { width: 100%; min-height: 76px; padding: 8px; resize: vertical; color: var(--ink); background: var(--input); border: 1px solid var(--line-strong); border-radius: 7px; font: 11px/1.45 "Cascadia Code", "SFMono-Regular", ui-monospace, monospace; }
+.pricing-status { margin: 0 0 10px; color: var(--muted); font-size: 11px; }
+.price-list { display: grid; gap: 8px; max-height: 430px; overflow: auto; padding-right: 2px; }
+.price-row { padding: 11px; border: 1px solid var(--line); border-radius: 8px; }
+.price-grid { display: grid; grid-template-columns: minmax(170px, 1.5fr) repeat(4, minmax(80px, .7fr)) minmax(150px, 1fr) auto; gap: 7px; align-items: end; }
+.price-grid label { color: var(--muted); font-size: 10px; font-weight: 750; }
+.price-grid input, .price-grid select { margin-top: 5px; }
+.price-model-field input { font: 700 11px/1.3 "Cascadia Code", "SFMono-Regular", ui-monospace, monospace; }
+.price-source { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
+.price-advanced { margin-top: 9px; }
+.price-advanced summary { color: var(--blue); font-size: 11px; font-weight: 700; cursor: pointer; }
+.price-advanced-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 8px; }
+.dialog-error { min-height: 18px; margin: 8px 0 0; color: var(--danger); font-size: 11px; }
+.price-empty { padding: 30px 15px; color: var(--muted); text-align: center; border: 1px dashed var(--line-strong); border-radius: 8px; }
+.reset-dialog { width: min(460px, calc(100% - 28px)); }
+.reset-copy { color: var(--muted); font-size: 13px; line-height: 1.55; }
+.reset-copy code { color: var(--danger); }
 @media (max-width: 800px) {
   .shell { width: min(100% - 20px, 680px); padding-top: 18px; }
   .masthead { grid-template-columns: 1fr; align-items: start; }
@@ -328,6 +487,26 @@ input[type="text"], input[type="number"], input[type="password"], select {
   .footer-bar { align-items: flex-start; flex-direction: column; }
   .footer-actions { width: 100%; }
   .footer-actions button { flex: 1; }
+  .usage-toolbar { grid-template-columns: 1fr 1fr; }
+  .usage-actions { grid-column: 1 / -1; justify-content: stretch; }
+  .usage-actions button { flex: 1; }
+  .usage-filter-row { grid-template-columns: 1fr 1fr; }
+  .metric-grid { grid-template-columns: 1fr 1fr; }
+  .metric-card:last-child { grid-column: 1 / -1; }
+  .chart-grid { grid-template-columns: 1fr; }
+  .usage-section-head { align-items: flex-start; flex-direction: column; }
+  .table-tools { justify-content: flex-start; }
+  .price-grid { grid-template-columns: 1fr 1fr; }
+  .price-grid .price-model { grid-column: 1 / -1; }
+  .pricing-sync-settings, .price-advanced-grid { grid-template-columns: 1fr; }
+  .pricing-sync-settings .wide { grid-column: auto; }
+}
+@media (max-width: 520px) {
+  .usage-toolbar, .usage-filter-row, .custom-range, .metric-grid { grid-template-columns: 1fr; }
+  .metric-card:last-child { grid-column: auto; }
+  .pricing-toolbar { grid-template-columns: 1fr; }
+  .price-grid { grid-template-columns: 1fr; }
+  .price-grid .price-model-field { grid-column: auto; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
@@ -353,47 +532,190 @@ input[type="text"], input[type="number"], input[type="password"], select {
   </header>
 
   <main id="workspace" class="workspace" hidden>
-    <section class="control-strip" aria-label="Plugin settings">
-      <label class="toggle-wrap">
-        <span class="toggle">
-          <input id="plugin-enabled" type="checkbox">
-          <span aria-hidden="true"></span>
-        </span>
-        Plugin enabled
-      </label>
-      <div class="priority-field">
-        <label for="plugin-priority">Priority</label>
-        <input id="plugin-priority" type="number" step="1" inputmode="numeric">
+    <nav class="page-tabs" role="tablist" aria-label="Model Router sections">
+      <button id="configuration-tab" class="page-tab" type="button" role="tab" aria-selected="true" aria-controls="configuration-panel" tabindex="0">Configuration</button>
+      <button id="usage-tab" class="page-tab" type="button" role="tab" aria-selected="false" aria-controls="usage-panel" tabindex="-1">Usage tracking</button>
+    </nav>
+
+    <section id="configuration-panel" class="tab-panel" role="tabpanel" aria-labelledby="configuration-tab">
+      <section class="control-strip" aria-label="Plugin settings">
+        <label class="toggle-wrap">
+          <span class="toggle">
+            <input id="plugin-enabled" type="checkbox">
+            <span aria-hidden="true"></span>
+          </span>
+          Plugin enabled
+        </label>
+        <div class="priority-field">
+          <label for="plugin-priority">Priority</label>
+          <input id="plugin-priority" type="number" step="1" inputmode="numeric">
+        </div>
+        <span id="save-state" class="save-state" data-dirty="false">Loaded from CPA</span>
+      </section>
+
+      <section class="flow-rail" aria-label="Model routing flow">
+        <span class="flow-node">Client alias</span><span class="flow-line"></span>
+        <span class="flow-node action">Select target</span><span class="flow-line"></span>
+        <span class="flow-node gate">Cooldown gate</span><span class="flow-line"></span>
+        <span class="flow-node">CPA executor</span>
+      </section>
+
+      <div class="section-head">
+        <div class="section-title">
+          <h2>Route table</h2>
+          <span id="route-count" class="count">0 routes</span>
+          <span id="model-status" class="count catalog-status" data-tone="loading" aria-live="polite">Loading CPA models…</span>
+        </div>
+        <button id="add-route" class="secondary" type="button">Add route</button>
       </div>
-      <span id="save-state" class="save-state" data-dirty="false">Loaded from CPA</span>
+      <section id="routes" class="routes" aria-live="polite"></section>
+
+      <div class="footer-bar">
+        <span class="footer-hint">Save checks duplicate aliases, recursion, target pools, and cooldowns with the plugin's Go parser.</span>
+        <div class="footer-actions">
+          <button id="reload" class="secondary" type="button">Discard and reload</button>
+          <button id="save" class="primary" type="button">Save changes</button>
+        </div>
+      </div>
     </section>
 
-    <section class="flow-rail" aria-label="Model routing flow">
-      <span class="flow-node">Client alias</span><span class="flow-line"></span>
-      <span class="flow-node action">Select target</span><span class="flow-line"></span>
-      <span class="flow-node gate">Cooldown gate</span><span class="flow-line"></span>
-      <span class="flow-node">CPA executor</span>
+    <section id="usage-panel" class="tab-panel usage-panel" role="tabpanel" aria-labelledby="usage-tab" aria-busy="false" hidden>
+      <div class="usage-toolbar" aria-label="Usage range controls">
+        <div class="usage-control">
+          <label for="usage-range">Time range</label>
+          <select id="usage-range">
+            <option value="5h">Last 5 hours</option>
+            <option value="24h" selected>Last 24 hours</option>
+            <option value="7d">Last 7 days</option>
+            <option value="30d">Last 30 days</option>
+            <option value="month">Current month</option>
+            <option value="custom">Custom range</option>
+          </select>
+        </div>
+        <div class="usage-control">
+          <label for="usage-granularity">Granularity</label>
+          <select id="usage-granularity"><option value="minute">Minute</option><option value="hour" selected>Hour</option><option value="day">Day</option></select>
+        </div>
+        <div class="usage-control">
+          <label for="usage-router-model">Router model</label>
+          <select id="usage-router-model"><option value="">All router models</option></select>
+        </div>
+        <div class="usage-control">
+          <label for="usage-provider-model">Provider model</label>
+          <select id="usage-provider-model"><option value="">All provider models</option></select>
+        </div>
+        <div class="usage-actions">
+          <button id="usage-pricing" class="secondary" type="button">Model pricing</button>
+          <button id="usage-reset" class="danger-button" type="button">Reset</button>
+          <button id="usage-refresh" class="secondary" type="button">Refresh</button>
+        </div>
+      </div>
+
+      <div id="usage-custom-range" class="custom-range" hidden>
+        <div class="usage-control"><label for="usage-from">From</label><input id="usage-from" type="datetime-local" step="1"></div>
+        <div class="usage-control"><label for="usage-to">To</label><input id="usage-to" type="datetime-local" step="1"></div>
+      </div>
+
+      <div class="usage-filter-row" aria-label="Usage filters">
+        <div class="usage-control"><label for="usage-source">Source</label><select id="usage-source"><option value="">All sources</option></select></div>
+        <div class="usage-control"><label for="usage-service-tier">Service tier</label><select id="usage-service-tier"><option value="">All service tiers</option></select></div>
+        <div class="usage-control"><label for="usage-result">Result</label><select id="usage-result"><option value="">All results</option><option value="success">Success</option><option value="failed">Failed without status</option></select></div>
+        <div class="usage-control"><label for="usage-auto-refresh">Refresh interval</label><select id="usage-auto-refresh" disabled><option>Every 15 seconds</option></select></div>
+      </div>
+
+      <div class="usage-status-row">
+        <span id="usage-status" class="usage-status" aria-live="polite">Open Usage tracking to load data.</span>
+        <span id="usage-live" class="usage-live" hidden>Live while this tab is visible</span>
+      </div>
+
+      <section class="metric-grid" aria-label="Usage summary">
+        <article class="metric-card"><span class="metric-label">Total tokens</span><strong id="metric-tokens" class="metric-value">—</strong><span id="metric-token-detail" class="metric-detail">Input, output, cache, and reasoning</span></article>
+        <article class="metric-card"><span class="metric-label">Estimated cost</span><strong id="metric-cost" class="metric-value">—</strong><span id="metric-cost-detail" class="metric-detail">USD pricing coverage</span></article>
+        <article class="metric-card"><span class="metric-label">Requests</span><strong id="metric-requests" class="metric-value">—</strong><span id="metric-request-detail" class="metric-detail">Success and failure counts</span></article>
+        <article class="metric-card"><span class="metric-label">Top router model</span><strong id="metric-router" class="metric-value">—</strong><span id="metric-router-detail" class="metric-detail">By request count</span></article>
+        <article class="metric-card"><span class="metric-label">Top provider model</span><strong id="metric-provider" class="metric-value">—</strong><span id="metric-provider-detail" class="metric-detail">Physical CPA execution model</span></article>
+      </section>
+
+      <div class="chart-grid">
+        <section class="chart-card">
+          <header><div><h3>Token trend</h3><p>Input, output, cache read, and reasoning by time bucket.</p></div><div class="chart-tools"><button class="secondary" type="button" data-chart="tokens" data-zoom="out" aria-label="Zoom token trend out">−</button><button class="secondary" type="button" data-chart="tokens" data-zoom="reset" aria-label="Reset token trend zoom">1:1</button><button class="secondary" type="button" data-chart="tokens" data-zoom="in" aria-label="Zoom token trend in">+</button></div></header>
+          <canvas id="token-chart" class="chart-canvas" role="img" aria-label="Stacked token usage over time"></canvas>
+          <div id="token-legend" class="chart-legend">
+            <button class="legend-toggle" type="button" data-token-series="input" aria-pressed="true"><span class="legend-swatch" data-color="input"></span>Input</button>
+            <button class="legend-toggle" type="button" data-token-series="output" aria-pressed="true"><span class="legend-swatch" data-color="output"></span>Output</button>
+            <button class="legend-toggle" type="button" data-token-series="cache_read" aria-pressed="true"><span class="legend-swatch" data-color="cache"></span>Cache read</button>
+            <button class="legend-toggle" type="button" data-token-series="reasoning" aria-pressed="true"><span class="legend-swatch" data-color="reasoning"></span>Reasoning</button>
+          </div>
+        </section>
+        <section class="chart-card compact"><header><div><h3>Provider model share</h3><p>Request volume by physical provider model.</p></div></header><canvas id="model-chart" class="chart-canvas" role="img" aria-label="Provider model request share"></canvas><div id="model-legend" class="chart-legend"></div></section>
+      </div>
+
+      <div class="chart-grid">
+        <section class="chart-card">
+          <header><div><h3>Cost trend</h3><p>Estimated USD cost using the active price book.</p></div><div class="chart-tools"><button class="secondary" type="button" data-chart="cost" data-zoom="out" aria-label="Zoom cost trend out">−</button><button class="secondary" type="button" data-chart="cost" data-zoom="reset" aria-label="Reset cost trend zoom">1:1</button><button class="secondary" type="button" data-chart="cost" data-zoom="in" aria-label="Zoom cost trend in">+</button></div></header>
+          <canvas id="cost-chart" class="chart-canvas" role="img" aria-label="Estimated cost over time"></canvas>
+          <div class="chart-legend"><span class="legend-item"><span class="legend-swatch" data-color="cost"></span>Estimated USD</span></div>
+        </section>
+        <section class="chart-card compact">
+          <header><div><h3>Efficiency</h3><p>Average latency, time to first token, and output throughput.</p></div><div class="chart-tools"><button class="secondary" type="button" data-chart="efficiency" data-zoom="out" aria-label="Zoom efficiency trend out">−</button><button class="secondary" type="button" data-chart="efficiency" data-zoom="reset" aria-label="Reset efficiency trend zoom">1:1</button><button class="secondary" type="button" data-chart="efficiency" data-zoom="in" aria-label="Zoom efficiency trend in">+</button></div></header>
+          <canvas id="efficiency-chart" class="chart-canvas" role="img" aria-label="Latency, time to first token, and tokens per second over time"></canvas>
+          <div class="chart-legend"><span class="legend-item"><span class="legend-swatch" data-color="input"></span>Latency</span><span class="legend-item"><span class="legend-swatch" data-color="cache"></span>TTFT</span><span class="legend-item"><span class="legend-swatch" data-color="output"></span>Tokens/sec</span></div>
+        </section>
+      </div>
+
+      <section class="usage-section" aria-labelledby="breakdown-title">
+        <div class="usage-section-head">
+          <div class="usage-section-title"><h3 id="breakdown-title">Usage breakdown</h3><p>Group the selected range by router identity, provider identity, source, tier, or result.</p></div>
+          <div class="table-tools">
+            <label class="sr-only" for="group-dimension">Group dimension</label><select id="group-dimension"><option value="router_model">Router model</option><option value="provider_model" selected>Provider model</option><option value="provider">Provider</option><option value="source">Source</option><option value="service_tier">Service tier</option><option value="result">Result</option></select>
+            <label class="sr-only" for="group-page-size">Groups per page</label><select id="group-page-size"><option value="25">25 rows</option><option value="50">50 rows</option><option value="100" selected>100 rows</option><option value="250">250 rows</option></select>
+            <details id="group-columns" class="column-picker"><summary>Columns</summary><div id="group-column-options" class="column-menu"></div></details>
+          </div>
+        </div>
+        <div id="group-table-scroll" class="table-scroll"><table id="group-table" class="usage-table"><thead><tr id="group-headers"></tr></thead><tbody id="usage-groups"><tr><td class="empty-row">Usage data has not loaded.</td></tr></tbody></table></div>
+        <div class="pagination"><span id="group-page-status">0 groups</span><button id="group-prev" class="secondary" type="button" disabled>Previous</button><button id="group-next" class="secondary" type="button" disabled>Next</button></div>
+      </section>
+
+      <section class="usage-section" aria-labelledby="request-title">
+        <div class="usage-section-head">
+          <div class="usage-section-title"><h3 id="request-title">Request details</h3><p>Router model and physical provider model remain separate for each CPA request.</p></div>
+          <div class="table-tools">
+            <label class="sr-only" for="request-page-size">Requests per page</label><select id="request-page-size"><option value="25">25 rows</option><option value="50">50 rows</option><option value="100" selected>100 rows</option><option value="250">250 rows</option></select>
+            <details id="request-columns" class="column-picker"><summary>Columns</summary><div id="request-column-options" class="column-menu"></div></details>
+          </div>
+        </div>
+        <div id="request-table-scroll" class="table-scroll"><table id="request-table" class="usage-table"><thead><tr id="request-headers"></tr></thead><tbody id="usage-requests"><tr><td class="empty-row">Request data has not loaded.</td></tr></tbody></table></div>
+        <div class="pagination"><span id="request-page-status">0 requests</span><button id="request-prev" class="secondary" type="button" disabled>Previous</button><button id="request-next" class="secondary" type="button" disabled>Next</button></div>
+      </section>
     </section>
-
-    <div class="section-head">
-      <div class="section-title">
-        <h2>Route table</h2>
-        <span id="route-count" class="count">0 routes</span>
-        <span id="model-status" class="count catalog-status" data-tone="loading" aria-live="polite">Loading CPA models…</span>
-      </div>
-      <button id="add-route" class="secondary" type="button">Add route</button>
-    </div>
-    <section id="routes" class="routes" aria-live="polite"></section>
-
-    <div class="footer-bar">
-      <span class="footer-hint">Save checks duplicate aliases, recursion, target pools, and cooldowns with the plugin's Go parser.</span>
-      <div class="footer-actions">
-        <button id="reload" class="secondary" type="button">Discard and reload</button>
-        <button id="save" class="primary" type="button">Save changes</button>
-      </div>
-    </div>
   </main>
 </div>
+
+<dialog id="pricing-dialog" aria-labelledby="pricing-title">
+  <div class="dialog-shell">
+    <div class="dialog-head"><div><h2 id="pricing-title">Model pricing</h2><p>USD per million tokens. Manual prices take precedence over synchronized catalog values.</p></div><button id="pricing-close" class="icon-button" type="button" aria-label="Close model pricing">×</button></div>
+    <div class="dialog-body">
+      <div class="pricing-toolbar"><label class="sr-only" for="pricing-model-name">Provider model name</label><input id="pricing-model-name" type="text" placeholder="provider/model-name" autocomplete="off"><button id="pricing-add" class="secondary" type="button">Add model</button><button id="pricing-sync" class="secondary" type="button">Sync models.dev</button></div>
+      <div class="pricing-sync-settings">
+        <label>Provider priority<textarea id="pricing-provider-priority" spellcheck="false" placeholder="openai, google, anthropic"></textarea></label>
+        <label>Ignored model suffixes<textarea id="pricing-ignored-suffixes" spellcheck="false" placeholder="-thinking, (high)"></textarea></label>
+        <label class="wide">Model mappings as JSON<textarea id="pricing-mappings" spellcheck="false" placeholder='[{"source":"alias","target":"catalog-model"}]'></textarea></label>
+      </div>
+      <p id="pricing-status" class="pricing-status">Load the price book to edit rates.</p>
+      <div id="pricing-list" class="price-list"></div>
+      <p id="pricing-error" class="dialog-error" role="alert"></p>
+    </div>
+    <div class="dialog-actions"><button id="pricing-cancel" class="secondary" type="button">Cancel</button><button id="pricing-save" class="primary" type="button">Save pricing</button></div>
+  </div>
+</dialog>
+
+<dialog id="reset-dialog" class="reset-dialog" aria-labelledby="reset-title">
+  <div class="dialog-shell">
+    <div class="dialog-head"><div><h2 id="reset-title">Reset usage history</h2><p>Prices and dashboard preferences will remain saved.</p></div></div>
+    <div class="dialog-body"><p class="reset-copy">This permanently removes tracked request details and aggregates. Type <code>reset</code> to continue.</p><label class="usage-control" for="reset-confirmation">Confirmation</label><input id="reset-confirmation" type="text" autocomplete="off" placeholder="reset"><p id="reset-error" class="dialog-error" role="alert"></p></div>
+    <div class="dialog-actions"><button id="reset-cancel" class="secondary" type="button">Cancel</button><button id="reset-confirm" class="danger-button" type="button" disabled>Reset usage</button></div>
+  </div>
+</dialog>
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
@@ -465,12 +787,35 @@ const CONFIG_API='/v0/management/plugins/model-router/config';
 const VALIDATE_API='/v0/management/plugins/model-router/validate';
 const API_KEYS_API='/v0/management/api-keys';
 const MODELS_API='/v1/models';
+const USAGE_API='/v0/management/plugins/model-router/usage';
 const CPA_STORAGE_PREFIX='enc::v1::';
 const CPA_STORAGE_SALT='cli-proxy-api-webui::secure-storage';
 const SESSION_KEY='cpa_model_router_key';
 const REJECTED_KEY='cpa_model_router_rejected_key';
 const REJECTED_AT='cpa_model_router_rejected_at';
 const state={enabled:true,priority:'0',routes:[],availableModels:[],catalogLoaded:false,catalogError:'',dirty:false,busy:false};
+const usageState={
+  active:false,initialized:false,preferencesLoaded:false,loading:false,generation:0,controller:null,timer:0,preferenceTimer:0,resizeTimer:0,
+  overview:null,groupPage:null,requestPage:null,range:'24h',granularity:'hour',customFrom:'',customTo:'',routerModel:'',providerModel:'',source:'',serviceTier:'',result:'',
+  group:{dimension:'provider_model',sort:'total_tokens',order:'desc',offset:0,limit:100},
+  request:{sort:'time',order:'desc',offset:0,limit:100},
+  hiddenRequestColumns:new Set(),hiddenGroupColumns:new Set(),hiddenTokenSeries:new Set(),zoom:{tokens:1,cost:1,efficiency:1},priceBook:null,priceDraft:null,pricingSettingsDirty:false,priceCollectionDirty:false
+};
+const requestColumns=[
+  {key:'time',label:'Time',sort:'time',text:true},{key:'router_model',label:'Router model',sort:'router_model',text:true},{key:'provider_model',label:'Provider model',sort:'provider_model',text:true},
+  {key:'provider',label:'Provider',text:true},{key:'source',label:'Source',sort:'source',text:true},{key:'service_tier',label:'Service tier',sort:'service_tier',text:true},
+  {key:'result',label:'Result',sort:'result',text:true},{key:'latency',label:'Latency',sort:'latency'},{key:'ttft',label:'TTFT',sort:'ttft'},{key:'tps',label:'Tokens/sec',sort:'tps'},
+  {key:'input_tokens',label:'Input'},{key:'output_tokens',label:'Output'},{key:'reasoning_tokens',label:'Reasoning'},{key:'cache_read_tokens',label:'Cache read'},
+  {key:'cache_creation_tokens',label:'Cache create'},{key:'total_tokens',label:'Total tokens',sort:'total_tokens'},{key:'cost',label:'Cost',sort:'cost'},{key:'api_key',label:'API key',text:true}
+];
+const groupColumns=[
+  {key:'key',label:'Group',sort:'key',text:true},{key:'router_model',label:'Router model',text:true},{key:'provider_model',label:'Provider model',text:true},
+  {key:'provider',label:'Provider',text:true},{key:'source',label:'Source',text:true},{key:'service_tier',label:'Service tier',text:true},{key:'result',label:'Result',text:true},
+  {key:'requests',label:'Requests',sort:'requests'},{key:'failed_requests',label:'Failed',sort:'failed_requests'},{key:'input_tokens',label:'Input',sort:'input_tokens'},
+  {key:'output_tokens',label:'Output',sort:'output_tokens'},{key:'reasoning_tokens',label:'Reasoning'},{key:'cache_read_tokens',label:'Cache read'},
+  {key:'cache_creation_tokens',label:'Cache create'},{key:'total_tokens',label:'Total tokens',sort:'total_tokens'},{key:'latency',label:'Avg latency',sort:'latency'},
+  {key:'ttft',label:'Avg TTFT',sort:'ttft'},{key:'tps',label:'Avg tokens/sec',sort:'tps'},{key:'cost',label:'Cost',sort:'cost'}
+];
 const mastheadEl=document.getElementById('masthead');
 const authDockEl=document.getElementById('auth-dock');
 const keyEl=document.getElementById('management-key');
@@ -487,6 +832,24 @@ const saveEl=document.getElementById('save');
 const reloadEl=document.getElementById('reload');
 const addRouteEl=document.getElementById('add-route');
 const toastEl=document.getElementById('toast');
+const tabs=Array.from(document.querySelectorAll('[role="tab"]'));
+const configurationPanelEl=document.getElementById('configuration-panel');
+const usagePanelEl=document.getElementById('usage-panel');
+const usageRangeEl=document.getElementById('usage-range');
+const usageGranularityEl=document.getElementById('usage-granularity');
+const usageRouterModelEl=document.getElementById('usage-router-model');
+const usageProviderModelEl=document.getElementById('usage-provider-model');
+const usageSourceEl=document.getElementById('usage-source');
+const usageServiceTierEl=document.getElementById('usage-service-tier');
+const usageResultEl=document.getElementById('usage-result');
+const usageCustomRangeEl=document.getElementById('usage-custom-range');
+const usageFromEl=document.getElementById('usage-from');
+const usageToEl=document.getElementById('usage-to');
+const usageStatusEl=document.getElementById('usage-status');
+const usageLiveEl=document.getElementById('usage-live');
+const usageRefreshEl=document.getElementById('usage-refresh');
+const pricingDialogEl=document.getElementById('pricing-dialog');
+const resetDialogEl=document.getElementById('reset-dialog');
 let toastTimer=0;
 
 function safeLocalStorage(){try{return window.localStorage}catch(_error){return null}}
@@ -647,7 +1010,7 @@ function applyHostTheme(){
   set('--danger',['--danger-color','--error-color','--cpa-danger','--color-destructive']);
 }
 function observeHostTheme(){
-  const refresh=()=>applyHostTheme();
+  const refresh=()=>{applyHostTheme();renderUsageCharts()};
   try{matchMedia('(prefers-color-scheme: dark)').addEventListener('change',refresh)}catch(_error){}
   try{
     if(window.parent&&window.parent!==window&&window.parent.document){
@@ -697,6 +1060,709 @@ async function requestManagementJSON(url,options={}){
   const key=managementKey();
   if(!key)throw new Error('Enter the CPA management key.');
   return requestCPAJSON(url,key,options,true);
+}
+function setUsageStatus(message,tone='info'){
+  usageStatusEl.textContent=message;
+  usageStatusEl.dataset.tone=tone;
+}
+function activateTab(name,moveFocus=false){
+  const usage=name==='usage';
+  tabs.forEach(tab=>{
+    const selected=tab.id===(usage?'usage-tab':'configuration-tab');
+    tab.setAttribute('aria-selected',String(selected));
+    tab.tabIndex=selected?0:-1;
+    if(selected&&moveFocus)tab.focus();
+  });
+  configurationPanelEl.hidden=usage;
+  usagePanelEl.hidden=!usage;
+  usageState.active=usage;
+  if(usage)startUsageDashboard();
+  else stopUsagePolling();
+}
+function handleTabKey(event){
+  const current=tabs.indexOf(event.currentTarget);
+  let next=current;
+  if(event.key==='ArrowRight')next=(current+1)%tabs.length;
+  else if(event.key==='ArrowLeft')next=(current-1+tabs.length)%tabs.length;
+  else if(event.key==='Home')next=0;
+  else if(event.key==='End')next=tabs.length-1;
+  else return;
+  event.preventDefault();
+  activateTab(tabs[next].id==='usage-tab'?'usage':'configuration',true);
+}
+function stopUsagePolling(){
+  window.clearTimeout(usageState.timer);
+  usageState.timer=0;
+  usageState.generation++;
+  if(usageState.controller)usageState.controller.abort();
+  usageState.controller=null;
+  usageState.loading=false;
+  usagePanelEl.setAttribute('aria-busy','false');
+  usageRefreshEl.disabled=false;
+  usageLiveEl.hidden=true;
+}
+function scheduleUsagePoll(){
+  window.clearTimeout(usageState.timer);
+  usageState.timer=0;
+  if(!usageState.active||document.hidden)return;
+  usageState.timer=window.setTimeout(()=>refreshUsage(false),15000);
+}
+function startUsageDashboard(){
+  usageLiveEl.hidden=document.hidden;
+  if(!usageState.initialized){
+    usageState.initialized=true;
+    setUsageStatus('Loading saved dashboard preferences…','loading');
+    const initialization=loadUsagePreferences().catch(error=>{usageState.preferencesLoaded=true;setUsageStatus('Preferences could not be loaded: '+error.message,'error')});
+    usageState.initializationPromise=initialization;
+    initialization.finally(()=>{
+      if(usageState.initializationPromise!==initialization)return;
+      usageState.initializationPromise=null;
+      if(usageState.active&&!document.hidden)refreshUsage(false);
+    });
+    return;
+  }
+  if(usageState.initializationPromise)return;
+  refreshUsage(false);
+}
+function localDateTimeValue(value){
+  const pad=number=>String(number).padStart(2,'0');
+  return value.getFullYear()+'-'+pad(value.getMonth()+1)+'-'+pad(value.getDate())+'T'+pad(value.getHours())+':'+pad(value.getMinutes())+':'+pad(value.getSeconds());
+}
+function initializeCustomRange(){
+  if(usageState.customFrom&&usageState.customTo)return;
+  const now=new Date();
+  usageState.customTo=localDateTimeValue(now);
+  usageState.customFrom=localDateTimeValue(new Date(now.getTime()-24*60*60*1000));
+  usageFromEl.value=usageState.customFrom;
+  usageToEl.value=usageState.customTo;
+}
+function resolvedUsageRange(){
+  const now=new Date();
+  let from,to=now;
+  if(usageState.range==='5h')from=new Date(now.getTime()-5*60*60*1000);
+  else if(usageState.range==='24h')from=new Date(now.getTime()-24*60*60*1000);
+  else if(usageState.range==='7d')from=new Date(now.getTime()-7*24*60*60*1000);
+  else if(usageState.range==='30d')from=new Date(now.getTime()-30*24*60*60*1000);
+  else if(usageState.range==='month')from=new Date(now.getFullYear(),now.getMonth(),1);
+  else{
+    initializeCustomRange();
+    from=new Date(usageState.customFrom);
+    to=new Date(usageState.customTo);
+  }
+  if(Number.isNaN(from.getTime())||Number.isNaN(to.getTime())||from>=to)throw new Error('Choose a valid range with From earlier than To.');
+  return{from:from.toISOString(),to:to.toISOString(),label:formatRangeLabel(from,to)};
+}
+function formatRangeLabel(from,to){
+  const options={month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'};
+  return new Intl.DateTimeFormat(undefined,options).format(from)+' – '+new Intl.DateTimeFormat(undefined,options).format(to);
+}
+function usageBaseQuery(range){
+  const params=new URLSearchParams({from:range.from,to:range.to,granularity:usageState.granularity});
+  for(const [name,value] of [['router_model',usageState.routerModel],['provider_model',usageState.providerModel],['source',usageState.source],['service_tier',usageState.serviceTier],['result',usageState.result]]){
+    if(value)params.set(name,value);
+  }
+  return params;
+}
+async function refreshUsage(resetOffsets=false){
+  if(!usageState.active||document.hidden)return;
+  if(resetOffsets){usageState.group.offset=0;usageState.request.offset=0}
+  let range;
+  try{range=resolvedUsageRange()}catch(error){setUsageStatus(error.message,'error');return}
+  if(usageState.controller)usageState.controller.abort();
+  const controller=new AbortController();
+  const generation=++usageState.generation;
+  usageState.controller=controller;
+  usageState.loading=true;
+  usagePanelEl.setAttribute('aria-busy','true');
+  usageRefreshEl.disabled=true;
+  setUsageStatus(usageState.overview?'Refreshing usage; current data remains visible.':'Loading usage data…','loading');
+  const common=usageBaseQuery(range);
+  const groupQuery=new URLSearchParams(common);
+  groupQuery.set('dimension',usageState.group.dimension);
+  groupQuery.set('sort',usageState.group.sort);
+  groupQuery.set('order',usageState.group.order);
+  groupQuery.set('offset',String(usageState.group.offset));
+  groupQuery.set('limit',String(usageState.group.limit));
+  const requestQuery=new URLSearchParams(common);
+  requestQuery.set('sort',usageState.request.sort);
+  requestQuery.set('order',usageState.request.order);
+  requestQuery.set('offset',String(usageState.request.offset));
+  requestQuery.set('limit',String(usageState.request.limit));
+  try{
+    const options={signal:controller.signal,cache:'no-store'};
+    const [overview,groups,requests]=await Promise.all([
+      requestManagementJSON(USAGE_API+'/overview?'+common.toString(),options),
+      requestManagementJSON(USAGE_API+'/groups?'+groupQuery.toString(),options),
+      requestManagementJSON(USAGE_API+'/requests?'+requestQuery.toString(),options)
+    ]);
+    if(generation!==usageState.generation||!usageState.active||document.hidden)return;
+    usageState.overview=overview;
+    usageState.groupPage=groups;
+    usageState.requestPage=requests;
+    renderUsageDashboard();
+    const updated=new Date(overview.generated_at);
+    const updatedText=Number.isNaN(updated.getTime())?'now':updated.toLocaleTimeString();
+    setUsageStatus(range.label+' · updated '+updatedText+(overview.storage_error?' · storage warning: '+overview.storage_error:''),overview.storage_error?'error':'info');
+    usageLiveEl.hidden=false;
+  }catch(error){
+    if(error.name!=='AbortError'&&generation===usageState.generation){
+      setUsageStatus('Refresh failed: '+error.message+'. Existing data is unchanged.','error');
+    }
+  }finally{
+    if(generation===usageState.generation){
+      usageState.controller=null;
+      usageState.loading=false;
+      usagePanelEl.setAttribute('aria-busy','false');
+      usageRefreshEl.disabled=false;
+      scheduleUsagePoll();
+    }
+  }
+}
+function validHiddenColumns(values,definitions){
+  const allowed=new Set(definitions.map(column=>column.key));
+  const result=new Set((Array.isArray(values)?values:[]).filter(value=>allowed.has(value)));
+  if(result.size>=definitions.length)result.delete(definitions[0].key);
+  return result;
+}
+function applyUsagePreferences(preferences){
+  preferences=preferences||{};
+  usageState.range=['5h','24h','7d','30d','month','custom'].includes(preferences.time_range)?preferences.time_range:'24h';
+  usageState.granularity=['minute','hour','day'].includes(preferences.granularity)?preferences.granularity:'hour';
+  usageState.request.limit=Number(preferences.request_page_size)||100;
+  usageState.group.limit=Number(preferences.group_page_size)||100;
+  usageState.request.sort=String(preferences.request_sort||'time');
+  usageState.request.order=preferences.request_order==='asc'?'asc':'desc';
+  usageState.group.dimension=String(preferences.group_dimension||'provider_model');
+  usageState.group.sort=String(preferences.group_sort||'total_tokens');
+  usageState.group.order=preferences.group_order==='asc'?'asc':'desc';
+  usageState.hiddenRequestColumns=validHiddenColumns(preferences.hidden_request_columns,requestColumns);
+  usageState.hiddenGroupColumns=validHiddenColumns(preferences.hidden_group_columns,groupColumns);
+  usageState.hiddenTokenSeries=new Set((Array.isArray(preferences.hidden_token_series)?preferences.hidden_token_series:[]).filter(value=>['input','output','cache_read','reasoning'].includes(value)));
+  usageRangeEl.value=usageState.range;
+  usageGranularityEl.value=usageState.granularity;
+  document.getElementById('request-page-size').value=String(usageState.request.limit);
+  document.getElementById('group-page-size').value=String(usageState.group.limit);
+  document.getElementById('group-dimension').value=usageState.group.dimension;
+  usageCustomRangeEl.hidden=usageState.range!=='custom';
+  if(usageState.range==='custom')initializeCustomRange();
+  renderColumnControls(requestColumns,usageState.hiddenRequestColumns,'request-column-options','request');
+  renderColumnControls(groupColumns,usageState.hiddenGroupColumns,'group-column-options','group');
+  syncTokenLegend();
+}
+async function loadUsagePreferences(){
+  const preferences=await requestManagementJSON(USAGE_API+'/preferences',{cache:'no-store'});
+  applyUsagePreferences(preferences);
+  usageState.preferencesLoaded=true;
+}
+function usagePreferencesPayload(){
+  return{
+    request_page_size:usageState.request.limit,group_page_size:usageState.group.limit,
+    hidden_request_columns:Array.from(usageState.hiddenRequestColumns),hidden_group_columns:Array.from(usageState.hiddenGroupColumns),
+    time_range:usageState.range,granularity:usageState.granularity,request_sort:usageState.request.sort,request_order:usageState.request.order,
+    group_dimension:usageState.group.dimension,group_sort:usageState.group.sort,group_order:usageState.group.order,
+    hidden_token_series:Array.from(usageState.hiddenTokenSeries)
+  };
+}
+function scheduleUsagePreferencesSave(){
+  if(!usageState.preferencesLoaded)return;
+  window.clearTimeout(usageState.preferenceTimer);
+  usageState.preferenceTimer=window.setTimeout(async()=>{
+    try{await requestManagementJSON(USAGE_API+'/preferences',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(usagePreferencesPayload())})}
+    catch(error){setUsageStatus('Dashboard preferences could not be saved: '+error.message,'error')}
+  },250);
+}
+function formatNumber(value){return new Intl.NumberFormat().format(Number(value||0))}
+function formatCompact(value){return new Intl.NumberFormat(undefined,{notation:'compact',maximumFractionDigits:2}).format(Number(value||0))}
+function formatUSD(value){return new Intl.NumberFormat(undefined,{style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:Number(value||0)<1?4:2}).format(Number(value||0))}
+function formatDuration(value){
+  const nanoseconds=Number(value||0);
+  if(!nanoseconds)return '—';
+  if(nanoseconds<1e6)return Math.round(nanoseconds/1e3)+' µs';
+  if(nanoseconds<1e9)return (nanoseconds/1e6).toFixed(1)+' ms';
+  return (nanoseconds/1e9).toFixed(2)+' s';
+}
+function formatTPS(value){const number=Number(value||0);return number?number.toFixed(number<10?2:1):'—'}
+function formatRequestTime(value){
+  const date=new Date(value);
+  return Number.isNaN(date.getTime())?'—':new Intl.DateTimeFormat(undefined,{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(date);
+}
+function routerDisplay(value){
+  if(value&&value.attribution==='direct')return '—';
+  if(value&&value.attribution==='unattributed')return 'Unattributed';
+  return String(value&&value.router_model||'').trim()||'Unattributed';
+}
+function routerDetail(value){
+  if(value&&value.attribution==='direct')return 'Direct provider call';
+  if(value&&value.attribution==='unattributed')return 'Attribution could not be resolved';
+  return 'Routed alias';
+}
+function resultDisplay(value){
+  value=String(value||'');
+  if(value==='success')return 'Success';
+  if(value==='failed')return 'Failed';
+  if(value.startsWith('http_'))return 'HTTP '+value.slice(5);
+  return value||'—';
+}
+function setMetric(id,value,detailID,detail){
+  document.getElementById(id).textContent=value;
+  document.getElementById(detailID).textContent=detail;
+}
+function renderUsageSummary(){
+  const overview=usageState.overview;
+  if(!overview)return;
+  const summary=overview.summary||{};
+  const costs=overview.costs||{};
+  setMetric('metric-tokens',formatCompact(summary.total_tokens),'metric-token-detail',formatNumber(summary.input_tokens)+' input · '+formatNumber(summary.output_tokens)+' output · '+formatNumber(summary.cache_read_tokens||summary.cached_tokens)+' cache');
+  setMetric('metric-cost',formatUSD(costs.total_usd),'metric-cost-detail',formatNumber(costs.priced_requests)+' of '+formatNumber(costs.requests)+' requests priced');
+  const success=Math.max(0,Number(summary.requests||0)-Number(summary.failed_requests||0));
+  const rate=Number(summary.requests||0)?success/Number(summary.requests)*100:0;
+  setMetric('metric-requests',formatNumber(summary.requests),'metric-request-detail',rate.toFixed(1)+'% success · '+formatNumber(summary.failed_requests)+' failed');
+  const routers=(overview.router_models||[]).filter(item=>item.attribution==='routed'&&item.model).sort((left,right)=>Number(right.requests||0)-Number(left.requests||0));
+  const providers=(overview.provider_models||[]).slice().sort((left,right)=>Number(right.requests||0)-Number(left.requests||0));
+  const router=routers[0];
+  const provider=providers[0];
+  setMetric('metric-router',router?router.model:'—','metric-router-detail',router?'Routed alias · '+formatNumber(router.requests)+' requests':'No routed requests in range');
+  setMetric('metric-provider',provider&&provider.model?provider.model:'—','metric-provider-detail',provider?formatNumber(provider.requests)+' requests · '+formatCompact(provider.total_tokens)+' tokens':'No requests in range');
+}
+function mergeSelectOptions(select,values,allLabel,selectedValue){
+  const merged=new Map();
+  Array.from(select.options).forEach(option=>{if(option.value)merged.set(option.value,option.textContent)});
+  values.forEach(item=>{if(item&&item.value)merged.set(String(item.value),String(item.label||item.value))});
+  if(selectedValue&&!merged.has(selectedValue))merged.set(selectedValue,selectedValue);
+  const entries=Array.from(merged.entries()).sort((left,right)=>left[1].localeCompare(right[1]));
+  const signature=JSON.stringify([allLabel,entries]);
+  if(select.dataset.optionsSignature!==signature){
+    const fragment=document.createDocumentFragment();
+    const all=document.createElement('option');
+    all.value='';all.textContent=allLabel;fragment.appendChild(all);
+    entries.forEach(([value,label])=>{const option=document.createElement('option');option.value=value;option.textContent=label;fragment.appendChild(option)});
+    select.replaceChildren(fragment);
+    select.dataset.optionsSignature=signature;
+  }
+  select.value=selectedValue;
+}
+function renderUsageFilterOptions(){
+  const overview=usageState.overview||{};
+  const routers=(overview.router_models||[]).map(item=>{
+    if(item.attribution==='direct')return{value:'direct',label:'Direct provider calls'};
+    if(item.attribution==='unattributed')return{value:'unattributed',label:'Unattributed'};
+    return{value:item.model,label:item.model};
+  });
+  mergeSelectOptions(usageRouterModelEl,routers,'All router models',usageState.routerModel);
+  mergeSelectOptions(usageProviderModelEl,(overview.provider_models||[]).map(item=>({value:item.model,label:item.model})),'All provider models',usageState.providerModel);
+  mergeSelectOptions(usageSourceEl,(overview.sources||[]).map(value=>({value,label:value})),'All sources',usageState.source);
+  mergeSelectOptions(usageServiceTierEl,(overview.service_tiers||[]).map(value=>({value,label:value})),'All service tiers',usageState.serviceTier);
+  const results=[];
+  for(const item of usageState.requestPage&&usageState.requestPage.items||[]){if(item.result)results.push({value:item.result,label:resultDisplay(item.result)})}
+  mergeSelectOptions(usageResultEl,results,'All results',usageState.result);
+}
+function visibleColumns(definitions,hidden){return definitions.filter(column=>!hidden.has(column.key))}
+function renderColumnControls(definitions,hidden,containerID,kind){
+  const container=document.getElementById(containerID);
+  const fragment=document.createDocumentFragment();
+  const visibleCount=visibleColumns(definitions,hidden).length;
+  definitions.forEach(column=>{
+    const label=document.createElement('label');
+    const input=document.createElement('input');
+    const text=document.createElement('span');
+    input.type='checkbox';
+    input.checked=!hidden.has(column.key);
+    input.disabled=input.checked&&visibleCount<=1;
+    input.dataset.columnKind=kind;
+    input.dataset.columnKey=column.key;
+    text.textContent=column.label;
+    label.appendChild(input);label.appendChild(text);fragment.appendChild(label);
+  });
+  container.replaceChildren(fragment);
+}
+function renderTableHeaders(definitions,hidden,rowID,tableID,kind,sort,order){
+  const visible=visibleColumns(definitions,hidden);
+  const row=document.getElementById(rowID);
+  const signature=visible.map(column=>column.key).join(',')+'|'+sort+'|'+order;
+  if(row.dataset.signature===signature)return visible;
+  const fragment=document.createDocumentFragment();
+  visible.forEach(column=>{
+    const th=document.createElement('th');
+    th.dataset.column=column.key;
+    if(column.text)th.className='text-cell';
+    const active=column.sort===sort;
+    th.setAttribute('aria-sort',active?(order==='asc'?'ascending':'descending'):'none');
+    if(column.sort){
+      const button=document.createElement('button');
+      button.type='button';button.className='sort-button';button.dataset.tableKind=kind;button.dataset.sortField=column.sort;
+      const label=document.createElement('span');label.textContent=column.label;button.appendChild(label);
+      if(active){const indicator=document.createElement('span');indicator.setAttribute('aria-hidden','true');indicator.textContent=order==='asc'?'↑':'↓';button.appendChild(indicator)}
+      th.appendChild(button);
+    }else th.textContent=column.label;
+    fragment.appendChild(th);
+  });
+  row.replaceChildren(fragment);
+  row.dataset.signature=signature;
+  document.getElementById(tableID).style.minWidth=Math.max(720,visible.length*112)+'px';
+  return visible;
+}
+function tableCell(row,value,text=false){
+  const cell=document.createElement('td');
+  cell.textContent=value===undefined||value===null||value===''?'—':String(value);
+  if(text)cell.className='text-cell';
+  row.appendChild(cell);
+  return cell;
+}
+function statusCell(row,result){
+  const cell=document.createElement('td');
+  cell.className='text-cell';
+  const badge=document.createElement('span');
+  badge.className='status-pill'+(result==='success'?'':' failure');
+  badge.textContent=resultDisplay(result);
+  cell.appendChild(badge);row.appendChild(cell);
+}
+function groupCell(row,item,column){
+  switch(column.key){
+  case 'key':return tableCell(row,usageState.group.dimension==='router_model'?routerDisplay(item):item.key,true);
+  case 'router_model':return tableCell(row,routerDisplay(item),true);
+  case 'provider_model':case 'provider':case 'source':case 'service_tier':return tableCell(row,item[column.key],true);
+  case 'result':return statusCell(row,item.result);
+  case 'latency':return tableCell(row,formatDuration(item.average_latency_ns));
+  case 'ttft':return tableCell(row,formatDuration(item.average_ttft_ns));
+  case 'tps':return tableCell(row,formatTPS(item.average_tps));
+  case 'cost':return tableCell(row,formatUSD(item.cost_usd));
+  default:return tableCell(row,formatNumber(item[column.key]));
+  }
+}
+function requestCell(row,item,column){
+  switch(column.key){
+  case 'time':return tableCell(row,formatRequestTime(item.requested_at),true);
+  case 'router_model':return tableCell(row,routerDisplay(item),true);
+  case 'provider_model':case 'provider':case 'source':case 'service_tier':return tableCell(row,item[column.key],true);
+  case 'result':return statusCell(row,item.result);
+  case 'latency':return tableCell(row,formatDuration(item.latency_ns));
+  case 'ttft':return tableCell(row,formatDuration(item.ttft_ns));
+  case 'tps':return tableCell(row,formatTPS(item.tps));
+  case 'cost':return tableCell(row,item.estimated_cost&&item.estimated_cost.priced?formatUSD(item.estimated_cost.total_usd):'—');
+  case 'api_key':return tableCell(row,item.masked_api_key,true);
+  case 'cache_read_tokens':return tableCell(row,formatNumber(item.cache_read_tokens||item.cached_tokens));
+  default:return tableCell(row,formatNumber(item[column.key]));
+  }
+}
+function replaceTableRows(body,scroll,fragment){
+  const top=scroll.scrollTop,left=scroll.scrollLeft;
+  body.replaceChildren(fragment);
+  scroll.scrollTop=top;scroll.scrollLeft=left;
+}
+function renderGroupTable(){
+  const page=usageState.groupPage;
+  const columns=renderTableHeaders(groupColumns,usageState.hiddenGroupColumns,'group-headers','group-table','group',usageState.group.sort,usageState.group.order);
+  const fragment=document.createDocumentFragment();
+  if(!page||!Array.isArray(page.items)||page.items.length===0){
+    const row=document.createElement('tr'),cell=document.createElement('td');cell.colSpan=columns.length;cell.className='empty-row';cell.textContent='No usage groups match this range.';row.appendChild(cell);fragment.appendChild(row);
+  }else page.items.forEach(item=>{const row=document.createElement('tr');columns.forEach(column=>groupCell(row,item,column));fragment.appendChild(row)});
+  replaceTableRows(document.getElementById('usage-groups'),document.getElementById('group-table-scroll'),fragment);
+  const total=Number(page&&page.total||0),start=total?usageState.group.offset+1:0,end=Math.min(usageState.group.offset+Number(page&&page.items&&page.items.length||0),total);
+  document.getElementById('group-page-status').textContent=start+'–'+end+' of '+formatNumber(total)+' groups';
+  document.getElementById('group-prev').disabled=usageState.group.offset<=0;
+  document.getElementById('group-next').disabled=usageState.group.offset+usageState.group.limit>=total;
+}
+function renderRequestTable(){
+  const page=usageState.requestPage;
+  const columns=renderTableHeaders(requestColumns,usageState.hiddenRequestColumns,'request-headers','request-table','request',usageState.request.sort,usageState.request.order);
+  const fragment=document.createDocumentFragment();
+  if(!page||!Array.isArray(page.items)||page.items.length===0){
+    const row=document.createElement('tr'),cell=document.createElement('td');cell.colSpan=columns.length;cell.className='empty-row';cell.textContent='No requests match this range.';row.appendChild(cell);fragment.appendChild(row);
+  }else page.items.forEach(item=>{const row=document.createElement('tr');columns.forEach(column=>requestCell(row,item,column));fragment.appendChild(row)});
+  replaceTableRows(document.getElementById('usage-requests'),document.getElementById('request-table-scroll'),fragment);
+  const total=Number(page&&page.total||0),start=total?usageState.request.offset+1:0,end=Math.min(usageState.request.offset+Number(page&&page.items&&page.items.length||0),total);
+  document.getElementById('request-page-status').textContent=start+'–'+end+' of '+formatNumber(total)+' requests';
+  document.getElementById('request-prev').disabled=usageState.request.offset<=0;
+  document.getElementById('request-next').disabled=usageState.request.offset+usageState.request.limit>=total;
+}
+function renderUsageDashboard(){
+  renderUsageSummary();
+  renderUsageFilterOptions();
+  renderGroupTable();
+  renderRequestTable();
+  renderUsageCharts();
+}
+function chartColor(name){return getComputedStyle(document.documentElement).getPropertyValue(name).trim()}
+function prepareChart(id){
+  const canvas=document.getElementById(id);
+  const rect=canvas.getBoundingClientRect();
+  const width=Math.max(280,Math.floor(rect.width||600));
+  const height=Math.max(220,Math.floor(rect.height||260));
+  const scale=Math.min(2,window.devicePixelRatio||1);
+  canvas.width=Math.floor(width*scale);canvas.height=Math.floor(height*scale);
+  const context=canvas.getContext('2d');
+  context.setTransform(scale,0,0,scale,0,0);
+  context.clearRect(0,0,width,height);
+  return{context,width,height,left:52,right:18,top:14,bottom:34,plotWidth:width-70,plotHeight:height-48};
+}
+function visibleChartPoints(kind){
+  const points=(usageState.overview&&usageState.overview.series||[]).slice();
+  const zoom=Math.max(1,Number(usageState.zoom[kind]||1));
+  const count=Math.max(2,Math.ceil(points.length/zoom));
+  return points.slice(Math.max(0,points.length-count));
+}
+function drawEmptyChart(chart,message){
+  chart.context.fillStyle=chartColor('--muted');
+  chart.context.font='600 12px "Segoe UI",sans-serif';
+  chart.context.textAlign='center';chart.context.textBaseline='middle';
+  chart.context.fillText(message,chart.width/2,chart.height/2);
+}
+function drawGrid(chart,maxValue,formatter=formatCompact,rightFormatter=null){
+  const context=chart.context;
+  context.font='10px "Segoe UI",sans-serif';context.textBaseline='middle';
+  for(let index=0;index<=4;index++){
+    const y=chart.top+chart.plotHeight*index/4;
+    context.strokeStyle=chartColor('--line');context.lineWidth=1;
+    context.beginPath();context.moveTo(chart.left,y);context.lineTo(chart.left+chart.plotWidth,y);context.stroke();
+    const value=maxValue*(1-index/4);
+    context.fillStyle=chartColor('--muted');context.textAlign='right';context.fillText(formatter(value),chart.left-7,y);
+    if(rightFormatter){context.textAlign='left';context.fillText(rightFormatter(1-index/4),chart.left+chart.plotWidth+6,y)}
+  }
+}
+function bucketLabel(value){
+  const date=new Date(value);
+  if(Number.isNaN(date.getTime()))return '';
+  const range=usageState.range;
+  const options=range==='5h'||range==='24h'?{hour:'2-digit',minute:'2-digit'}:{month:'short',day:'numeric'};
+  return new Intl.DateTimeFormat(undefined,options).format(date);
+}
+function drawXLabels(chart,points){
+  if(!points.length)return;
+  const context=chart.context,step=Math.max(1,Math.ceil(points.length/6));
+  context.fillStyle=chartColor('--muted');context.font='10px "Segoe UI",sans-serif';context.textAlign='center';context.textBaseline='top';
+  points.forEach((point,index)=>{if(index%step&&index!==points.length-1)return;const x=chart.left+chart.plotWidth*(index+.5)/points.length;context.fillText(bucketLabel(point.time),x,chart.top+chart.plotHeight+8)});
+}
+function renderTokenChart(){
+  const chart=prepareChart('token-chart'),points=visibleChartPoints('tokens');
+  const definitions=[
+    {key:'input',field:'input_tokens',color:'--chart-input'},
+    {key:'output',field:'output_tokens',color:'--chart-output'},
+    {key:'cache_read',field:'cache_read_tokens',fallback:'cached_tokens',color:'--chart-cache'},
+    {key:'reasoning',field:'reasoning_tokens',color:'--chart-reasoning'}
+  ].filter(item=>!usageState.hiddenTokenSeries.has(item.key));
+  if(!points.length){drawEmptyChart(chart,'No token usage in this range.');return}
+  if(!definitions.length){drawEmptyChart(chart,'All token series are hidden.');return}
+  const total=point=>definitions.reduce((sum,item)=>sum+Number(point[item.field]||(item.fallback&&point[item.fallback])||0),0);
+  const max=Math.max(1,...points.map(total));
+  drawGrid(chart,max);
+  const slot=chart.plotWidth/points.length,barWidth=Math.max(3,Math.min(30,slot*.65));
+  points.forEach((point,index)=>{
+    let bottom=chart.top+chart.plotHeight;
+    definitions.forEach(item=>{
+      const value=Number(point[item.field]||(item.fallback&&point[item.fallback])||0),height=value/max*chart.plotHeight;
+      if(height>0){chart.context.fillStyle=chartColor(item.color);chart.context.fillRect(chart.left+slot*index+(slot-barWidth)/2,bottom-height,barWidth,height)}
+      bottom-=height;
+    });
+  });
+  drawXLabels(chart,points);
+}
+function drawLine(chart,points,value,color,maxValue){
+  const context=chart.context;
+  context.strokeStyle=color;context.lineWidth=2;context.lineJoin='round';context.lineCap='round';context.beginPath();
+  points.forEach((point,index)=>{
+    const x=chart.left+chart.plotWidth*(points.length===1?.5:index/(points.length-1));
+    const y=chart.top+chart.plotHeight-Math.max(0,value(point))/maxValue*chart.plotHeight;
+    if(index===0)context.moveTo(x,y);else context.lineTo(x,y);
+  });
+  context.stroke();
+  if(points.length<=24)points.forEach((point,index)=>{
+    const x=chart.left+chart.plotWidth*(points.length===1?.5:index/(points.length-1));
+    const y=chart.top+chart.plotHeight-Math.max(0,value(point))/maxValue*chart.plotHeight;
+    context.fillStyle=chartColor('--paper');context.strokeStyle=color;context.lineWidth=2;context.beginPath();context.arc(x,y,3,0,Math.PI*2);context.fill();context.stroke();
+  });
+}
+function renderCostChart(){
+  const chart=prepareChart('cost-chart'),points=visibleChartPoints('cost');
+  if(!points.length){drawEmptyChart(chart,'No cost data in this range.');return}
+  const max=Math.max(.000001,...points.map(point=>Number(point.cost_usd||0)));
+  drawGrid(chart,max,value=>formatUSD(value));
+  drawLine(chart,points,point=>Number(point.cost_usd||0),chartColor('--chart-cost'),max);
+  drawXLabels(chart,points);
+}
+function renderEfficiencyChart(){
+  const chart=prepareChart('efficiency-chart'),points=visibleChartPoints('efficiency');
+  if(!points.length){drawEmptyChart(chart,'No timing data in this range.');return}
+  const latency=point=>Number(point.average_latency_ns||0)/1e6;
+  const ttft=point=>Number(point.average_ttft_ns||0)/1e6;
+  const tps=point=>Number(point.average_tps||0);
+  const timingMax=Math.max(1,...points.map(point=>Math.max(latency(point),ttft(point))));
+  const tpsMax=Math.max(1,...points.map(tps));
+  drawGrid(chart,timingMax,value=>value>=1000?(value/1000).toFixed(1)+'s':Math.round(value)+'ms',ratio=>(tpsMax*ratio).toFixed(0));
+  drawLine(chart,points,latency,chartColor('--chart-input'),timingMax);
+  drawLine(chart,points,ttft,chartColor('--chart-cache'),timingMax);
+  drawLine(chart,points,point=>tps(point)*timingMax/tpsMax,chartColor('--chart-output'),timingMax);
+  drawXLabels(chart,points);
+}
+function renderModelChart(){
+  const chart=prepareChart('model-chart');
+  const source=(usageState.overview&&usageState.overview.provider_models||[]).filter(item=>Number(item.requests||0)>0).sort((left,right)=>Number(right.requests||0)-Number(left.requests||0));
+  if(!source.length){drawEmptyChart(chart,'No provider model requests.');document.getElementById('model-legend').replaceChildren();return}
+  const palette=['#2d6cdf','#24836b','#a96708','#8657c8','#b83b43','#47a7dc','#70a84f','#b88755'];
+  const items=source.slice(0,7).map(item=>({model:item.model,requests:Number(item.requests||0)}));
+  if(source.length>7)items.push({model:'Other',requests:source.slice(7).reduce((sum,item)=>sum+Number(item.requests||0),0)});
+  const total=items.reduce((sum,item)=>sum+item.requests,0),context=chart.context,cx=chart.width/2,cy=chart.height/2-4,radius=Math.min(chart.width,chart.height)*.31;
+  context.lineWidth=Math.max(22,radius*.28);context.strokeStyle=chartColor('--surface-soft');context.beginPath();context.arc(cx,cy,radius,0,Math.PI*2);context.stroke();
+  let angle=-Math.PI/2;
+  items.forEach((item,index)=>{const next=angle+item.requests/total*Math.PI*2;context.strokeStyle=palette[index%palette.length];context.beginPath();context.arc(cx,cy,radius,angle,next);context.stroke();angle=next});
+  context.fillStyle=chartColor('--ink');context.textAlign='center';context.textBaseline='middle';context.font='750 23px "Cascadia Code",monospace';context.fillText(formatCompact(total),cx,cy-5);context.fillStyle=chartColor('--muted');context.font='11px "Segoe UI",sans-serif';context.fillText('requests',cx,cy+17);
+  const legend=document.createDocumentFragment();
+  items.forEach((item,index)=>{const row=document.createElement('span'),swatch=document.createElement('span'),label=document.createElement('span');row.className='legend-item';swatch.className='legend-swatch';swatch.style.backgroundColor=palette[index%palette.length];label.textContent=item.model+' '+(item.requests/total*100).toFixed(1)+'%';row.appendChild(swatch);row.appendChild(label);legend.appendChild(row)});
+  document.getElementById('model-legend').replaceChildren(legend);
+}
+function syncTokenLegend(){
+  document.querySelectorAll('[data-token-series]').forEach(button=>button.setAttribute('aria-pressed',String(!usageState.hiddenTokenSeries.has(button.dataset.tokenSeries))));
+}
+function renderUsageCharts(){
+  if(!usageState.active||usagePanelEl.hidden||!usageState.overview)return;
+  renderTokenChart();renderModelChart();renderCostChart();renderEfficiencyChart();
+}
+function cloneValue(value){return JSON.parse(JSON.stringify(value))}
+function setPricingError(message=''){document.getElementById('pricing-error').textContent=message}
+function setPricingEditorEnabled(enabled){
+  for(const id of ['pricing-model-name','pricing-add','pricing-sync','pricing-save'])document.getElementById(id).disabled=!enabled;
+}
+function pricingDraftDirty(){return Boolean(usageState.pricingSettingsDirty||usageState.priceCollectionDirty)||(Array.isArray(usageState.priceDraft)&&usageState.priceDraft.some(item=>item.dirty))}
+function priceBookStatus(book){
+  let message='Revision '+Number(book&&book.revision||0)+' · '+formatNumber(Object.keys(book&&book.prices||{}).length)+' priced models';
+  if(book&&book.last_sync){const sync=new Date(book.last_sync.completed_at);message+=' · last sync '+(Number.isNaN(sync.getTime())?'completed':sync.toLocaleString())+' ('+formatNumber(book.last_sync.matched)+' matched, '+formatNumber(book.last_sync.unmatched)+' unmatched)'}
+  return message;
+}
+function applyPriceBook(book){
+  usageState.priceBook=book||{revision:0,prices:{},sync_settings:{provider_priority:[],ignored_suffixes:[],mappings:[]}};
+  const settings=usageState.priceBook.sync_settings||{};
+  document.getElementById('pricing-provider-priority').value=(settings.provider_priority||[]).join(', ');
+  document.getElementById('pricing-ignored-suffixes').value=(settings.ignored_suffixes||[]).join(', ');
+  document.getElementById('pricing-mappings').value=JSON.stringify(settings.mappings||[],null,2);
+  usageState.pricingSettingsDirty=false;
+  usageState.priceCollectionDirty=false;
+  usageState.priceDraft=Object.entries(usageState.priceBook.prices||{}).sort((left,right)=>left[0].localeCompare(right[0])).map(([name,value])=>({
+    originalName:name,name,input:String(Number(value.input||0)),output:String(Number(value.output||0)),cache_read:String(Number(value.cache_read||0)),cache_creation:String(Number(value.cache_creation||0)),
+    accounting_mode:String(value.accounting_mode||''),context_tiers:JSON.stringify(value.context_tiers||[],null,2),service_tiers:JSON.stringify(value.service_tiers||{},null,2),
+    source:String(value.source||'manual'),catalog_provider:String(value.catalog_provider||''),catalog_model:String(value.catalog_model||''),updated_at:String(value.updated_at||''),dirty:false
+  }));
+  document.getElementById('pricing-status').textContent=priceBookStatus(usageState.priceBook);
+  renderPriceDraft();
+}
+function priceInput(label,field,value,type='number'){
+  const wrapper=document.createElement('label'),caption=document.createElement('span'),input=document.createElement('input');
+  caption.textContent=label;input.type=type;input.value=value;input.dataset.priceField=field;
+  if(type==='number'){input.min='0';input.max='1000000';input.step='any';input.inputMode='decimal'}
+  wrapper.appendChild(caption);wrapper.appendChild(input);return wrapper;
+}
+function priceTextarea(label,field,value){
+  const wrapper=document.createElement('label'),caption=document.createElement('span'),textarea=document.createElement('textarea');
+  caption.textContent=label;textarea.value=value;textarea.dataset.priceField=field;textarea.spellcheck=false;
+  wrapper.appendChild(caption);wrapper.appendChild(textarea);return wrapper;
+}
+function renderPriceDraft(){
+  const list=document.getElementById('pricing-list'),fragment=document.createDocumentFragment(),draft=usageState.priceDraft||[];
+  if(!draft.length){const empty=document.createElement('div');empty.className='price-empty';empty.textContent='No prices saved. Add a provider model or synchronize observed CPA models.';fragment.appendChild(empty)}
+  draft.forEach((price,index)=>{
+    const row=document.createElement('article');row.className='price-row';row.dataset.priceIndex=String(index);
+    const grid=document.createElement('div');grid.className='price-grid';
+    const model=priceInput('Provider model','name',price.name,'text');model.classList.add('price-model-field');
+    const source=document.createElement('small');source.className='price-source';source.textContent=(price.dirty?'manual draft':price.source)+(price.catalog_provider?' · '+price.catalog_provider+'/'+price.catalog_model:'');model.appendChild(source);grid.appendChild(model);
+    grid.appendChild(priceInput('Input','input',price.input));grid.appendChild(priceInput('Output','output',price.output));grid.appendChild(priceInput('Cache read','cache_read',price.cache_read));grid.appendChild(priceInput('Cache create','cache_creation',price.cache_creation));
+    const accounting=document.createElement('label'),accountingCaption=document.createElement('span'),select=document.createElement('select');accountingCaption.textContent='Input accounting';select.dataset.priceField='accounting_mode';
+    for(const [value,label] of [['','Provider default'],['input_includes_cache','Input includes cache'],['input_excludes_cache','Input excludes cache']]){const option=document.createElement('option');option.value=value;option.textContent=label;select.appendChild(option)}
+    select.value=price.accounting_mode;accounting.appendChild(accountingCaption);accounting.appendChild(select);grid.appendChild(accounting);
+    const remove=document.createElement('button');remove.type='button';remove.className='danger-button';remove.dataset.priceRemove=String(index);remove.textContent='Remove';grid.appendChild(remove);row.appendChild(grid);
+    const advanced=document.createElement('details');advanced.className='price-advanced';const summary=document.createElement('summary');summary.textContent='Context and service-tier pricing';advanced.appendChild(summary);
+    const advancedGrid=document.createElement('div');advancedGrid.className='price-advanced-grid';advancedGrid.appendChild(priceTextarea('Context tiers as JSON','context_tiers',price.context_tiers));advancedGrid.appendChild(priceTextarea('Service tiers as JSON','service_tiers',price.service_tiers));advanced.appendChild(advancedGrid);row.appendChild(advanced);fragment.appendChild(row);
+  });
+  list.replaceChildren(fragment);
+}
+function splitPricingList(value){return String(value||'').split(/[\n,]+/).map(item=>item.trim()).filter(Boolean)}
+function pricingSyncSettings(){
+  let mappings;
+  try{mappings=JSON.parse(document.getElementById('pricing-mappings').value.trim()||'[]')}catch(error){throw new Error('Model mappings must be valid JSON: '+error.message)}
+  if(!Array.isArray(mappings))throw new Error('Model mappings must be a JSON array.');
+  return{provider_priority:splitPricingList(document.getElementById('pricing-provider-priority').value),ignored_suffixes:splitPricingList(document.getElementById('pricing-ignored-suffixes').value),mappings};
+}
+function parsedRate(value,model,label){
+  const number=Number(value||0);
+  if(!Number.isFinite(number)||number<0||number>1000000)throw new Error(model+' '+label+' must be between 0 and 1,000,000.');
+  return number;
+}
+function parsePriceJSON(value,model,label,kind){
+  let parsed;
+  try{parsed=JSON.parse(String(value||'').trim()||(kind==='array'?'[]':'{}'))}catch(error){throw new Error(model+' '+label+' must be valid JSON: '+error.message)}
+  if(kind==='array'&&!Array.isArray(parsed))throw new Error(model+' '+label+' must be a JSON array.');
+  if(kind==='object'&&(Array.isArray(parsed)||!parsed||typeof parsed!=='object'))throw new Error(model+' '+label+' must be a JSON object.');
+  return parsed;
+}
+function buildPriceSaveRequest(){
+  const prices={},names=new Set();
+  for(const draft of usageState.priceDraft||[]){
+    const name=String(draft.name||'').trim(),key=name.toLowerCase();
+    if(!name)throw new Error('Every price needs a provider model name.');
+    if(names.has(key))throw new Error('Provider model '+name+' appears more than once.');
+    names.add(key);
+    const dirty=draft.dirty||name!==draft.originalName;
+    prices[name]={
+      input:parsedRate(draft.input,name,'input price'),output:parsedRate(draft.output,name,'output price'),cache_read:parsedRate(draft.cache_read,name,'cache-read price'),cache_creation:parsedRate(draft.cache_creation,name,'cache-creation price'),
+      accounting_mode:draft.accounting_mode,context_tiers:parsePriceJSON(draft.context_tiers,name,'context tiers','array'),service_tiers:parsePriceJSON(draft.service_tiers,name,'service tiers','object'),
+      source:dirty?'manual':draft.source,catalog_provider:dirty?'':draft.catalog_provider,catalog_model:dirty?'':draft.catalog_model
+    };
+  }
+  return{revision:Number(usageState.priceBook&&usageState.priceBook.revision||0),prices,sync_settings:pricingSyncSettings()};
+}
+async function openPricingDialog(){
+  setPricingError();document.getElementById('pricing-status').textContent='Loading saved model prices…';
+  usageState.priceBook=null;usageState.priceDraft=null;usageState.pricingSettingsDirty=false;usageState.priceCollectionDirty=false;
+  document.getElementById('pricing-list').replaceChildren();setPricingEditorEnabled(false);
+  if(!pricingDialogEl.open)pricingDialogEl.showModal();
+  try{applyPriceBook(await requestManagementJSON(USAGE_API+'/prices',{cache:'no-store'}));setPricingEditorEnabled(true)}
+  catch(error){setPricingError(error.message)}
+}
+function closePricingDialog(){if(pricingDialogEl.open)pricingDialogEl.close();usageState.priceDraft=null;setPricingError()}
+function requestClosePricingDialog(){if(pricingDraftDirty()&&!window.confirm('Discard unsaved pricing changes?'))return;closePricingDialog()}
+function addPriceModel(){
+  const input=document.getElementById('pricing-model-name'),name=input.value.trim();
+  if(!name){setPricingError('Enter a provider model name.');input.focus();return}
+  if((usageState.priceDraft||[]).some(item=>item.name.toLowerCase()===name.toLowerCase())){setPricingError(name+' already has a price row.');return}
+  if(!usageState.priceDraft)usageState.priceDraft=[];
+  usageState.priceDraft.push({originalName:'',name,input:'0',output:'0',cache_read:'0',cache_creation:'0',accounting_mode:'',context_tiers:'[]',service_tiers:'{}',source:'manual',catalog_provider:'',catalog_model:'',updated_at:'',dirty:true});
+  input.value='';setPricingError();renderPriceDraft();
+  const rows=document.querySelectorAll('.price-row');const last=rows[rows.length-1];if(last)last.querySelector('[data-price-field="input"]').focus();
+}
+async function savePricing(){
+  let payload;
+  try{payload=buildPriceSaveRequest()}catch(error){setPricingError(error.message);return}
+  setPricingEditorEnabled(false);setPricingError();
+  try{
+    const book=await requestManagementJSON(USAGE_API+'/prices',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    applyPriceBook(book);showToast('Model pricing saved.','success');
+    if(usageState.active)refreshUsage(false);
+  }catch(error){setPricingError(error.message)}finally{setPricingEditorEnabled(true)}
+}
+async function syncPricing(){
+  if(!usageState.priceBook){setPricingError('Load the price book before synchronizing.');return}
+  if(pricingDraftDirty()&&!window.confirm('Discard unsaved pricing changes and synchronize the saved price book?'))return;
+  let settings;
+  try{settings=pricingSyncSettings()}catch(error){setPricingError(error.message);return}
+  const models=new Set(state.availableModels);
+  for(const item of usageState.overview&&usageState.overview.provider_models||[]){if(item.model)models.add(item.model)}
+  for(const name of Object.keys(usageState.priceBook.prices||{}))models.add(name);
+  if(!models.size){setPricingError('No CPA provider models are available to synchronize.');return}
+  setPricingEditorEnabled(false);setPricingError();document.getElementById('pricing-status').textContent='Synchronizing '+formatNumber(models.size)+' models from models.dev…';
+  try{
+    const book=await requestManagementJSON(USAGE_API+'/prices/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:'models.dev',revision:Number(usageState.priceBook.revision||0),models:Array.from(models),sync_settings:settings})});
+    applyPriceBook(book);showToast('Model prices synchronized.','success');if(usageState.active)refreshUsage(false);
+  }catch(error){setPricingError(error.message);document.getElementById('pricing-status').textContent=priceBookStatus(usageState.priceBook)}finally{setPricingEditorEnabled(true)}
+}
+function openResetDialog(){
+  document.getElementById('reset-confirmation').value='';document.getElementById('reset-error').textContent='';document.getElementById('reset-confirm').disabled=true;
+  resetDialogEl.showModal();document.getElementById('reset-confirmation').focus();
+}
+async function resetUsage(){
+  const confirmation=document.getElementById('reset-confirmation').value;
+  if(confirmation!=='reset')return;
+  const button=document.getElementById('reset-confirm');button.disabled=true;document.getElementById('reset-error').textContent='';
+  try{
+    await requestManagementJSON(USAGE_API+'/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm:'reset'})});
+    resetDialogEl.close();usageState.group.offset=0;usageState.request.offset=0;showToast('Usage history reset. Prices and preferences were preserved.','success');await refreshUsage(false);
+  }catch(error){document.getElementById('reset-error').textContent=error.message;button.disabled=false}
 }
 async function loadModelCatalog(){
   const keyPayload=await requestManagementJSON(API_KEYS_API);
@@ -970,8 +2036,38 @@ async function saveConfiguration(){
     showToast(error.message,'error');
   }finally{setBusy(false)}
 }
+function usageControlChanged(){usageState.group.offset=0;usageState.request.offset=0;refreshUsage(false)}
+function sortUsageTable(event){
+  const button=event.target.closest('[data-table-kind][data-sort-field]');
+  if(!button)return;
+  const kind=button.dataset.tableKind,table=usageState[kind],field=button.dataset.sortField,definitions=kind==='group'?groupColumns:requestColumns,column=definitions.find(item=>item.sort===field);
+  if(table.sort===field)table.order=table.order==='asc'?'desc':'asc';
+  else{table.sort=field;table.order=column&&column.text?'asc':'desc'}
+  table.offset=0;scheduleUsagePreferencesSave();refreshUsage(false);
+}
+function changeColumnVisibility(event){
+  const input=event.target.closest('[data-column-kind][data-column-key]');
+  if(!input)return;
+  const request=input.dataset.columnKind==='request',hidden=request?usageState.hiddenRequestColumns:usageState.hiddenGroupColumns,definitions=request?requestColumns:groupColumns;
+  if(input.checked)hidden.delete(input.dataset.columnKey);
+  else if(visibleColumns(definitions,hidden).length>1)hidden.add(input.dataset.columnKey);
+  renderColumnControls(definitions,hidden,request?'request-column-options':'group-column-options',request?'request':'group');
+  if(request)renderRequestTable();else renderGroupTable();
+  scheduleUsagePreferencesSave();
+}
+function updatePriceDraft(event){
+  const target=event.target.closest('[data-price-field]'),row=target&&target.closest('.price-row');
+  if(!target||!row||!usageState.priceDraft)return;
+  const price=usageState.priceDraft[Number(row.dataset.priceIndex)];
+  if(!price)return;
+  price[target.dataset.priceField]=target.value;price.dirty=true;
+  const source=row.querySelector('.price-source');if(source)source.textContent='manual draft';
+}
 applyHostTheme();
 observeHostTheme();
+initializeCustomRange();
+applyUsagePreferences({});
+tabs.forEach(tab=>{tab.addEventListener('click',()=>activateTab(tab.id==='usage-tab'?'usage':'configuration'));tab.addEventListener('keydown',handleTabKey)});
 connectEl.addEventListener('click',loadConfiguration);
 keyEl.addEventListener('keydown',event=>{if(event.key==='Enter')loadConfiguration()});
 enabledEl.addEventListener('change',()=>{state.enabled=enabledEl.checked;setDirty(true)});
@@ -979,8 +2075,68 @@ priorityEl.addEventListener('input',()=>{state.priority=priorityEl.value;setDirt
 addRouteEl.addEventListener('click',addRoute);
 reloadEl.addEventListener('click',()=>{if(!state.dirty||window.confirm('Discard unsaved changes and reload from CPA?'))loadConfiguration()});
 saveEl.addEventListener('click',saveConfiguration);
+usageRangeEl.addEventListener('change',()=>{
+  usageState.range=usageRangeEl.value;usageCustomRangeEl.hidden=usageState.range!=='custom';
+  if(usageState.range==='custom')initializeCustomRange();
+  scheduleUsagePreferencesSave();usageControlChanged();
+});
+usageGranularityEl.addEventListener('change',()=>{usageState.granularity=usageGranularityEl.value;scheduleUsagePreferencesSave();usageControlChanged()});
+usageRouterModelEl.addEventListener('change',()=>{usageState.routerModel=usageRouterModelEl.value;usageControlChanged()});
+usageProviderModelEl.addEventListener('change',()=>{usageState.providerModel=usageProviderModelEl.value;usageControlChanged()});
+usageSourceEl.addEventListener('change',()=>{usageState.source=usageSourceEl.value;usageControlChanged()});
+usageServiceTierEl.addEventListener('change',()=>{usageState.serviceTier=usageServiceTierEl.value;usageControlChanged()});
+usageResultEl.addEventListener('change',()=>{usageState.result=usageResultEl.value;usageControlChanged()});
+usageFromEl.addEventListener('change',()=>{usageState.customFrom=usageFromEl.value;if(usageState.range==='custom')usageControlChanged()});
+usageToEl.addEventListener('change',()=>{usageState.customTo=usageToEl.value;if(usageState.range==='custom')usageControlChanged()});
+usageRefreshEl.addEventListener('click',()=>refreshUsage(false));
+document.getElementById('group-dimension').addEventListener('change',event=>{usageState.group.dimension=event.target.value;usageState.group.offset=0;scheduleUsagePreferencesSave();refreshUsage(false)});
+document.getElementById('group-page-size').addEventListener('change',event=>{usageState.group.limit=Number(event.target.value);usageState.group.offset=0;scheduleUsagePreferencesSave();refreshUsage(false)});
+document.getElementById('request-page-size').addEventListener('change',event=>{usageState.request.limit=Number(event.target.value);usageState.request.offset=0;scheduleUsagePreferencesSave();refreshUsage(false)});
+document.getElementById('group-prev').addEventListener('click',()=>{usageState.group.offset=Math.max(0,usageState.group.offset-usageState.group.limit);refreshUsage(false)});
+document.getElementById('group-next').addEventListener('click',()=>{usageState.group.offset+=usageState.group.limit;refreshUsage(false)});
+document.getElementById('request-prev').addEventListener('click',()=>{usageState.request.offset=Math.max(0,usageState.request.offset-usageState.request.limit);refreshUsage(false)});
+document.getElementById('request-next').addEventListener('click',()=>{usageState.request.offset+=usageState.request.limit;refreshUsage(false)});
+document.getElementById('group-headers').addEventListener('click',sortUsageTable);
+document.getElementById('request-headers').addEventListener('click',sortUsageTable);
+document.getElementById('group-column-options').addEventListener('change',changeColumnVisibility);
+document.getElementById('request-column-options').addEventListener('change',changeColumnVisibility);
+usagePanelEl.addEventListener('click',event=>{
+  const series=event.target.closest('[data-token-series]');
+  if(series){const key=series.dataset.tokenSeries;if(usageState.hiddenTokenSeries.has(key))usageState.hiddenTokenSeries.delete(key);else usageState.hiddenTokenSeries.add(key);syncTokenLegend();renderTokenChart();scheduleUsagePreferencesSave();return}
+  const zoom=event.target.closest('[data-chart][data-zoom]');
+  if(!zoom)return;
+  const key=zoom.dataset.chart,action=zoom.dataset.zoom;
+  if(action==='reset')usageState.zoom[key]=1;
+  else if(action==='in')usageState.zoom[key]=Math.min(8,usageState.zoom[key]*1.6);
+  else usageState.zoom[key]=Math.max(1,usageState.zoom[key]/1.6);
+  renderUsageCharts();
+});
+document.getElementById('usage-pricing').addEventListener('click',openPricingDialog);
+document.getElementById('pricing-close').addEventListener('click',requestClosePricingDialog);
+document.getElementById('pricing-cancel').addEventListener('click',requestClosePricingDialog);
+document.getElementById('pricing-add').addEventListener('click',addPriceModel);
+document.getElementById('pricing-model-name').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();addPriceModel()}});
+document.getElementById('pricing-save').addEventListener('click',savePricing);
+document.getElementById('pricing-sync').addEventListener('click',syncPricing);
+document.getElementById('pricing-list').addEventListener('input',updatePriceDraft);
+document.getElementById('pricing-list').addEventListener('change',updatePriceDraft);
+document.getElementById('pricing-list').addEventListener('click',event=>{
+  const button=event.target.closest('[data-price-remove]');if(!button||!usageState.priceDraft)return;
+  const index=Number(button.dataset.priceRemove),price=usageState.priceDraft[index];
+  if(price&&!window.confirm('Remove '+price.name+' from this pricing draft?'))return;
+  usageState.priceDraft.splice(index,1);usageState.priceCollectionDirty=true;renderPriceDraft();
+});
+for(const id of ['pricing-provider-priority','pricing-ignored-suffixes','pricing-mappings'])document.getElementById(id).addEventListener('input',()=>{usageState.pricingSettingsDirty=true});
+pricingDialogEl.addEventListener('cancel',event=>{event.preventDefault();requestClosePricingDialog()});
+document.getElementById('usage-reset').addEventListener('click',openResetDialog);
+document.getElementById('reset-cancel').addEventListener('click',()=>resetDialogEl.close());
+document.getElementById('reset-confirmation').addEventListener('input',event=>{document.getElementById('reset-confirm').disabled=event.target.value!=='reset'});
+document.getElementById('reset-confirmation').addEventListener('keydown',event=>{if(event.key==='Enter'&&event.target.value==='reset'){event.preventDefault();resetUsage()}});
+document.getElementById('reset-confirm').addEventListener('click',resetUsage);
+document.addEventListener('visibilitychange',()=>{if(!usageState.active)return;if(document.hidden)stopUsagePolling();else refreshUsage(false)});
+window.addEventListener('resize',()=>{if(!usageState.active)return;window.clearTimeout(usageState.resizeTimer);usageState.resizeTimer=window.setTimeout(renderUsageCharts,120)});
 document.addEventListener('keydown',event=>{
-  if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'&&!workspaceEl.hidden){event.preventDefault();saveConfiguration()}
+  if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'&&!workspaceEl.hidden&&!configurationPanelEl.hidden){event.preventDefault();saveConfiguration()}
 });
 if(managementKey())loadConfiguration();
 else showFallbackKeyInput('CPAMC has no saved management key. Enter it for this browser session.');

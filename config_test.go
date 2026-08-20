@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -47,6 +48,10 @@ func TestDecodeRouterConfigCanonicalAndLegacyKeys(t *testing.T) {
 }
 
 func TestDecodeRouterConfigDefaults(t *testing.T) {
+	previousResolver := defaultDataPathResolver
+	wantPath := filepath.Join(t.TempDir(), "default.db")
+	defaultDataPathResolver = func() string { return wantPath }
+	t.Cleanup(func() { defaultDataPathResolver = previousResolver })
 	config, err := decodeRouterConfig([]byte(`routes:
   - alias: smart
     models: [provider-a]
@@ -57,6 +62,25 @@ func TestDecodeRouterConfigDefaults(t *testing.T) {
 	route := config.Routes[0]
 	if route.Strategy != routeStrategyPriority || route.CooldownSeconds != defaultCooldownSeconds {
 		t.Fatalf("route defaults = %#v", route)
+	}
+	if config.DataPath != wantPath || config.RetentionDays != defaultRetentionDays {
+		t.Fatalf("storage defaults = %#v", config)
+	}
+}
+
+func TestDecodeRouterConfigStorageOverrides(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "usage.db")
+	config, err := decodeRouterConfig([]byte("data_path: " + filepath.ToSlash(path) + "\nretention_days: 45\nroutes: []\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.DataPath != path || config.RetentionDays != 45 {
+		t.Fatalf("storage config = %#v", config)
+	}
+	for _, days := range []int{0, maxRetentionDays + 1} {
+		if _, err := decodeRouterConfig([]byte("retention_days: " + itoa(days) + "\nroutes: []\n")); err == nil || !strings.Contains(err.Error(), "retention_days") {
+			t.Fatalf("retention_days=%d error = %v", days, err)
+		}
 	}
 }
 
