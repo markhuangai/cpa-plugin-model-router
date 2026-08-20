@@ -7,6 +7,16 @@ import (
 	"time"
 )
 
+type usageRouterKey struct {
+	model       string
+	attribution string
+}
+
+type usageGroupKey struct {
+	value  string
+	router usageRouterKey
+}
+
 func (store *usageStore) Overview(filter usageFilter, granularity string) (usageOverview, error) {
 	records, err := store.records(filter)
 	if err != nil {
@@ -27,7 +37,7 @@ func (store *usageStore) Overview(filter usageFilter, granularity string) (usage
 		StorageError:  store.LastError(),
 	}
 	series := make(map[string]*usageSeriesPoint)
-	routerModels := make(map[string]*usageModelStats)
+	routerModels := make(map[usageRouterKey]*usageModelStats)
 	providerModels := make(map[string]*usageModelStats)
 	sources := make(map[string]struct{})
 	serviceTiers := make(map[string]struct{})
@@ -56,11 +66,12 @@ func (store *usageStore) Overview(filter usageFilter, granularity string) (usage
 		}
 		point.CostUSD += cost.TotalUSD
 
-		routerKey, routerLabel, routerAttribution := record.RouterModel, record.RouterModel, record.Attribution
+		routerKey := usageRouterKey{model: record.RouterModel, attribution: record.Attribution}
+		routerLabel, routerAttribution := record.RouterModel, record.Attribution
 		if record.Attribution == attributionDirect {
-			routerKey, routerLabel = attributionDirect, ""
+			routerKey.model, routerLabel = "", ""
 		} else if record.Attribution == attributionUnresolved {
-			routerKey, routerLabel = attributionUnresolved, ""
+			routerKey.model, routerLabel = "", ""
 		}
 		router := routerModels[routerKey]
 		if router == nil {
@@ -116,7 +127,7 @@ func usageBucket(value time.Time, granularity string) time.Time {
 	}
 }
 
-func modelStatsValues(values map[string]*usageModelStats) []usageModelStats {
+func modelStatsValues[K comparable](values map[K]*usageModelStats) []usageModelStats {
 	result := make([]usageModelStats, 0, len(values))
 	for _, value := range values {
 		result = append(result, *value)
@@ -148,12 +159,16 @@ func (store *usageStore) Groups(filter usageFilter, dimension, sortField, order 
 		return usageGroupPage{}, err
 	}
 	resolver := newModelPriceResolver(book.Prices, book.SyncSettings)
-	groups := make(map[string]*groupAccumulator)
+	groups := make(map[usageGroupKey]*groupAccumulator)
 	for _, record := range records {
-		key := usageDimensionValue(record, dimension)
+		value := usageDimensionValue(record, dimension)
+		key := usageGroupKey{value: value}
+		if dimension == "router_model" {
+			key = usageGroupKey{router: usageRouterKey{model: record.RouterModel, attribution: record.Attribution}}
+		}
 		accumulator := groups[key]
 		if accumulator == nil {
-			accumulator = &groupAccumulator{group: usageGroup{Key: key}}
+			accumulator = &groupAccumulator{group: usageGroup{Key: value}}
 			assignGroupDimension(&accumulator.group, record, dimension)
 			groups[key] = accumulator
 		}

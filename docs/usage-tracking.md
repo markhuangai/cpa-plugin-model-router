@@ -199,7 +199,7 @@ All endpoints require CPA Management API authentication.
 | `PUT` | `/v0/management/plugins/model-router/usage/preferences` | Save dashboard preferences |
 | `POST` | `/v0/management/plugins/model-router/usage/reset` | Delete usage after receiving `{"confirm":"reset"}` |
 
-Overview, group, and request queries accept RFC3339 `from` and `to` plus optional `router_model`, `provider_model`, `source`, `service_tier`, and `result` filters. Group and request endpoints also accept `sort`, `order`, `offset`, and `limit`; the maximum page size is 500.
+Overview, group, and request queries accept RFC3339 `from` and `to` plus optional `attribution`, `router_model`, `provider_model`, `source`, `service_tier`, and `result` filters. `router_model` always matches a literal route alias. Use `attribution=direct`, `attribution=unattributed`, or `attribution=routed` to filter by request origin; this keeps aliases named `direct` or `unattributed` distinct from the synthetic traffic classes. Group and request endpoints also accept `sort`, `order`, `offset`, and `limit`; the maximum page size is 500.
 
 ## Implementation map
 

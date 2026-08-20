@@ -788,6 +788,8 @@ const VALIDATE_API='/v0/management/plugins/model-router/validate';
 const API_KEYS_API='/v0/management/api-keys';
 const MODELS_API='/v1/models';
 const USAGE_API='/v0/management/plugins/model-router/usage';
+const ROUTER_FILTER_MODEL_PREFIX='model:';
+const ROUTER_FILTER_ATTRIBUTION_PREFIX='attribution:';
 const CPA_STORAGE_PREFIX='enc::v1::';
 const CPA_STORAGE_SALT='cli-proxy-api-webui::secure-storage';
 const SESSION_KEY='cpa_model_router_key';
@@ -796,7 +798,7 @@ const REJECTED_AT='cpa_model_router_rejected_at';
 const state={enabled:true,priority:'0',routes:[],availableModels:[],catalogLoaded:false,catalogError:'',dirty:false,busy:false};
 const usageState={
   active:false,initialized:false,preferencesLoaded:false,loading:false,generation:0,controller:null,timer:0,preferenceTimer:0,resizeTimer:0,
-  overview:null,groupPage:null,requestPage:null,range:'24h',granularity:'hour',customFrom:'',customTo:'',routerModel:'',providerModel:'',source:'',serviceTier:'',result:'',
+  overview:null,groupPage:null,requestPage:null,range:'24h',granularity:'hour',customFrom:'',customTo:'',attribution:'',routerModel:'',providerModel:'',source:'',serviceTier:'',result:'',
   group:{dimension:'provider_model',sort:'total_tokens',order:'desc',offset:0,limit:100},
   request:{sort:'time',order:'desc',offset:0,limit:100},
   hiddenRequestColumns:new Set(),hiddenGroupColumns:new Set(),hiddenTokenSeries:new Set(),zoom:{tokens:1,cost:1,efficiency:1},priceBook:null,priceDraft:null,pricingSettingsDirty:false,priceCollectionDirty:false
@@ -1158,7 +1160,7 @@ function formatRangeLabel(from,to){
 }
 function usageBaseQuery(range){
   const params=new URLSearchParams({from:range.from,to:range.to,granularity:usageState.granularity});
-  for(const [name,value] of [['router_model',usageState.routerModel],['provider_model',usageState.providerModel],['source',usageState.source],['service_tier',usageState.serviceTier],['result',usageState.result]]){
+  for(const [name,value] of [['attribution',usageState.attribution],['router_model',usageState.routerModel],['provider_model',usageState.providerModel],['source',usageState.source],['service_tier',usageState.serviceTier],['result',usageState.result]]){
     if(value)params.set(name,value);
   }
   return params;
@@ -1344,11 +1346,12 @@ function mergeSelectOptions(select,values,allLabel,selectedValue){
 function renderUsageFilterOptions(){
   const overview=usageState.overview||{};
   const routers=(overview.router_models||[]).map(item=>{
-    if(item.attribution==='direct')return{value:'direct',label:'Direct provider calls'};
-    if(item.attribution==='unattributed')return{value:'unattributed',label:'Unattributed'};
-    return{value:item.model,label:item.model};
+    if(item.attribution==='direct')return{value:ROUTER_FILTER_ATTRIBUTION_PREFIX+'direct',label:'Direct provider calls'};
+    if(item.attribution==='unattributed')return{value:ROUTER_FILTER_ATTRIBUTION_PREFIX+'unattributed',label:'Unattributed'};
+    return{value:item.model?ROUTER_FILTER_MODEL_PREFIX+item.model:'',label:item.model};
   });
-  mergeSelectOptions(usageRouterModelEl,routers,'All router models',usageState.routerModel);
+  const selectedRouter=usageState.attribution?ROUTER_FILTER_ATTRIBUTION_PREFIX+usageState.attribution:(usageState.routerModel?ROUTER_FILTER_MODEL_PREFIX+usageState.routerModel:'');
+  mergeSelectOptions(usageRouterModelEl,routers,'All router models',selectedRouter);
   mergeSelectOptions(usageProviderModelEl,(overview.provider_models||[]).map(item=>({value:item.model,label:item.model})),'All provider models',usageState.providerModel);
   mergeSelectOptions(usageSourceEl,(overview.sources||[]).map(value=>({value,label:value})),'All sources',usageState.source);
   mergeSelectOptions(usageServiceTierEl,(overview.service_tiers||[]).map(value=>({value,label:value})),'All service tiers',usageState.serviceTier);
@@ -2080,7 +2083,12 @@ usageRangeEl.addEventListener('change',()=>{
   scheduleUsagePreferencesSave();usageControlChanged();
 });
 usageGranularityEl.addEventListener('change',()=>{usageState.granularity=usageGranularityEl.value;scheduleUsagePreferencesSave();usageControlChanged()});
-usageRouterModelEl.addEventListener('change',()=>{usageState.routerModel=usageRouterModelEl.value;usageControlChanged()});
+usageRouterModelEl.addEventListener('change',()=>{
+  const value=usageRouterModelEl.value;
+  usageState.routerModel=value.startsWith(ROUTER_FILTER_MODEL_PREFIX)?value.slice(ROUTER_FILTER_MODEL_PREFIX.length):'';
+  usageState.attribution=value.startsWith(ROUTER_FILTER_ATTRIBUTION_PREFIX)?value.slice(ROUTER_FILTER_ATTRIBUTION_PREFIX.length):'';
+  usageControlChanged();
+});
 usageProviderModelEl.addEventListener('change',()=>{usageState.providerModel=usageProviderModelEl.value;usageControlChanged()});
 usageSourceEl.addEventListener('change',()=>{usageState.source=usageSourceEl.value;usageControlChanged()});
 usageServiceTierEl.addEventListener('change',()=>{usageState.serviceTier=usageServiceTierEl.value;usageControlChanged()});

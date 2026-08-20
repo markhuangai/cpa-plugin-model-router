@@ -99,6 +99,7 @@ func requestDetail(record storedUsageRecord, resolver modelPriceResolver) usageR
 type usageFilter struct {
 	From          time.Time
 	To            time.Time
+	Attribution   string
 	RouterModel   string
 	ProviderModel string
 	Source        string
@@ -113,14 +114,11 @@ func (filter usageFilter) matches(record storedUsageRecord) bool {
 	if !filter.To.IsZero() && !record.RequestedAt.Before(filter.To) {
 		return false
 	}
-	if filter.RouterModel != "" {
-		value := record.RouterModel
-		if filter.RouterModel == attributionDirect || filter.RouterModel == attributionUnresolved {
-			value = record.Attribution
-		}
-		if !equalFold(value, filter.RouterModel) {
-			return false
-		}
+	if filter.Attribution != "" && !equalFold(record.Attribution, filter.Attribution) {
+		return false
+	}
+	if filter.RouterModel != "" && !equalFold(record.RouterModel, filter.RouterModel) {
+		return false
 	}
 	return (filter.ProviderModel == "" || equalFold(record.ProviderModel, filter.ProviderModel)) &&
 		(filter.Source == "" || equalFold(record.Source, filter.Source)) &&

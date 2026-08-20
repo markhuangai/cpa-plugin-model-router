@@ -226,6 +226,7 @@ func parseUsageFilter(query map[string][]string) (usageFilter, error) {
 	if !filter.From.Before(filter.To) {
 		return usageFilter{}, errors.New("from must be earlier than to")
 	}
+	filter.Attribution = strings.TrimSpace(firstQuery(query, "attribution"))
 	filter.RouterModel = strings.TrimSpace(firstQuery(query, "router_model"))
 	filter.ProviderModel = strings.TrimSpace(firstQuery(query, "provider_model"))
 	filter.Source = strings.TrimSpace(firstQuery(query, "source"))

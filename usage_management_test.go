@@ -65,6 +65,85 @@ func TestUsageManagementOverviewRequestsPricesPreferencesAndReset(t *testing.T) 
 	}
 }
 
+func TestUsageManagementNamespacesRouterAliasesAndAttribution(t *testing.T) {
+	store, err := openUsageStore(filepath.Join(t.TempDir(), "usage.db"), 365)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC()
+	for _, record := range []storedUsageRecord{
+		{RequestedAt: now, Attribution: attributionRouted, RouterModel: "direct", ProviderModel: "routed-direct"},
+		{RequestedAt: now, Attribution: attributionDirect, ProviderModel: "provider-direct"},
+		{RequestedAt: now, Attribution: attributionRouted, RouterModel: "unattributed", ProviderModel: "routed-unattributed"},
+		{RequestedAt: now, Attribution: attributionUnresolved, ProviderModel: "provider-unattributed"},
+	} {
+		if err := store.Record(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plugin := &modelRouterPlugin{store: store, attribution: newAttributionTracker(nil)}
+	baseQuery := func() url.Values {
+		return url.Values{"from": {now.Add(-time.Hour).Format(time.RFC3339)}, "to": {now.Add(time.Hour).Format(time.RFC3339)}}
+	}
+	for _, test := range []struct {
+		name            string
+		parameter       string
+		value           string
+		wantAttribution string
+		wantRouterModel string
+	}{
+		{name: "direct alias", parameter: "router_model", value: "direct", wantAttribution: attributionRouted, wantRouterModel: "direct"},
+		{name: "direct traffic", parameter: "attribution", value: attributionDirect, wantAttribution: attributionDirect},
+		{name: "unattributed alias", parameter: "router_model", value: "unattributed", wantAttribution: attributionRouted, wantRouterModel: "unattributed"},
+		{name: "unattributed traffic", parameter: "attribution", value: attributionUnresolved, wantAttribution: attributionUnresolved},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			query := baseQuery()
+			query.Set(test.parameter, test.value)
+			response := handleModelRouterManagement(plugin, pluginapi.ManagementRequest{Method: http.MethodGet, Path: modelRouterUsageBasePath + "/requests", Query: query})
+			var page usageRequestPage
+			if err := json.Unmarshal(response.Body, &page); err != nil {
+				t.Fatal(err)
+			}
+			if response.StatusCode != http.StatusOK || page.Total != 1 || page.Items[0].Attribution != test.wantAttribution || page.Items[0].RouterModel != test.wantRouterModel {
+				t.Fatalf("filtered requests = status %d page %#v", response.StatusCode, page)
+			}
+		})
+	}
+
+	overviewResponse := handleModelRouterManagement(plugin, pluginapi.ManagementRequest{Method: http.MethodGet, Path: modelRouterUsageBasePath + "/overview", Query: baseQuery()})
+	var overview usageOverview
+	if err := json.Unmarshal(overviewResponse.Body, &overview); err != nil {
+		t.Fatal(err)
+	}
+	seen := make(map[usageRouterKey]uint64, len(overview.RouterModels))
+	for _, item := range overview.RouterModels {
+		seen[usageRouterKey{model: item.Model, attribution: item.Attribution}] = item.Requests
+	}
+	for _, key := range []usageRouterKey{
+		{model: "direct", attribution: attributionRouted},
+		{attribution: attributionDirect},
+		{model: "unattributed", attribution: attributionRouted},
+		{attribution: attributionUnresolved},
+	} {
+		if seen[key] != 1 {
+			t.Fatalf("router overview buckets = %#v", seen)
+		}
+	}
+
+	groupQuery := baseQuery()
+	groupQuery.Set("dimension", "router_model")
+	groupsResponse := handleModelRouterManagement(plugin, pluginapi.ManagementRequest{Method: http.MethodGet, Path: modelRouterUsageBasePath + "/groups", Query: groupQuery})
+	var groups usageGroupPage
+	if err := json.Unmarshal(groupsResponse.Body, &groups); err != nil {
+		t.Fatal(err)
+	}
+	if groupsResponse.StatusCode != http.StatusOK || groups.Total != 4 {
+		t.Fatalf("router groups = status %d page %#v", groupsResponse.StatusCode, groups)
+	}
+}
+
 func TestUsageManagementRejectsBadQueriesBodiesAndMethods(t *testing.T) {
 	store, err := openUsageStore(filepath.Join(t.TempDir(), "usage.db"), 365)
 	if err != nil {
