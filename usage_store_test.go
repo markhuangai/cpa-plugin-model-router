@@ -90,6 +90,44 @@ func TestSafeStoredUsageSourceRejectsCredentialShapedValues(t *testing.T) {
 	}
 }
 
+func TestStoredRecordFromUsageSynthesizesMissingTotal(t *testing.T) {
+	tests := []struct {
+		name   string
+		record pluginapi.UsageRecord
+		want   uint64
+	}{
+		{
+			name: "anthropic cache counters",
+			record: pluginapi.UsageRecord{Provider: "anthropic", Detail: pluginapi.UsageDetail{
+				InputTokens: 5, OutputTokens: 4, CacheReadTokens: 3, CacheCreationTokens: 2,
+			}},
+			want: 14,
+		},
+		{
+			name: "google reasoning",
+			record: pluginapi.UsageRecord{Provider: "google", Detail: pluginapi.UsageDetail{
+				InputTokens: 7, OutputTokens: 4, ReasoningTokens: 3,
+			}},
+			want: 14,
+		},
+		{
+			name: "provider default",
+			record: pluginapi.UsageRecord{Provider: "openai", Detail: pluginapi.UsageDetail{
+				InputTokens: 5, OutputTokens: 4, CachedTokens: 3,
+			}},
+			want: 9,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stored := storedRecordFromUsage(test.record, attributionResult{Kind: attributionDirect})
+			if stored.TotalTokens != test.want {
+				t.Fatalf("stored total = %d, want %d; record=%#v", stored.TotalTokens, test.want, stored)
+			}
+		})
+	}
+}
+
 func TestUsageStorePathSwitchDoesNotMigrate(t *testing.T) {
 	root := t.TempDir()
 	firstPath := filepath.Join(root, "first.db")

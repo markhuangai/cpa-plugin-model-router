@@ -197,11 +197,21 @@ func TestRoutedFallbackRecordsEachAttemptAndSuppressesLateUsage(t *testing.T) {
 		if item.Attribution != attributionRouted || item.RouterModel != "smart" {
 			t.Fatalf("routed attribution = %#v", item)
 		}
-		failed = failed || item.ProviderModel == "fail-model" && item.Failed && item.StatusCode == http.StatusTooManyRequests
-		succeeded = succeeded || item.ProviderModel == "working-model" && !item.Failed && item.TotalTokens == 5
+		failed = failed || item.ProviderModel == "fail/fail-model" && item.Failed && item.StatusCode == http.StatusTooManyRequests
+		succeeded = succeeded || item.ProviderModel == "work/working-model" && !item.Failed && item.TotalTokens == 5
 	}
 	if !failed || !succeeded {
 		t.Fatalf("routed attempts = %#v", page.Items)
+	}
+}
+
+func TestRoutedUsagePreservesProviderQualifiedTarget(t *testing.T) {
+	start := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	capture := newRoutedUsageCapture(pluginapi.ExecutorRequest{Format: "openai"}, "provider-a/model", start)
+	capture.observePayload([]byte(`{"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}`))
+	stored := capture.storedRecord(attributionMarker{routerModel: "smart"})
+	if stored.Provider != "provider-a" || stored.ProviderModel != "provider-a/model" {
+		t.Fatalf("provider-qualified routed record = %#v", stored)
 	}
 }
 

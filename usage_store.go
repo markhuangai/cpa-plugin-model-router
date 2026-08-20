@@ -554,6 +554,10 @@ func storedRecordFromUsage(record pluginapi.UsageRecord, attribution attribution
 	if requestedAt.IsZero() {
 		requestedAt = time.Now().UTC()
 	}
+	detail := record.Detail
+	if detail.TotalTokens == 0 {
+		detail.TotalTokens = synthesizedOfficialUsageTotal(record, detail)
+	}
 	return storedUsageRecord{
 		RequestedAt:         requestedAt,
 		Attribution:         attribution.Kind,
@@ -571,14 +575,22 @@ func storedRecordFromUsage(record pluginapi.UsageRecord, attribution attribution
 		StatusCode:          record.Failure.StatusCode,
 		LatencyNS:           durationUint64(record.Latency),
 		TTFTNS:              durationUint64(record.TTFT),
-		InputTokens:         nonnegativeUint64(record.Detail.InputTokens),
-		OutputTokens:        nonnegativeUint64(record.Detail.OutputTokens),
-		ReasoningTokens:     nonnegativeUint64(record.Detail.ReasoningTokens),
-		CachedTokens:        nonnegativeUint64(record.Detail.CachedTokens),
-		CacheReadTokens:     nonnegativeUint64(record.Detail.CacheReadTokens),
-		CacheCreationTokens: nonnegativeUint64(record.Detail.CacheCreationTokens),
-		TotalTokens:         nonnegativeUint64(record.Detail.TotalTokens),
+		InputTokens:         nonnegativeUint64(detail.InputTokens),
+		OutputTokens:        nonnegativeUint64(detail.OutputTokens),
+		ReasoningTokens:     nonnegativeUint64(detail.ReasoningTokens),
+		CachedTokens:        nonnegativeUint64(detail.CachedTokens),
+		CacheReadTokens:     nonnegativeUint64(detail.CacheReadTokens),
+		CacheCreationTokens: nonnegativeUint64(detail.CacheCreationTokens),
+		TotalTokens:         nonnegativeUint64(detail.TotalTokens),
 	}
+}
+
+func synthesizedOfficialUsageTotal(record pluginapi.UsageRecord, detail pluginapi.UsageDetail) int64 {
+	accounting := usagePayloadAccounting{AccountingMode: defaultAccountingMode(record.Provider, record.ExecutorType)}
+	if equalFold(record.Provider, "google") || equalFold(record.Provider, "gemini") || equalFold(record.ExecutorType, "gemini") {
+		accounting.ReasoningMode = reasoningModeSeparate
+	}
+	return synthesizedUsageTotal(detail, accounting)
 }
 
 func safeStoredUsageSource(record pluginapi.UsageRecord) string {

@@ -48,11 +48,11 @@ func newDirectUsageCapture(request pluginapi.RequestInterceptRequest, now time.T
 }
 
 func newRoutedUsageCapture(request pluginapi.ExecutorRequest, target string, now time.Time) directUsageCapture {
-	provider, model := splitProviderModel(target)
+	provider, _ := splitProviderModel(target)
 	return directUsageCapture{
 		requestedAt:     now.UTC(),
 		provider:        provider,
-		providerModel:   model,
+		providerModel:   strings.TrimSpace(target),
 		source:          provider,
 		executorType:    normalizeProtocol(firstNonEmpty(request.Format, request.SourceFormat)),
 		reasoningEffort: metadataString(request.Metadata, "reasoning_effort"),
@@ -339,15 +339,12 @@ func mergeUsageDetail(current *pluginapi.UsageDetail, next pluginapi.UsageDetail
 
 func (capture directUsageCapture) storedRecord(marker attributionMarker) storedUsageRecord {
 	providerModel := firstNonEmpty(capture.providerModel, marker.providerModel, "unknown")
-	provider, providerModel := splitProviderModel(providerModel)
 	if capture.provider == "" {
+		provider, model := splitProviderModel(providerModel)
 		capture.provider = provider
+		providerModel = firstNonEmpty(model, providerModel)
 	}
-	if providerModel != "" {
-		providerModel = strings.TrimSpace(providerModel)
-	} else {
-		providerModel = strings.TrimSpace(capture.providerModel)
-	}
+	providerModel = strings.TrimSpace(providerModel)
 	requestedAt := capture.requestedAt.UTC()
 	if requestedAt.IsZero() {
 		requestedAt = marker.startedAt.UTC()
