@@ -1651,6 +1651,16 @@ function renderChartByID(id){
   else if(id==='efficiency-chart')renderEfficiencyChart();
 }
 function activeChartIndex(id,count){return chartActive.id===id&&chartActive.index>=0&&chartActive.index<count?chartActive.index:-1}
+function chartItemKey(id,item){return id==='model-chart'?item&&item.model:item&&item.point&&item.point.time}
+function remapChartActive(id,items){
+  if(chartActive.id!==id)return-1;
+  if(chartActive.key!==null&&chartActive.key!==undefined){
+    const index=items.findIndex(item=>chartItemKey(id,item)===chartActive.key);
+    if(index<0){clearChartActive(false);return-1}
+    chartActive.index=index;
+  }
+  return activeChartIndex(id,items.length);
+}
 function setChartInteraction(id,interaction){
   chartInteractions.set(id,interaction);
   if(chartActive.id===id&&chartActive.index>=interaction.items.length){chartActive.id='';chartActive.index=-1;chartActive.anchor=null;chartActive.key=null;chartTooltipEl.hidden=true}
@@ -1672,7 +1682,7 @@ function setChartActive(id,index,anchor){
   const interaction=chartInteractions.get(id);
   if(!interaction||index<0||index>=interaction.items.length){clearChartActive();return}
   const item=interaction.items[index],previous=chartActive.id,changed=previous!==id||chartActive.index!==index;
-  chartActive.id=id;chartActive.index=index;chartActive.anchor=anchor||null;chartActive.key=id==='model-chart'?item.model:null;
+  chartActive.id=id;chartActive.index=index;chartActive.anchor=anchor||null;chartActive.key=chartItemKey(id,item);
   if(changed){if(previous&&previous!==id)renderChartByID(previous);renderChartByID(id)}
   showChartTooltip();
 }
@@ -1728,8 +1738,8 @@ function renderTokenChart(){
   if(!points.length){clearChartInteraction('token-chart');drawEmptyChart(chart,'No token usage in this range.');return}
   if(!definitions.length){clearChartInteraction('token-chart');drawEmptyChart(chart,'All token series are hidden.');return}
   const total=point=>definitions.reduce((sum,item)=>sum+tokenChartValue(point,item,definitions),0),max=Math.max(1,...points.map(total));
+  const slot=chart.plotWidth/points.length,barWidth=Math.max(3,Math.min(30,slot*.65)),items=points.map((point,index)=>({point,anchor:{x:chart.left+slot*(index+.5),y:chart.top+10}})),active=remapChartActive('token-chart',items);
   drawGrid(chart,max);
-  const slot=chart.plotWidth/points.length,barWidth=Math.max(3,Math.min(30,slot*.65)),active=activeChartIndex('token-chart',points.length);
   if(active>=0){chart.context.save();chart.context.globalAlpha=.1;chart.context.fillStyle=chartColor('--blue');chart.context.fillRect(chart.left+slot*active,chart.top,slot,chart.plotHeight);chart.context.restore()}
   points.forEach((point,index)=>{
     let bottom=chart.top+chart.plotHeight;
@@ -1741,7 +1751,6 @@ function renderTokenChart(){
     if(index===active&&total(point)>0){const height=total(point)/max*chart.plotHeight;chart.context.strokeStyle=chartColor('--blue');chart.context.lineWidth=1.5;chart.context.strokeRect(chart.left+slot*index+(slot-barWidth)/2-2,chart.top+chart.plotHeight-height-2,barWidth+4,height+4)}
   });
   drawXLabels(chart,points);
-  const items=points.map((point,index)=>({point,anchor:{x:chart.left+slot*(index+.5),y:chart.top+10}}));
   setChartInteraction('token-chart',{canvas:chart.canvas,width:chart.width,height:chart.height,items,hitTest:(x,y)=>x>=chart.left&&x<=chart.left+chart.plotWidth&&y>=chart.top&&y<=chart.top+chart.plotHeight+18?Math.min(points.length-1,Math.floor((x-chart.left)/slot)):-1,describe:item=>({title:chartBucketTitle(item.point.time),rows:[...definitions.map(definition=>({label:definition.label,value:formatNumber(tokenChartValue(item.point,definition,definitions)),color:definition.color})),{label:'Visible total',value:formatNumber(total(item.point))},{label:'Requests',value:formatNumber(item.point.requests)},{label:'Estimated cost',value:formatUSD(item.point.cost_usd)}]})});
 }
 function linePointX(chart,count,index){return chart.left+chart.plotWidth*(count===1?.5:index/(count-1))}
@@ -1765,11 +1774,9 @@ function lineHitIndex(chart,count,x,y){
 function renderCostChart(){
   const chart=prepareChart('cost-chart'),points=visibleChartPoints('cost');
   if(!points.length){clearChartInteraction('cost-chart');drawEmptyChart(chart,'No cost data in this range.');return}
-  const value=point=>Number(point.cost_usd||0),max=Math.max(.000001,...points.map(value));
+  const value=point=>Number(point.cost_usd||0),max=Math.max(.000001,...points.map(value)),items=points.map((point,index)=>({point,anchor:{x:linePointX(chart,points.length,index),y:chart.top+chart.plotHeight-value(point)/max*chart.plotHeight}})),active=remapChartActive('cost-chart',items);
   drawGrid(chart,max,item=>formatUSD(item));drawLine(chart,points,value,chartColor('--chart-cost'),max);drawXLabels(chart,points,false);
-  const active=activeChartIndex('cost-chart',points.length);
   if(active>=0){const x=linePointX(chart,points.length,active),y=chart.top+chart.plotHeight-value(points[active])/max*chart.plotHeight;drawActiveLineGuide(chart,x,[{y,color:chartColor('--chart-cost')}])}
-  const items=points.map((point,index)=>({point,anchor:{x:linePointX(chart,points.length,index),y:chart.top+chart.plotHeight-value(point)/max*chart.plotHeight}}));
   setChartInteraction('cost-chart',{canvas:chart.canvas,width:chart.width,height:chart.height,items,hitTest:(x,y)=>lineHitIndex(chart,points.length,x,y),describe:item=>({title:chartBucketTitle(item.point.time),rows:[{label:'Estimated cost',value:formatUSD(item.point.cost_usd),color:'--chart-cost'},{label:'Requests',value:formatNumber(item.point.requests)}]})});
 }
 function renderEfficiencyChart(){
@@ -1777,11 +1784,10 @@ function renderEfficiencyChart(){
   if(!points.length){clearChartInteraction('efficiency-chart');drawEmptyChart(chart,'No timing data in this range.');return}
   const latency=point=>Number(point.average_latency_ns||0)/1e6,ttft=point=>Number(point.average_ttft_ns||0)/1e6,tps=point=>Number(point.average_tps||0);
   const timingMax=Math.max(1,...points.map(point=>Math.max(latency(point),ttft(point)))),tpsMax=Math.max(1,...points.map(tps)),scaledTPS=point=>tps(point)*timingMax/tpsMax;
+  const items=points.map((point,index)=>({point,anchor:{x:linePointX(chart,points.length,index),y:chart.top+10}})),active=remapChartActive('efficiency-chart',items);
   drawGrid(chart,timingMax,value=>value>=1000?(value/1000).toFixed(1)+'s':Math.round(value)+'ms',ratio=>(tpsMax*ratio).toFixed(0));
   drawLine(chart,points,latency,chartColor('--chart-input'),timingMax);drawLine(chart,points,ttft,chartColor('--chart-cache'),timingMax);drawLine(chart,points,scaledTPS,chartColor('--chart-output'),timingMax);drawXLabels(chart,points,false);
-  const active=activeChartIndex('efficiency-chart',points.length);
   if(active>=0){const point=points[active],x=linePointX(chart,points.length,active),toY=value=>chart.top+chart.plotHeight-value/timingMax*chart.plotHeight;drawActiveLineGuide(chart,x,[{y:toY(latency(point)),color:chartColor('--chart-input')},{y:toY(ttft(point)),color:chartColor('--chart-cache')},{y:toY(scaledTPS(point)),color:chartColor('--chart-output')}])}
-  const items=points.map((point,index)=>({point,anchor:{x:linePointX(chart,points.length,index),y:chart.top+10}}));
   setChartInteraction('efficiency-chart',{canvas:chart.canvas,width:chart.width,height:chart.height,items,hitTest:(x,y)=>lineHitIndex(chart,points.length,x,y),describe:item=>({title:chartBucketTitle(item.point.time),rows:[{label:'Avg latency',value:formatDuration(item.point.average_latency_ns),color:'--chart-input'},{label:'Avg TTFT',value:formatDuration(item.point.average_ttft_ns),color:'--chart-cache'},{label:'Tokens/sec',value:formatTPS(item.point.average_tps),color:'--chart-output'},{label:'Requests',value:formatNumber(item.point.requests)}]})});
 }
 function setProviderModelFilter(model){
@@ -1818,18 +1824,12 @@ function renderModelLegend(items,total,focusedModel=''){
   legend.querySelectorAll('[data-model-index]').forEach(entry=>{const index=Number(entry.dataset.modelIndex),item=items[index];entry.classList.toggle('is-active',activeChartIndex('model-chart',items.length)===index);if(item&&item.filterable)entry.setAttribute('aria-pressed',String(usageState.providerModel===item.model))});
 }
 function renderModelChart(){
-  const previousInteraction=chartInteractions.get('model-chart'),previousItem=chartActive.id==='model-chart'&&previousInteraction?previousInteraction.items[chartActive.index]:null,activeModel=previousItem&&previousItem.model||'',focusedEntry=document.activeElement&&document.activeElement.closest('#model-legend [data-model-index]'),focusedModel=focusedEntry&&previousInteraction?((previousInteraction.items[Number(focusedEntry.dataset.modelIndex)]||{}).model||''):'',chart=prepareChart('model-chart'),source=(usageState.overview&&usageState.overview.provider_models||[]).filter(item=>Number(item.requests||0)>0).sort((left,right)=>Number(right.requests||0)-Number(left.requests||0)),legend=document.getElementById('model-legend');
+  const previousInteraction=chartInteractions.get('model-chart'),focusedEntry=document.activeElement&&document.activeElement.closest('#model-legend [data-model-index]'),focusedModel=focusedEntry&&previousInteraction?((previousInteraction.items[Number(focusedEntry.dataset.modelIndex)]||{}).model||''):'',chart=prepareChart('model-chart'),source=(usageState.overview&&usageState.overview.provider_models||[]).filter(item=>Number(item.requests||0)>0).sort((left,right)=>Number(right.requests||0)-Number(left.requests||0)),legend=document.getElementById('model-legend');
   if(!source.length){clearChartInteraction('model-chart');drawEmptyChart(chart,'No provider model requests.');legend.replaceChildren();legend.dataset.signature='';return}
   const palette=['#2d6cdf','#24836b','#a96708','#8657c8','#b83b43','#47a7dc','#70a84f','#b88755'];
   const items=source.slice(0,7).map((item,index)=>({model:item.model,requests:Number(item.requests||0),total_tokens:Number(item.total_tokens||0),cost_usd:Number(item.cost_usd||0),filterable:true,color:palette[index%palette.length]}));
   if(source.length>7){const rest=source.slice(7);items.push({model:'Other',requests:rest.reduce((sum,item)=>sum+Number(item.requests||0),0),total_tokens:rest.reduce((sum,item)=>sum+Number(item.total_tokens||0),0),cost_usd:rest.reduce((sum,item)=>sum+Number(item.cost_usd||0),0),filterable:false,color:palette[7%palette.length]})}
-  const total=items.reduce((sum,item)=>sum+item.requests,0),context=chart.context,cx=chart.width/2,cy=chart.height/2-4,radius=Math.min(chart.width,chart.height)*.31,lineWidth=Math.max(22,radius*.28);
-  if(activeModel){
-    const nextIndex=items.findIndex(item=>item.model===activeModel);
-    if(nextIndex<0)clearChartActive(false);
-    else{chartActive.index=nextIndex;chartActive.key=activeModel}
-  }
-  const remappedActive=activeChartIndex('model-chart',items.length);
+  const total=items.reduce((sum,item)=>sum+item.requests,0),context=chart.context,cx=chart.width/2,cy=chart.height/2-4,radius=Math.min(chart.width,chart.height)*.31,lineWidth=Math.max(22,radius*.28),remappedActive=remapChartActive('model-chart',items);
   context.lineWidth=lineWidth;context.strokeStyle=chartColor('--surface-soft');context.beginPath();context.arc(cx,cy,radius,0,Math.PI*2);context.stroke();
   let angle=-Math.PI/2;
   items.forEach((item,index)=>{item.start=angle;item.end=angle+item.requests/total*Math.PI*2;item.anchor={x:cx+Math.cos((item.start+item.end)/2)*radius,y:cy+Math.sin((item.start+item.end)/2)*radius};context.save();if((remappedActive>=0&&remappedActive!==index)||(usageState.providerModel&&usageState.providerModel!==item.model))context.globalAlpha=.28;context.lineWidth=index===remappedActive||usageState.providerModel===item.model?lineWidth+5:lineWidth;context.strokeStyle=item.color;context.beginPath();context.arc(cx,cy,radius,item.start,item.end);context.stroke();context.restore();angle=item.end});

@@ -162,8 +162,9 @@ func TestModelRouterManagementDashboardReusesCPAMCSessionAndTheme(t *testing.T) 
 		"if(dialogGeneration!==usageState.pricingDialogGeneration)return",
 		"if(dialogGeneration===usageState.pricingDialogGeneration&&pricingDialogEl.open)",
 		"const chartActive={id:'',index:-1,anchor:null,key:null}",
+		"function chartItemKey(id,item)",
+		"function remapChartActive(id,items)",
 		"focusedModel",
-		"chartActive.key=activeModel",
 		"if(entry)entry.focus()",
 	} {
 		if !strings.Contains(page, required) {
