@@ -31,6 +31,7 @@ func (store *usageStore) Overview(filter usageFilter, granularity string) (usage
 	providerModels := make(map[string]*usageModelStats)
 	sources := make(map[string]struct{})
 	serviceTiers := make(map[string]struct{})
+	results := make(map[string]struct{})
 	for _, record := range records {
 		overview.Summary.add(record)
 		cost := estimateUsageCost(record, resolver)
@@ -82,6 +83,7 @@ func (store *usageStore) Overview(filter usageFilter, granularity string) (usage
 		if record.ServiceTier != "" {
 			serviceTiers[record.ServiceTier] = struct{}{}
 		}
+		results[record.result()] = struct{}{}
 	}
 	for _, point := range series {
 		if point.Requests > 0 {
@@ -98,6 +100,7 @@ func (store *usageStore) Overview(filter usageFilter, granularity string) (usage
 	overview.ProviderModels = modelStatsValues(providerModels)
 	overview.Sources = sortedStrings(sources)
 	overview.ServiceTiers = sortedStrings(serviceTiers)
+	overview.Results = sortedStrings(results)
 	return overview, nil
 }
 

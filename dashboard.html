@@ -1352,8 +1352,7 @@ function renderUsageFilterOptions(){
   mergeSelectOptions(usageProviderModelEl,(overview.provider_models||[]).map(item=>({value:item.model,label:item.model})),'All provider models',usageState.providerModel);
   mergeSelectOptions(usageSourceEl,(overview.sources||[]).map(value=>({value,label:value})),'All sources',usageState.source);
   mergeSelectOptions(usageServiceTierEl,(overview.service_tiers||[]).map(value=>({value,label:value})),'All service tiers',usageState.serviceTier);
-  const results=[];
-  for(const item of usageState.requestPage&&usageState.requestPage.items||[]){if(item.result)results.push({value:item.result,label:resultDisplay(item.result)})}
+  const results=(overview.results||[]).map(value=>({value,label:resultDisplay(value)}));
   mergeSelectOptions(usageResultEl,results,'All results',usageState.result);
 }
 function visibleColumns(definitions,hidden){return definitions.filter(column=>!hidden.has(column.key))}

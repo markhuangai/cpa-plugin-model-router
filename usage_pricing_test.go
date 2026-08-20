@@ -62,6 +62,16 @@ func TestNormalizeModelPricesRejectsNormalizedDuplicateNames(t *testing.T) {
 	}
 }
 
+func TestNormalizeModelPriceRejectsNormalizedDuplicateServiceTiers(t *testing.T) {
+	price := modelPrice{ServiceTiers: map[string]serviceTierPrice{
+		"Priority": {},
+		"priority": {},
+	}}
+	if _, err := normalizeModelPrice("gpt-5", price, time.Now().UTC()); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("normalizeModelPrice() error = %v", err)
+	}
+}
+
 func TestPriceBookRevisionAndManualSyncPrecedence(t *testing.T) {
 	store, err := openUsageStore(t.TempDir()+"/usage.db", 365)
 	if err != nil {

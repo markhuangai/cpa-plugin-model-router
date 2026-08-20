@@ -187,6 +187,7 @@ type usageOverview struct {
 	ProviderModels []usageModelStats  `json:"provider_models"`
 	Sources        []string           `json:"sources"`
 	ServiceTiers   []string           `json:"service_tiers"`
+	Results        []string           `json:"results"`
 	StorageError   string             `json:"storage_error,omitempty"`
 }
 

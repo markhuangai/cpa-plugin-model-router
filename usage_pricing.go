@@ -205,11 +205,16 @@ func normalizeModelPrice(model string, price modelPrice, now time.Time) (modelPr
 		return modelPrice{}, fmt.Errorf("model price %q has more than %d service tiers", model, maxServiceTierPrices)
 	}
 	serviceTiers := make(map[string]serviceTierPrice, len(price.ServiceTiers))
+	serviceTierNames := make(map[string]string, len(price.ServiceTiers))
 	for rawTier, schedule := range price.ServiceTiers {
 		tier := strings.ToLower(strings.TrimSpace(rawTier))
 		if tier == "" || utf8.RuneCountInString(tier) > 128 {
 			return modelPrice{}, fmt.Errorf("model price %q has an invalid service tier", model)
 		}
+		if previous, exists := serviceTierNames[tier]; exists {
+			return modelPrice{}, fmt.Errorf("model price %q service tiers %q and %q are duplicates after normalization", model, previous, rawTier)
+		}
+		serviceTierNames[tier] = rawTier
 		if err := validateRates(model+" service tier "+tier, schedule.tokenRates); err != nil {
 			return modelPrice{}, err
 		}

@@ -89,3 +89,40 @@ func TestUsageManagementRejectsBadQueriesBodiesAndMethods(t *testing.T) {
 		t.Fatalf("method status = %d body %s", response.StatusCode, response.Body)
 	}
 }
+
+func TestUsageOverviewListsResultsOutsideRequestPage(t *testing.T) {
+	store, err := openUsageStore(filepath.Join(t.TempDir(), "usage.db"), 365)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC()
+	for _, record := range []storedUsageRecord{
+		{RequestedAt: now.Add(-time.Minute), Attribution: attributionDirect, ProviderModel: "model", Failed: true, StatusCode: http.StatusTooManyRequests},
+		{RequestedAt: now, Attribution: attributionDirect, ProviderModel: "model"},
+	} {
+		if err := store.Record(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plugin := &modelRouterPlugin{store: store, attribution: newAttributionTracker(nil)}
+	query := url.Values{
+		"from":  {now.Add(-time.Hour).Format(time.RFC3339)},
+		"to":    {now.Add(time.Hour).Format(time.RFC3339)},
+		"limit": {"1"},
+	}
+	requests := handleModelRouterManagement(plugin, pluginapi.ManagementRequest{Method: http.MethodGet, Path: modelRouterUsageBasePath + "/requests", Query: query})
+	if !strings.Contains(string(requests.Body), `"result":"success"`) || strings.Contains(string(requests.Body), `"result":"http_429"`) {
+		t.Fatalf("first request page = %s", requests.Body)
+	}
+	overview := handleModelRouterManagement(plugin, pluginapi.ManagementRequest{Method: http.MethodGet, Path: modelRouterUsageBasePath + "/overview", Query: query})
+	var body struct {
+		Results []string `json:"results"`
+	}
+	if err := json.Unmarshal(overview.Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(body.Results, ",") != "http_429,success" {
+		t.Fatalf("overview results = %#v", body.Results)
+	}
+}
