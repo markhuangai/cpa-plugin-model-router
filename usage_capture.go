@@ -282,7 +282,7 @@ func parseUsagePayload(payload []byte) (pluginapi.UsageDetail, string, usagePayl
 		cacheRead = cached
 	}
 	if cached == 0 {
-		cached = firstPositiveToken(cacheRead, cacheCreation)
+		cached = cacheRead
 	}
 	detail := pluginapi.UsageDetail{
 		InputTokens:         input,
@@ -468,15 +468,6 @@ func saturatingTokenSum(values ...int64) int64 {
 		total += value
 	}
 	return total
-}
-
-func firstPositiveToken(values ...int64) int64 {
-	for _, value := range values {
-		if value > 0 {
-			return value
-		}
-	}
-	return 0
 }
 
 func hasUsageTokens(detail pluginapi.UsageDetail) bool {

@@ -33,6 +33,11 @@ func TestParseUsagePayloadProtocols(t *testing.T) {
 			want: pluginapi.UsageDetail{InputTokens: 5, OutputTokens: 4, CachedTokens: 3, CacheReadTokens: 3, CacheCreationTokens: 2, TotalTokens: 14},
 		},
 		{
+			name: "claude cache creation only",
+			body: `{"usage":{"input_tokens":5,"cache_creation_input_tokens":2}}`,
+			want: pluginapi.UsageDetail{InputTokens: 5, CacheCreationTokens: 2, TotalTokens: 7},
+		},
+		{
 			name: "gemini",
 			body: `{"usageMetadata":{"promptTokenCount":5,"toolUsePromptTokenCount":2,"candidatesTokenCount":4,"thoughtsTokenCount":3,"cachedContentTokenCount":1,"totalTokenCount":14}}`,
 			want: pluginapi.UsageDetail{InputTokens: 7, OutputTokens: 4, ReasoningTokens: 3, CachedTokens: 1, CacheReadTokens: 1, TotalTokens: 14},
