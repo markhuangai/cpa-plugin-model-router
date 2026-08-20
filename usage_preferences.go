@@ -8,7 +8,7 @@ import (
 
 const maxDashboardPageSize = 500
 
-var defaultHiddenGroupColumns = []string{"provider", "result", "service_tier", "source"}
+var defaultHiddenGroupColumns = []string{"provider", "result", "router_model", "service_tier", "source"}
 
 type dashboardPreferences struct {
 	RequestPageSize      int      `json:"request_page_size"`
@@ -29,8 +29,8 @@ type dashboardPreferences struct {
 
 func defaultDashboardPreferences() dashboardPreferences {
 	return dashboardPreferences{
-		RequestPageSize:    100,
-		GroupPageSize:      100,
+		RequestPageSize:    50,
+		GroupPageSize:      50,
 		HiddenGroupColumns: append([]string(nil), defaultHiddenGroupColumns...),
 		TimeRange:          "24h",
 		Granularity:        "hour",

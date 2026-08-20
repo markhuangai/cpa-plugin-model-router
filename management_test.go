@@ -111,7 +111,7 @@ func TestModelRouterManagementDashboardReusesCPAMCSessionAndTheme(t *testing.T) 
 		"requestManagementJSON(freshManagementURL(USAGE_API+'/prices'),{cache:'no-store'})",
 		"const ROUTER_FILTER_MODEL_PREFIX='model:'",
 		"const ROUTER_FILTER_ATTRIBUTION_PREFIX='attribution:'",
-		"const DEFAULT_HIDDEN_GROUP_COLUMNS=['provider','result','service_tier','source']",
+		"const DEFAULT_HIDDEN_GROUP_COLUMNS=['provider','result','router_model','service_tier','source']",
 		"['attribution',usageState.attribution]",
 		"@media (max-width: 920px) {",
 		".price-grid .price-model-field { grid-column: 1 / -1; }",

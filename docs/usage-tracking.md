@@ -185,9 +185,9 @@ AND the document is visible
 AND no newer refresh has replaced the timer
 ```
 
-Leaving the tab or hiding the document stops the timer and aborts the active request. Returning starts one fresh request set. Dashboard preferences are saved to bbolt after a short debounce. Provider, Source, Service tier, and Result are hidden by default in Usage breakdown; every column checkbox change updates `hidden_group_columns`. Existing saved selections, including an empty hidden list, remain authoritative. Request-detail columns keep their existing defaults.
+Leaving the tab or hiding the document stops the timer and aborts the active request. Returning starts one fresh request set. Dashboard preferences are saved to bbolt after a short debounce. Both tables default to 50 rows. Router model, Provider, Source, Service tier, and Result are hidden by default in Usage breakdown; every column checkbox change updates `hidden_group_columns`. Existing saved selections, including an empty hidden list or a saved page size, remain authoritative. Request-detail columns keep their existing defaults.
 
-The page follows CPAMC light, white, and dark themes, redraws canvas charts after theme changes, supports keyboard tab and chart navigation, exposes visible focus states, fits metric values without ellipses, and collapses controls and charts for mobile widths. Successful request results use green pills. Saving valid model pricing closes the modal after the persisted price book is applied; validation or request failures leave it open.
+The page follows CPAMC light, white, and dark themes, redraws canvas charts after theme changes, supports keyboard tab and chart navigation, exposes visible focus states, fits metric values without ellipses, and collapses controls and charts for mobile widths. Token trends use packet-style columns, cost and efficiency use halo lines, and provider share uses a gapped donut. Hover and keyboard focus share the same active treatment: packet buckets widen and gain a marker, lines gain a guide and enlarged halo markers, and donut segments lift while peers dim. Successful request results use green pills. Saving valid model pricing closes the modal after the persisted price book is applied; validation or request failures leave it open.
 
 ## Management API
 
