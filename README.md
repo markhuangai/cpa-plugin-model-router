@@ -39,7 +39,7 @@ plugins:
     model-router:
       enabled: true
       priority: 100
-      data_path: "/var/lib/cliproxyapi/model-router-usage.db"
+      data_path: "/CLIProxyAPI/plugins/model-router.db"
       retention_days: 365
       routes:
         - alias: auto
@@ -64,10 +64,12 @@ Only two usage-storage settings are supported:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `data_path` | CPA `data/model-router-usage.db` | Dedicated bbolt database path. Explicit relative paths resolve from the CPA process working directory. |
+| `data_path` | CPA `plugins/model-router.db` | Dedicated bbolt database path. Explicit relative paths resolve from the CPA process working directory. |
 | `retention_days` | `365` | UTC days of request details and aggregates to retain, from 1 through 3650. |
 
-When `data_path` is omitted, the plugin locates the CPA root from the loaded library, then the CPA executable, then the current working directory. It stores the database under that root's `data` directory and falls back to `./data/model-router-usage.db` only when no CPA layout can be identified. For containers, set an absolute `data_path` inside a mounted persistent volume; a writable container layer does not survive container replacement.
+When `data_path` is omitted, the plugin locates the CPA root from the loaded library, then the CPA executable, then the current working directory. It stores the database at `<CPA root>/plugins/model-router.db`; outside a detected CPA layout it uses `<working directory>/plugins/model-router.db`. The plugins directory must be writable and persistently mounted. Use an explicit absolute `data_path` when the plugin directory is read-only or stored on a disposable container layer.
+
+Version 0.3.1 does not look for or migrate the former omitted-path default at `<CPA root>/data/model-router-usage.db`. To keep using that database, set its path explicitly before upgrading. The file is bbolt data despite the `.db` extension; it is not SQLite.
 
 Every completed attempt is committed synchronously. Usage history, prices, and dashboard preferences therefore survive a normal CPA restart when the same database file remains mounted and writable. Retention deletes expired records and lets bbolt reuse their pages, but it does not guarantee that the file shrinks on disk. High-volume installations should monitor the database file and choose retention based on request rate and available storage.
 
@@ -89,7 +91,7 @@ The dashboard HTML is a public plugin resource so CPA can embed it in the fronte
 
 Usage tracking records one row for every physical routed attempt, including failed attempts before failover, and one row for direct provider requests. A routed row keeps the client-visible router alias in `router_model` and the physical CPA target in `provider_model`; direct rows have no router alias. This separation is used consistently in filters, summaries, grouped results, and request details.
 
-The dashboard provides preset or custom time ranges, minute/hour/day trends, router/provider/source/tier/result filters, USD cost estimates, configurable columns, server-side sorting and pagination, and model pricing with optional models.dev synchronization. Manual prices take precedence over synchronized catalog prices. Pricing units are USD per one million tokens; context tiers, service tiers, and cache accounting modes are supported.
+The dashboard provides preset or custom time ranges, minute/hour/day trends, router/provider/source/tier/result filters, USD cost estimates, configurable columns, server-side sorting and pagination, and model pricing with optional models.dev synchronization. Chart tooltips work with pointer hover or keyboard focus, and provider-share segments and legend entries can toggle the provider-model filter. Provider, Source, Service tier, and Result start hidden in Usage breakdown; checkbox choices are saved in the database. Manual prices take precedence over synchronized catalog prices, and the pricing dialog closes after a successful save. Pricing units are USD per one million tokens; context tiers, service tiers, and cache accounting modes are supported.
 
 Refreshes keep the previous dashboard visible while three fenced requests load in parallel. Starting a newer refresh aborts the older one, and only the newest generation may update the page. Automatic refresh runs every 15 seconds only while Usage tracking is selected and the document is visible. Reset deletes request history and aggregates but preserves prices and dashboard preferences.
 
@@ -243,14 +245,14 @@ The database is not encrypted by the plugin. Protect the configured path with fi
 
 ## Publishing And Plugin Store Registration
 
-The release workflow accepts tags such as `v0.2.2` and builds these CPA Plugin Store assets:
+The release workflow accepts tags such as `v0.3.1` and builds these CPA Plugin Store assets:
 
 ```text
-model-router_0.2.2_linux_amd64.zip
-model-router_0.2.2_linux_arm64.zip
-model-router_0.2.2_darwin_amd64.zip
-model-router_0.2.2_darwin_arm64.zip
-model-router_0.2.2_windows_amd64.zip
+model-router_0.3.1_linux_amd64.zip
+model-router_0.3.1_linux_arm64.zip
+model-router_0.3.1_darwin_amd64.zip
+model-router_0.3.1_darwin_arm64.zip
+model-router_0.3.1_windows_amd64.zip
 checksums.txt
 ```
 

@@ -20,6 +20,7 @@
   --amber: #a96708;
   --amber-soft: color-mix(in srgb, var(--amber) 10%, var(--paper));
   --teal: #24836b;
+  --teal-soft: color-mix(in srgb, var(--teal) 11%, var(--paper));
   --danger: #b83b43;
   --toggle-off: #aebdc6;
   --toggle-knob: #fff;
@@ -391,8 +392,9 @@ input[type="text"], input[type="number"], input[type="password"], select {
 .metric-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
 .metric-card { min-width: 0; padding: 15px; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; }
 .metric-label { display: block; color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; }
-.metric-value { display: block; overflow: hidden; margin-top: 8px; font: 750 clamp(20px, 2.5vw, 30px)/1.05 "Cascadia Code", "SFMono-Regular", ui-monospace, monospace; letter-spacing: -.04em; text-overflow: ellipsis; white-space: nowrap; }
-.metric-detail { display: block; overflow: hidden; margin-top: 6px; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.metric-value { display: block; margin-top: 8px; font: 750 clamp(20px, 2.5vw, 30px)/1.05 "Cascadia Code", "SFMono-Regular", ui-monospace, monospace; letter-spacing: -.04em; white-space: nowrap; }
+.metric-value.metric-value-wrap { line-height: 1.15; overflow-wrap: anywhere; white-space: normal; }
+.metric-detail { display: block; margin-top: 6px; color: var(--muted); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
 .chart-grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(290px, .85fr); gap: 12px; margin-top: 12px; }
 .chart-card { min-width: 0; padding: 15px; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; }
 .chart-card header { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 12px; }
@@ -400,7 +402,8 @@ input[type="text"], input[type="number"], input[type="password"], select {
 .chart-card p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
 .chart-tools { display: flex; gap: 4px; }
 .chart-tools button { min-width: 30px; padding: 5px 7px; }
-.chart-canvas { display: block; width: 100%; height: 260px; }
+.chart-canvas { display: block; width: 100%; height: 260px; border-radius: 6px; cursor: crosshair; }
+.chart-canvas:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 24%, transparent); }
 .chart-card.compact .chart-canvas { height: 260px; }
 .chart-legend { display: flex; flex-wrap: wrap; gap: 8px 13px; margin-top: 9px; color: var(--muted); font-size: 11px; }
 .legend-item { display: inline-flex; gap: 5px; align-items: center; }
@@ -414,6 +417,18 @@ input[type="text"], input[type="number"], input[type="password"], select {
 .legend-toggle:hover { color: var(--ink); background: var(--surface-soft); }
 .legend-toggle[aria-pressed="false"] { opacity: .48; }
 .legend-toggle[aria-pressed="false"] .legend-swatch { background: transparent; border: 1px solid currentColor; }
+.model-legend-entry { display: inline-flex; gap: 5px; align-items: center; min-width: 0; padding: 3px 6px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 99px; font-size: 11px; }
+button.model-legend-entry:hover, button.model-legend-entry:focus-visible, .model-legend-entry.is-active { color: var(--ink); background: var(--surface-soft); border-color: var(--line); }
+button.model-legend-entry[aria-pressed="true"] { color: var(--blue); border-color: var(--blue-border); }
+.model-legend-entry .legend-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chart-tooltip { position: fixed; z-index: 30; display: grid; gap: 7px; width: max-content; min-width: 190px; max-width: min(310px, calc(100vw - 16px)); padding: 10px 11px; color: var(--ink); background: var(--paper); border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: var(--shadow); pointer-events: none; }
+.chart-tooltip[hidden] { display: none; }
+.chart-tooltip-title { max-width: 280px; overflow-wrap: anywhere; font: 750 11px/1.35 "Cascadia Code", "SFMono-Regular", ui-monospace, monospace; }
+.chart-tooltip-rows { display: grid; gap: 4px; }
+.chart-tooltip-row { display: grid; grid-template-columns: auto minmax(70px, 1fr) auto; gap: 6px; align-items: center; font-size: 11px; }
+.chart-tooltip-swatch { width: 7px; height: 7px; background: transparent; border-radius: 2px; }
+.chart-tooltip-label { color: var(--muted); }
+.chart-tooltip-value { font: 700 11px/1.3 "Cascadia Code", "SFMono-Regular", ui-monospace, monospace; text-align: right; }
 .usage-section { margin-top: 12px; padding: 15px; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; }
 .usage-section-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 11px; }
 .usage-section-title h3 { margin: 0; font-size: 16px; }
@@ -430,6 +445,7 @@ input[type="text"], input[type="number"], input[type="password"], select {
 .sort-button { display: inline-flex; gap: 5px; align-items: center; padding: 0; color: inherit; font: inherit; font-weight: inherit; letter-spacing: inherit; text-transform: inherit; background: transparent; border: 0; }
 .sort-button:hover { color: var(--ink); }
 .status-pill { display: inline-block; padding: 3px 7px; font-size: 10px; font-weight: 750; border-radius: 99px; background: var(--surface-soft); }
+.status-pill.success { color: var(--teal); background: var(--teal-soft); }
 .status-pill.failure { color: var(--danger); background: var(--danger-soft); }
 .pagination { display: flex; justify-content: flex-end; gap: 8px; align-items: center; margin-top: 10px; color: var(--muted); font-size: 11px; }
 .pagination button { padding: 6px 9px; }
@@ -644,7 +660,7 @@ dialog::backdrop { background: rgba(10, 18, 25, .46); backdrop-filter: blur(2px)
       <div class="chart-grid">
         <section class="chart-card">
           <header><div><h3>Token trend</h3><p>Input, output, cache read, and reasoning by time bucket.</p></div><div class="chart-tools"><button class="secondary" type="button" data-chart="tokens" data-zoom="out" aria-label="Zoom token trend out">−</button><button class="secondary" type="button" data-chart="tokens" data-zoom="reset" aria-label="Reset token trend zoom">1:1</button><button class="secondary" type="button" data-chart="tokens" data-zoom="in" aria-label="Zoom token trend in">+</button></div></header>
-          <canvas id="token-chart" class="chart-canvas" role="img" aria-label="Stacked token usage over time"></canvas>
+          <canvas id="token-chart" class="chart-canvas" role="img" aria-label="Stacked token usage over time. Focus and use arrow keys to inspect buckets." aria-describedby="chart-tooltip" tabindex="0"></canvas>
           <div id="token-legend" class="chart-legend">
             <button class="legend-toggle" type="button" data-token-series="input" aria-pressed="true"><span class="legend-swatch" data-color="input"></span>Input</button>
             <button class="legend-toggle" type="button" data-token-series="output" aria-pressed="true"><span class="legend-swatch" data-color="output"></span>Output</button>
@@ -652,18 +668,18 @@ dialog::backdrop { background: rgba(10, 18, 25, .46); backdrop-filter: blur(2px)
             <button class="legend-toggle" type="button" data-token-series="reasoning" aria-pressed="true"><span class="legend-swatch" data-color="reasoning"></span>Reasoning</button>
           </div>
         </section>
-        <section class="chart-card compact"><header><div><h3>Provider model share</h3><p>Request volume by physical provider model.</p></div></header><canvas id="model-chart" class="chart-canvas" role="img" aria-label="Provider model request share"></canvas><div id="model-legend" class="chart-legend"></div></section>
+        <section class="chart-card compact"><header><div><h3>Provider model share</h3><p>Request volume by physical provider model.</p></div></header><canvas id="model-chart" class="chart-canvas" role="img" aria-label="Provider model request share. Focus and use arrow keys to inspect models; press Enter to filter." aria-describedby="chart-tooltip" tabindex="0"></canvas><div id="model-legend" class="chart-legend"></div></section>
       </div>
 
       <div class="chart-grid">
         <section class="chart-card">
           <header><div><h3>Cost trend</h3><p>Estimated USD cost using the active price book.</p></div><div class="chart-tools"><button class="secondary" type="button" data-chart="cost" data-zoom="out" aria-label="Zoom cost trend out">−</button><button class="secondary" type="button" data-chart="cost" data-zoom="reset" aria-label="Reset cost trend zoom">1:1</button><button class="secondary" type="button" data-chart="cost" data-zoom="in" aria-label="Zoom cost trend in">+</button></div></header>
-          <canvas id="cost-chart" class="chart-canvas" role="img" aria-label="Estimated cost over time"></canvas>
+          <canvas id="cost-chart" class="chart-canvas" role="img" aria-label="Estimated cost over time. Focus and use arrow keys to inspect buckets." aria-describedby="chart-tooltip" tabindex="0"></canvas>
           <div class="chart-legend"><span class="legend-item"><span class="legend-swatch" data-color="cost"></span>Estimated USD</span></div>
         </section>
         <section class="chart-card compact">
           <header><div><h3>Efficiency</h3><p>Average latency, time to first token, and output throughput.</p></div><div class="chart-tools"><button class="secondary" type="button" data-chart="efficiency" data-zoom="out" aria-label="Zoom efficiency trend out">−</button><button class="secondary" type="button" data-chart="efficiency" data-zoom="reset" aria-label="Reset efficiency trend zoom">1:1</button><button class="secondary" type="button" data-chart="efficiency" data-zoom="in" aria-label="Zoom efficiency trend in">+</button></div></header>
-          <canvas id="efficiency-chart" class="chart-canvas" role="img" aria-label="Latency, time to first token, and tokens per second over time"></canvas>
+          <canvas id="efficiency-chart" class="chart-canvas" role="img" aria-label="Latency, time to first token, and tokens per second over time. Focus and use arrow keys to inspect buckets." aria-describedby="chart-tooltip" tabindex="0"></canvas>
           <div class="chart-legend"><span class="legend-item"><span class="legend-swatch" data-color="input"></span>Latency</span><span class="legend-item"><span class="legend-swatch" data-color="cache"></span>TTFT</span><span class="legend-item"><span class="legend-swatch" data-color="output"></span>Tokens/sec</span></div>
         </section>
       </div>
@@ -723,6 +739,7 @@ dialog::backdrop { background: rgba(10, 18, 25, .46); backdrop-filter: blur(2px)
 </dialog>
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
+<div id="chart-tooltip" class="chart-tooltip" role="tooltip" aria-live="polite" hidden></div>
 
 <template id="empty-template">
   <div class="empty">
@@ -795,6 +812,7 @@ const MODELS_API='/v1/models';
 const USAGE_API='/v0/management/plugins/model-router/usage';
 const ROUTER_FILTER_MODEL_PREFIX='model:';
 const ROUTER_FILTER_ATTRIBUTION_PREFIX='attribution:';
+const DEFAULT_HIDDEN_GROUP_COLUMNS=['provider','result','service_tier','source'];
 const CPA_STORAGE_PREFIX='enc::v1::';
 const CPA_STORAGE_SALT='cli-proxy-api-webui::secure-storage';
 const SESSION_KEY='cpa_model_router_key';
@@ -803,10 +821,10 @@ const REJECTED_AT='cpa_model_router_rejected_at';
 const state={enabled:true,priority:'0',routes:[],availableModels:[],catalogLoaded:false,catalogError:'',dirty:false,busy:false};
 const usageState={
   active:false,initialized:false,preferencesLoaded:false,loading:false,generation:0,controller:null,timer:0,preferenceTimer:0,preferenceSaveGeneration:0,preferenceSaveInFlight:false,preferenceSaveQueued:false,resizeTimer:0,
-  overview:null,groupPage:null,requestPage:null,range:'24h',granularity:'hour',customFrom:'',customTo:'',attribution:'',routerModel:'',providerModel:'',source:'',serviceTier:'',result:'',
+  overview:null,groupPage:null,requestPage:null,range:'24h',granularity:'hour',customFrom:'',customTo:'',attribution:'',routerModel:'',providerModel:'',source:'',serviceTier:'',result:'',pricingDialogGeneration:0,pricingWriteInFlight:null,
   group:{dimension:'provider_model',sort:'total_tokens',order:'desc',offset:0,limit:100},
   request:{sort:'time',order:'desc',offset:0,limit:100},
-  hiddenRequestColumns:new Set(),hiddenGroupColumns:new Set(),hiddenTokenSeries:new Set(),zoom:{tokens:1,cost:1,efficiency:1},priceBook:null,priceDraft:null,pricingSettingsDirty:false,priceCollectionDirty:false
+  hiddenRequestColumns:new Set(),hiddenGroupColumns:new Set(DEFAULT_HIDDEN_GROUP_COLUMNS),hiddenTokenSeries:new Set(),zoom:{tokens:1,cost:1,efficiency:1},priceBook:null,priceDraft:null,pricingSettingsDirty:false,priceCollectionDirty:false
 };
 const requestColumns=[
   {key:'time',label:'Time',sort:'time',text:true},{key:'router_model',label:'Router model',sort:'router_model',text:true},{key:'provider_model',label:'Provider model',sort:'provider_model',text:true},
@@ -857,7 +875,9 @@ const usageLiveEl=document.getElementById('usage-live');
 const usageRefreshEl=document.getElementById('usage-refresh');
 const pricingDialogEl=document.getElementById('pricing-dialog');
 const resetDialogEl=document.getElementById('reset-dialog');
+const chartTooltipEl=document.getElementById('chart-tooltip');
 let toastTimer=0;
+let metricFitFrame=0;
 
 function safeLocalStorage(){try{return window.localStorage}catch(_error){return null}}
 function safeSessionStorage(){try{return window.sessionStorage}catch(_error){return null}}
@@ -1084,7 +1104,7 @@ function activateTab(name,moveFocus=false){
   usagePanelEl.hidden=!usage;
   usageState.active=usage;
   if(usage)startUsageDashboard();
-  else stopUsagePolling();
+  else{clearChartActive(false);stopUsagePolling()}
 }
 function handleTabKey(event){
   const current=tabs.indexOf(event.currentTarget);
@@ -1246,7 +1266,7 @@ function applyUsagePreferences(preferences){
   usageState.customFrom=String(preferences.custom_from||'');
   usageState.customTo=String(preferences.custom_to||'');
   usageState.hiddenRequestColumns=validHiddenColumns(preferences.hidden_request_columns,requestColumns);
-  usageState.hiddenGroupColumns=validHiddenColumns(preferences.hidden_group_columns,groupColumns);
+  usageState.hiddenGroupColumns=validHiddenColumns(Array.isArray(preferences.hidden_group_columns)?preferences.hidden_group_columns:DEFAULT_HIDDEN_GROUP_COLUMNS,groupColumns);
   usageState.hiddenTokenSeries=new Set((Array.isArray(preferences.hidden_token_series)?preferences.hidden_token_series:[]).filter(value=>['input','output','cache_read','reasoning'].includes(value)));
   usageRangeEl.value=usageState.range;
   usageGranularityEl.value=usageState.granularity;
@@ -1331,9 +1351,29 @@ function resultDisplay(value){
   if(value.startsWith('http_'))return 'HTTP '+value.slice(5);
   return value||'—';
 }
+function fitMetricValue(element){
+  element.classList.remove('metric-value-wrap');
+  element.style.removeProperty('font-size');
+  const available=element.clientWidth;
+  if(!available)return;
+  const maximum=Number.parseFloat(getComputedStyle(element).fontSize)||30;
+  if(element.scrollWidth<=available+1)return;
+  const fitted=Math.max(14,maximum*available/element.scrollWidth);
+  element.style.fontSize=fitted.toFixed(2)+'px';
+  if(element.scrollWidth>available+1)element.classList.add('metric-value-wrap');
+}
+function fitMetricValues(){
+  metricFitFrame=0;
+  document.querySelectorAll('.metric-value').forEach(fitMetricValue);
+}
+function scheduleMetricFit(){
+  if(metricFitFrame)return;
+  metricFitFrame=requestAnimationFrame(fitMetricValues);
+}
 function setMetric(id,value,detailID,detail){
   document.getElementById(id).textContent=value;
   document.getElementById(detailID).textContent=detail;
+  scheduleMetricFit();
 }
 function effectiveCacheReadValue(value){
   if(!value)return 0;
@@ -1445,7 +1485,7 @@ function statusCell(row,result){
   const cell=document.createElement('td');
   cell.className='text-cell';
   const badge=document.createElement('span');
-  badge.className='status-pill'+(result==='success'?'':' failure');
+  badge.className='status-pill '+(result==='success'?'success':'failure');
   badge.textContent=resultDisplay(result);
   cell.appendChild(badge);row.appendChild(cell);
 }
@@ -1516,6 +1556,10 @@ function renderUsageDashboard(){
   renderRequestTable();
   renderUsageCharts();
 }
+const chartInteractions=new Map();
+const chartActive={id:'',index:-1,anchor:null,key:null};
+let chartResizeFrame=0;
+let dashboardResizeObserver=null;
 function chartColor(name){return getComputedStyle(document.documentElement).getPropertyValue(name).trim()}
 function prepareChart(id){
   const canvas=document.getElementById(id);
@@ -1527,13 +1571,17 @@ function prepareChart(id){
   const context=canvas.getContext('2d');
   context.setTransform(scale,0,0,scale,0,0);
   context.clearRect(0,0,width,height);
-  return{context,width,height,left:52,right:18,top:14,bottom:34,plotWidth:width-70,plotHeight:height-48};
+  return{canvas,context,width,height,left:52,right:18,top:14,bottom:34,plotWidth:width-70,plotHeight:height-48};
 }
 function visibleChartPoints(kind){
   const points=(usageState.overview&&usageState.overview.series||[]).slice();
   const zoom=Math.max(1,Number(usageState.zoom[kind]||1));
   const count=Math.max(2,Math.ceil(points.length/zoom));
   return points.slice(Math.max(0,points.length-count));
+}
+function chartBucketTitle(value){
+  const date=new Date(value);
+  return Number.isNaN(date.getTime())?'Unknown time':new Intl.DateTimeFormat(undefined,{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(date);
 }
 function drawEmptyChart(chart,message){
   chart.context.fillStyle=chartColor('--muted');
@@ -1556,15 +1604,122 @@ function drawGrid(chart,maxValue,formatter=formatCompact,rightFormatter=null){
 function bucketLabel(value){
   const date=new Date(value);
   if(Number.isNaN(date.getTime()))return '';
-  const range=usageState.range;
-  const options=range==='5h'||range==='24h'?{hour:'2-digit',minute:'2-digit'}:{month:'short',day:'numeric'};
+  const options=usageState.range==='5h'||usageState.range==='24h'?{hour:'2-digit',minute:'2-digit'}:{month:'short',day:'numeric'};
   return new Intl.DateTimeFormat(undefined,options).format(date);
 }
-function drawXLabels(chart,points){
+function drawXLabels(chart,points,centered=true){
   if(!points.length)return;
   const context=chart.context,step=Math.max(1,Math.ceil(points.length/6));
   context.fillStyle=chartColor('--muted');context.font='10px "Segoe UI",sans-serif';context.textAlign='center';context.textBaseline='top';
-  points.forEach((point,index)=>{if(index%step&&index!==points.length-1)return;const x=chart.left+chart.plotWidth*(index+.5)/points.length;context.fillText(bucketLabel(point.time),x,chart.top+chart.plotHeight+8)});
+  points.forEach((point,index)=>{if(index%step&&index!==points.length-1)return;const x=centered?chart.left+chart.plotWidth*(index+.5)/points.length:chart.left+chart.plotWidth*(points.length===1?.5:index/(points.length-1));context.fillText(bucketLabel(point.time),x,chart.top+chart.plotHeight+8)});
+}
+function tooltipContent(content){
+  const title=document.createElement('div'),rows=document.createElement('div');
+  title.className='chart-tooltip-title';title.textContent=content.title;
+  rows.className='chart-tooltip-rows';
+  for(const item of content.rows){
+    const row=document.createElement('div'),swatch=document.createElement('span'),label=document.createElement('span'),value=document.createElement('span');
+    row.className='chart-tooltip-row';swatch.className='chart-tooltip-swatch';label.className='chart-tooltip-label';value.className='chart-tooltip-value';
+    if(item.color)swatch.style.backgroundColor=chartColor(item.color)||item.color;
+    label.textContent=item.label;value.textContent=item.value;
+    row.appendChild(swatch);row.appendChild(label);row.appendChild(value);rows.appendChild(row);
+  }
+  chartTooltipEl.replaceChildren(title,rows);
+}
+function tooltipAnchorPoint(interaction,item,anchor){
+  if(anchor&&anchor.type==='pointer')return{x:anchor.x,y:anchor.y};
+  if(anchor&&anchor.type==='element'&&anchor.element&&anchor.element.isConnected){
+    const rect=anchor.element.getBoundingClientRect();return{x:rect.right,y:rect.top+rect.height/2};
+  }
+  const rect=interaction.canvas.getBoundingClientRect(),point=item.anchor||{x:interaction.canvas.clientWidth/2,y:20};
+  return{x:rect.left+point.x*rect.width/interaction.width,y:rect.top+point.y*rect.height/interaction.height};
+}
+function showChartTooltip(){
+  const interaction=chartInteractions.get(chartActive.id),item=interaction&&interaction.items[chartActive.index];
+  if(!interaction||!item){chartTooltipEl.hidden=true;return}
+  tooltipContent(interaction.describe(item,chartActive.index));
+  chartTooltipEl.hidden=false;chartTooltipEl.style.left='0px';chartTooltipEl.style.top='0px';
+  const anchor=tooltipAnchorPoint(interaction,item,chartActive.anchor),rect=chartTooltipEl.getBoundingClientRect();
+  const left=Math.max(8,Math.min(window.innerWidth-rect.width-8,anchor.x+14));
+  const top=Math.max(8,Math.min(window.innerHeight-rect.height-8,anchor.y+14));
+  chartTooltipEl.style.left=left+'px';chartTooltipEl.style.top=top+'px';
+}
+function renderChartByID(id){
+  if(id==='token-chart')renderTokenChart();
+  else if(id==='model-chart')renderModelChart();
+  else if(id==='cost-chart')renderCostChart();
+  else if(id==='efficiency-chart')renderEfficiencyChart();
+}
+function activeChartIndex(id,count){return chartActive.id===id&&chartActive.index>=0&&chartActive.index<count?chartActive.index:-1}
+function chartItemKey(id,item){return id==='model-chart'?item&&item.key:item&&item.point&&item.point.time}
+function remapChartActive(id,items){
+  if(chartActive.id!==id)return-1;
+  if(chartActive.key!==null&&chartActive.key!==undefined){
+    const index=items.findIndex(item=>chartItemKey(id,item)===chartActive.key);
+    if(index<0){clearChartActive(false);return-1}
+    chartActive.index=index;
+  }
+  return activeChartIndex(id,items.length);
+}
+function setChartInteraction(id,interaction){
+  chartInteractions.set(id,interaction);
+  if(chartActive.id===id&&chartActive.index>=interaction.items.length){chartActive.id='';chartActive.index=-1;chartActive.anchor=null;chartActive.key=null;chartTooltipEl.hidden=true}
+}
+function clearChartInteraction(id){
+  chartInteractions.delete(id);
+  if(chartActive.id===id){chartActive.id='';chartActive.index=-1;chartActive.anchor=null;chartActive.key=null;chartTooltipEl.hidden=true}
+}
+function clearChartActive(redraw=true){
+  const previous=chartActive.id;
+  chartActive.id='';chartActive.index=-1;chartActive.anchor=null;chartActive.key=null;chartTooltipEl.hidden=true;
+  if(redraw&&previous)renderChartByID(previous);
+}
+function resetChartInteractions(){
+  chartInteractions.clear();
+  chartActive.id='';chartActive.index=-1;chartActive.anchor=null;chartActive.key=null;chartTooltipEl.hidden=true;
+}
+function setChartActive(id,index,anchor){
+  const interaction=chartInteractions.get(id);
+  if(!interaction||index<0||index>=interaction.items.length){clearChartActive();return}
+  const item=interaction.items[index],previous=chartActive.id,changed=previous!==id||chartActive.index!==index;
+  chartActive.id=id;chartActive.index=index;chartActive.anchor=anchor||null;chartActive.key=chartItemKey(id,item);
+  if(changed){if(previous&&previous!==id)renderChartByID(previous);renderChartByID(id)}
+  showChartTooltip();
+}
+function chartPointerIndex(interaction,event){
+  const rect=interaction.canvas.getBoundingClientRect();
+  if(!rect.width||!rect.height)return-1;
+  return interaction.hitTest((event.clientX-rect.left)*interaction.width/rect.width,(event.clientY-rect.top)*interaction.height/rect.height);
+}
+function pointerAnchor(event){return{type:'pointer',x:event.clientX,y:event.clientY}}
+function initializeChartInteractions(){
+  document.querySelectorAll('.chart-canvas').forEach(canvas=>{
+    canvas.addEventListener('pointermove',event=>{
+      const interaction=chartInteractions.get(canvas.id);if(!interaction)return;
+      const index=chartPointerIndex(interaction,event);
+      if(index>=0)setChartActive(canvas.id,index,pointerAnchor(event));
+      else if(chartActive.id===canvas.id&&chartActive.anchor&&chartActive.anchor.type==='pointer')clearChartActive();
+    });
+    canvas.addEventListener('pointerleave',()=>{if(chartActive.id===canvas.id&&chartActive.anchor&&chartActive.anchor.type==='pointer')clearChartActive()});
+    canvas.addEventListener('focus',()=>{const interaction=chartInteractions.get(canvas.id);if(interaction&&interaction.items.length)setChartActive(canvas.id,Math.max(0,activeChartIndex(canvas.id,interaction.items.length)),{type:'canvas'})});
+    canvas.addEventListener('blur',()=>{if(chartActive.id===canvas.id&&(!chartActive.anchor||chartActive.anchor.type!=='pointer'))clearChartActive()});
+    canvas.addEventListener('click',event=>{
+      const interaction=chartInteractions.get(canvas.id);if(!interaction||!interaction.activate)return;
+      const index=chartPointerIndex(interaction,event);if(index>=0)interaction.activate(interaction.items[index]);
+    });
+    canvas.addEventListener('keydown',event=>{
+      const interaction=chartInteractions.get(canvas.id);if(!interaction||!interaction.items.length)return;
+      let index=activeChartIndex(canvas.id,interaction.items.length);
+      if(event.key==='ArrowRight'||event.key==='ArrowDown')index=Math.min(interaction.items.length-1,index<0?0:index+1);
+      else if(event.key==='ArrowLeft'||event.key==='ArrowUp')index=Math.max(0,index<0?0:index-1);
+      else if(event.key==='Home')index=0;
+      else if(event.key==='End')index=interaction.items.length-1;
+      else if(event.key==='Escape'){event.preventDefault();clearChartActive();return}
+      else if((event.key==='Enter'||event.key===' ')&&interaction.activate&&index>=0){event.preventDefault();interaction.activate(interaction.items[index]);return}
+      else return;
+      event.preventDefault();setChartActive(canvas.id,index,{type:'canvas'});
+    });
+  });
 }
 function tokenChartValue(point,item,definitions){
   let value=item.key==='cache_read'?effectiveCacheReadValue(point):Number(point[item.field]||(item.fallback&&point[item.fallback])||0);
@@ -1575,17 +1730,17 @@ function tokenChartValue(point,item,definitions){
 function renderTokenChart(){
   const chart=prepareChart('token-chart'),points=visibleChartPoints('tokens');
   const definitions=[
-    {key:'input',field:'input_tokens',color:'--chart-input'},
-    {key:'output',field:'output_tokens',color:'--chart-output'},
-    {key:'cache_read',field:'effective_cache_read_tokens',color:'--chart-cache'},
-    {key:'reasoning',field:'reasoning_tokens',color:'--chart-reasoning'}
+    {key:'input',label:'Input',field:'input_tokens',color:'--chart-input'},
+    {key:'output',label:'Output',field:'output_tokens',color:'--chart-output'},
+    {key:'cache_read',label:'Cache read',field:'effective_cache_read_tokens',color:'--chart-cache'},
+    {key:'reasoning',label:'Reasoning',field:'reasoning_tokens',color:'--chart-reasoning'}
   ].filter(item=>!usageState.hiddenTokenSeries.has(item.key));
-  if(!points.length){drawEmptyChart(chart,'No token usage in this range.');return}
-  if(!definitions.length){drawEmptyChart(chart,'All token series are hidden.');return}
-  const total=point=>definitions.reduce((sum,item)=>sum+tokenChartValue(point,item,definitions),0);
-  const max=Math.max(1,...points.map(total));
+  if(!points.length){clearChartInteraction('token-chart');drawEmptyChart(chart,'No token usage in this range.');return}
+  if(!definitions.length){clearChartInteraction('token-chart');drawEmptyChart(chart,'All token series are hidden.');return}
+  const total=point=>definitions.reduce((sum,item)=>sum+tokenChartValue(point,item,definitions),0),max=Math.max(1,...points.map(total));
+  const slot=chart.plotWidth/points.length,barWidth=Math.max(3,Math.min(30,slot*.65)),items=points.map((point,index)=>({point,anchor:{x:chart.left+slot*(index+.5),y:chart.top+10}})),active=remapChartActive('token-chart',items);
   drawGrid(chart,max);
-  const slot=chart.plotWidth/points.length,barWidth=Math.max(3,Math.min(30,slot*.65));
+  if(active>=0){chart.context.save();chart.context.globalAlpha=.1;chart.context.fillStyle=chartColor('--blue');chart.context.fillRect(chart.left+slot*active,chart.top,slot,chart.plotHeight);chart.context.restore()}
   points.forEach((point,index)=>{
     let bottom=chart.top+chart.plotHeight;
     definitions.forEach(item=>{
@@ -1593,61 +1748,95 @@ function renderTokenChart(){
       if(height>0){chart.context.fillStyle=chartColor(item.color);chart.context.fillRect(chart.left+slot*index+(slot-barWidth)/2,bottom-height,barWidth,height)}
       bottom-=height;
     });
+    if(index===active&&total(point)>0){const height=total(point)/max*chart.plotHeight;chart.context.strokeStyle=chartColor('--blue');chart.context.lineWidth=1.5;chart.context.strokeRect(chart.left+slot*index+(slot-barWidth)/2-2,chart.top+chart.plotHeight-height-2,barWidth+4,height+4)}
   });
   drawXLabels(chart,points);
+  setChartInteraction('token-chart',{canvas:chart.canvas,width:chart.width,height:chart.height,items,hitTest:(x,y)=>x>=chart.left&&x<=chart.left+chart.plotWidth&&y>=chart.top&&y<=chart.top+chart.plotHeight+18?Math.min(points.length-1,Math.floor((x-chart.left)/slot)):-1,describe:item=>({title:chartBucketTitle(item.point.time),rows:[...definitions.map(definition=>({label:definition.label,value:formatNumber(tokenChartValue(item.point,definition,definitions)),color:definition.color})),{label:'Visible total',value:formatNumber(total(item.point))},{label:'Requests',value:formatNumber(item.point.requests)},{label:'Estimated cost',value:formatUSD(item.point.cost_usd)}]})});
 }
+function linePointX(chart,count,index){return chart.left+chart.plotWidth*(count===1?.5:index/(count-1))}
 function drawLine(chart,points,value,color,maxValue){
   const context=chart.context;
   context.strokeStyle=color;context.lineWidth=2;context.lineJoin='round';context.lineCap='round';context.beginPath();
-  points.forEach((point,index)=>{
-    const x=chart.left+chart.plotWidth*(points.length===1?.5:index/(points.length-1));
-    const y=chart.top+chart.plotHeight-Math.max(0,value(point))/maxValue*chart.plotHeight;
-    if(index===0)context.moveTo(x,y);else context.lineTo(x,y);
-  });
+  points.forEach((point,index)=>{const x=linePointX(chart,points.length,index),y=chart.top+chart.plotHeight-Math.max(0,value(point))/maxValue*chart.plotHeight;if(index===0)context.moveTo(x,y);else context.lineTo(x,y)});
   context.stroke();
-  if(points.length<=24)points.forEach((point,index)=>{
-    const x=chart.left+chart.plotWidth*(points.length===1?.5:index/(points.length-1));
-    const y=chart.top+chart.plotHeight-Math.max(0,value(point))/maxValue*chart.plotHeight;
-    context.fillStyle=chartColor('--paper');context.strokeStyle=color;context.lineWidth=2;context.beginPath();context.arc(x,y,3,0,Math.PI*2);context.fill();context.stroke();
-  });
+  if(points.length<=24)points.forEach((point,index)=>{const x=linePointX(chart,points.length,index),y=chart.top+chart.plotHeight-Math.max(0,value(point))/maxValue*chart.plotHeight;context.fillStyle=chartColor('--paper');context.strokeStyle=color;context.lineWidth=2;context.beginPath();context.arc(x,y,3,0,Math.PI*2);context.fill();context.stroke()});
+}
+function drawActiveLineGuide(chart,x,markers){
+  const context=chart.context;context.save();context.strokeStyle=chartColor('--blue');context.lineWidth=1;context.setLineDash([3,4]);context.beginPath();context.moveTo(x,chart.top);context.lineTo(x,chart.top+chart.plotHeight);context.stroke();context.setLineDash([]);
+  for(const marker of markers){context.fillStyle=chartColor('--paper');context.strokeStyle=marker.color;context.lineWidth=2.5;context.beginPath();context.arc(x,marker.y,5,0,Math.PI*2);context.fill();context.stroke()}
+  context.restore();
+}
+function lineHitIndex(chart,count,x,y){
+  if(!count||x<chart.left-10||x>chart.left+chart.plotWidth+10||y<chart.top||y>chart.top+chart.plotHeight+18)return-1;
+  if(count===1)return 0;
+  return Math.max(0,Math.min(count-1,Math.round((x-chart.left)/chart.plotWidth*(count-1))));
 }
 function renderCostChart(){
   const chart=prepareChart('cost-chart'),points=visibleChartPoints('cost');
-  if(!points.length){drawEmptyChart(chart,'No cost data in this range.');return}
-  const max=Math.max(.000001,...points.map(point=>Number(point.cost_usd||0)));
-  drawGrid(chart,max,value=>formatUSD(value));
-  drawLine(chart,points,point=>Number(point.cost_usd||0),chartColor('--chart-cost'),max);
-  drawXLabels(chart,points);
+  if(!points.length){clearChartInteraction('cost-chart');drawEmptyChart(chart,'No cost data in this range.');return}
+  const value=point=>Number(point.cost_usd||0),max=Math.max(.000001,...points.map(value)),items=points.map((point,index)=>({point,anchor:{x:linePointX(chart,points.length,index),y:chart.top+chart.plotHeight-value(point)/max*chart.plotHeight}})),active=remapChartActive('cost-chart',items);
+  drawGrid(chart,max,item=>formatUSD(item));drawLine(chart,points,value,chartColor('--chart-cost'),max);drawXLabels(chart,points,false);
+  if(active>=0){const x=linePointX(chart,points.length,active),y=chart.top+chart.plotHeight-value(points[active])/max*chart.plotHeight;drawActiveLineGuide(chart,x,[{y,color:chartColor('--chart-cost')}])}
+  setChartInteraction('cost-chart',{canvas:chart.canvas,width:chart.width,height:chart.height,items,hitTest:(x,y)=>lineHitIndex(chart,points.length,x,y),describe:item=>({title:chartBucketTitle(item.point.time),rows:[{label:'Estimated cost',value:formatUSD(item.point.cost_usd),color:'--chart-cost'},{label:'Requests',value:formatNumber(item.point.requests)}]})});
 }
 function renderEfficiencyChart(){
   const chart=prepareChart('efficiency-chart'),points=visibleChartPoints('efficiency');
-  if(!points.length){drawEmptyChart(chart,'No timing data in this range.');return}
-  const latency=point=>Number(point.average_latency_ns||0)/1e6;
-  const ttft=point=>Number(point.average_ttft_ns||0)/1e6;
-  const tps=point=>Number(point.average_tps||0);
-  const timingMax=Math.max(1,...points.map(point=>Math.max(latency(point),ttft(point))));
-  const tpsMax=Math.max(1,...points.map(tps));
+  if(!points.length){clearChartInteraction('efficiency-chart');drawEmptyChart(chart,'No timing data in this range.');return}
+  const latency=point=>Number(point.average_latency_ns||0)/1e6,ttft=point=>Number(point.average_ttft_ns||0)/1e6,tps=point=>Number(point.average_tps||0);
+  const timingMax=Math.max(1,...points.map(point=>Math.max(latency(point),ttft(point)))),tpsMax=Math.max(1,...points.map(tps)),scaledTPS=point=>tps(point)*timingMax/tpsMax;
+  const items=points.map((point,index)=>({point,anchor:{x:linePointX(chart,points.length,index),y:chart.top+10}})),active=remapChartActive('efficiency-chart',items);
   drawGrid(chart,timingMax,value=>value>=1000?(value/1000).toFixed(1)+'s':Math.round(value)+'ms',ratio=>(tpsMax*ratio).toFixed(0));
-  drawLine(chart,points,latency,chartColor('--chart-input'),timingMax);
-  drawLine(chart,points,ttft,chartColor('--chart-cache'),timingMax);
-  drawLine(chart,points,point=>tps(point)*timingMax/tpsMax,chartColor('--chart-output'),timingMax);
-  drawXLabels(chart,points);
+  drawLine(chart,points,latency,chartColor('--chart-input'),timingMax);drawLine(chart,points,ttft,chartColor('--chart-cache'),timingMax);drawLine(chart,points,scaledTPS,chartColor('--chart-output'),timingMax);drawXLabels(chart,points,false);
+  if(active>=0){const point=points[active],x=linePointX(chart,points.length,active),toY=value=>chart.top+chart.plotHeight-value/timingMax*chart.plotHeight;drawActiveLineGuide(chart,x,[{y:toY(latency(point)),color:chartColor('--chart-input')},{y:toY(ttft(point)),color:chartColor('--chart-cache')},{y:toY(scaledTPS(point)),color:chartColor('--chart-output')}])}
+  setChartInteraction('efficiency-chart',{canvas:chart.canvas,width:chart.width,height:chart.height,items,hitTest:(x,y)=>lineHitIndex(chart,points.length,x,y),describe:item=>({title:chartBucketTitle(item.point.time),rows:[{label:'Avg latency',value:formatDuration(item.point.average_latency_ns),color:'--chart-input'},{label:'Avg TTFT',value:formatDuration(item.point.average_ttft_ns),color:'--chart-cache'},{label:'Tokens/sec',value:formatTPS(item.point.average_tps),color:'--chart-output'},{label:'Requests',value:formatNumber(item.point.requests)}]})});
+}
+function setProviderModelFilter(model){
+  usageState.providerModel=usageState.providerModel===model?'':model;
+  clearChartActive(false);renderUsageFilterOptions();usageControlChanged();
+}
+function modelTooltip(item,total){
+  return{title:item.model,rows:[{label:'Requests',value:formatNumber(item.requests),color:item.color},{label:'Share',value:(item.requests/total*100).toFixed(2)+'%'},{label:'Total tokens',value:formatNumber(item.total_tokens)},{label:'Estimated cost',value:formatUSD(item.cost_usd)}]};
+}
+function renderModelLegend(items,total,focusedKey=''){
+  const legend=document.getElementById('model-legend'),signature=JSON.stringify(items.map(item=>[item.model,item.requests,item.total_tokens,item.cost_usd,item.filterable]));
+  if(legend.dataset.signature!==signature){
+    const fragment=document.createDocumentFragment();
+    items.forEach((item,index)=>{
+      const entry=document.createElement(item.filterable?'button':'span'),swatch=document.createElement('span'),label=document.createElement('span');
+      if(item.filterable){entry.type='button';entry.setAttribute('aria-pressed','false')}else{entry.tabIndex=0;entry.setAttribute('role','img')}
+      entry.className='model-legend-entry';entry.dataset.modelIndex=String(index);entry.title=item.model+' · '+(item.requests/total*100).toFixed(1)+'%';entry.setAttribute('aria-label',entry.title);
+      swatch.className='legend-swatch';swatch.style.backgroundColor=item.color;label.className='legend-label';label.textContent=item.model+' '+(item.requests/total*100).toFixed(1)+'%';entry.appendChild(swatch);entry.appendChild(label);
+      entry.addEventListener('pointerenter',event=>setChartActive('model-chart',index,pointerAnchor(event)));
+      entry.addEventListener('pointermove',event=>setChartActive('model-chart',index,pointerAnchor(event)));
+      entry.addEventListener('pointerleave',()=>{if(chartActive.id==='model-chart'&&chartActive.anchor&&chartActive.anchor.type==='pointer')clearChartActive()});
+      entry.addEventListener('focus',()=>setChartActive('model-chart',index,{type:'element',element:entry}));
+      entry.addEventListener('blur',()=>{if(chartActive.id==='model-chart'&&chartActive.anchor&&chartActive.anchor.type==='element')clearChartActive()});
+      if(item.filterable)entry.addEventListener('click',()=>setProviderModelFilter(item.model));
+      fragment.appendChild(entry);
+    });
+    if(focusedKey&&chartActive.id==='model-chart'&&chartActive.anchor&&chartActive.anchor.type==='element')chartActive.anchor=null;
+    legend.replaceChildren(fragment);legend.dataset.signature=signature;
+    if(focusedKey){
+      const index=items.findIndex(item=>item.key===focusedKey),entry=index<0?null:legend.querySelector('[data-model-index="'+index+'"]');
+      if(entry)entry.focus({preventScroll:true});
+    }
+  }
+  legend.querySelectorAll('[data-model-index]').forEach(entry=>{const index=Number(entry.dataset.modelIndex),item=items[index];entry.classList.toggle('is-active',activeChartIndex('model-chart',items.length)===index);if(item&&item.filterable)entry.setAttribute('aria-pressed',String(usageState.providerModel===item.model))});
 }
 function renderModelChart(){
-  const chart=prepareChart('model-chart');
-  const source=(usageState.overview&&usageState.overview.provider_models||[]).filter(item=>Number(item.requests||0)>0).sort((left,right)=>Number(right.requests||0)-Number(left.requests||0));
-  if(!source.length){drawEmptyChart(chart,'No provider model requests.');document.getElementById('model-legend').replaceChildren();return}
+  const previousInteraction=chartInteractions.get('model-chart'),focusedEntry=document.activeElement&&document.activeElement.closest('#model-legend [data-model-index]'),focusedKey=focusedEntry&&previousInteraction?((previousInteraction.items[Number(focusedEntry.dataset.modelIndex)]||{}).key||''):'',chart=prepareChart('model-chart'),source=(usageState.overview&&usageState.overview.provider_models||[]).filter(item=>Number(item.requests||0)>0).sort((left,right)=>Number(right.requests||0)-Number(left.requests||0)),legend=document.getElementById('model-legend');
+  if(!source.length){clearChartInteraction('model-chart');drawEmptyChart(chart,'No provider model requests.');legend.replaceChildren();legend.dataset.signature='';return}
   const palette=['#2d6cdf','#24836b','#a96708','#8657c8','#b83b43','#47a7dc','#70a84f','#b88755'];
-  const items=source.slice(0,7).map(item=>({model:item.model,requests:Number(item.requests||0)}));
-  if(source.length>7)items.push({model:'Other',requests:source.slice(7).reduce((sum,item)=>sum+Number(item.requests||0),0)});
-  const total=items.reduce((sum,item)=>sum+item.requests,0),context=chart.context,cx=chart.width/2,cy=chart.height/2-4,radius=Math.min(chart.width,chart.height)*.31;
-  context.lineWidth=Math.max(22,radius*.28);context.strokeStyle=chartColor('--surface-soft');context.beginPath();context.arc(cx,cy,radius,0,Math.PI*2);context.stroke();
+  const items=source.slice(0,7).map((item,index)=>({model:item.model,key:'model:'+item.model,requests:Number(item.requests||0),total_tokens:Number(item.total_tokens||0),cost_usd:Number(item.cost_usd||0),filterable:true,color:palette[index%palette.length]}));
+  if(source.length>7){const rest=source.slice(7);items.push({model:'Other',key:'aggregate:other',requests:rest.reduce((sum,item)=>sum+Number(item.requests||0),0),total_tokens:rest.reduce((sum,item)=>sum+Number(item.total_tokens||0),0),cost_usd:rest.reduce((sum,item)=>sum+Number(item.cost_usd||0),0),filterable:false,color:palette[7%palette.length]})}
+  const total=items.reduce((sum,item)=>sum+item.requests,0),context=chart.context,cx=chart.width/2,cy=chart.height/2-4,radius=Math.min(chart.width,chart.height)*.31,lineWidth=Math.max(22,radius*.28),remappedActive=remapChartActive('model-chart',items);
+  context.lineWidth=lineWidth;context.strokeStyle=chartColor('--surface-soft');context.beginPath();context.arc(cx,cy,radius,0,Math.PI*2);context.stroke();
   let angle=-Math.PI/2;
-  items.forEach((item,index)=>{const next=angle+item.requests/total*Math.PI*2;context.strokeStyle=palette[index%palette.length];context.beginPath();context.arc(cx,cy,radius,angle,next);context.stroke();angle=next});
+  items.forEach((item,index)=>{item.start=angle;item.end=angle+item.requests/total*Math.PI*2;item.anchor={x:cx+Math.cos((item.start+item.end)/2)*radius,y:cy+Math.sin((item.start+item.end)/2)*radius};context.save();if((remappedActive>=0&&remappedActive!==index)||(usageState.providerModel&&usageState.providerModel!==item.model))context.globalAlpha=.28;context.lineWidth=index===remappedActive||usageState.providerModel===item.model?lineWidth+5:lineWidth;context.strokeStyle=item.color;context.beginPath();context.arc(cx,cy,radius,item.start,item.end);context.stroke();context.restore();angle=item.end});
   context.fillStyle=chartColor('--ink');context.textAlign='center';context.textBaseline='middle';context.font='750 23px "Cascadia Code",monospace';context.fillText(formatCompact(total),cx,cy-5);context.fillStyle=chartColor('--muted');context.font='11px "Segoe UI",sans-serif';context.fillText('requests',cx,cy+17);
-  const legend=document.createDocumentFragment();
-  items.forEach((item,index)=>{const row=document.createElement('span'),swatch=document.createElement('span'),label=document.createElement('span');row.className='legend-item';swatch.className='legend-swatch';swatch.style.backgroundColor=palette[index%palette.length];label.textContent=item.model+' '+(item.requests/total*100).toFixed(1)+'%';row.appendChild(swatch);row.appendChild(label);legend.appendChild(row)});
-  document.getElementById('model-legend').replaceChildren(legend);
+  const hitTest=(x,y)=>{const distance=Math.hypot(x-cx,y-cy);if(distance<radius-lineWidth/2-6||distance>radius+lineWidth/2+6)return-1;let point=Math.atan2(y-cy,x-cx);if(point < -Math.PI/2)point+=Math.PI*2;return items.findIndex(item=>point>=item.start&&point<=item.end)};
+  setChartInteraction('model-chart',{canvas:chart.canvas,width:chart.width,height:chart.height,items,hitTest,describe:item=>modelTooltip(item,total),activate:item=>{if(item.filterable)setProviderModelFilter(item.model)}});
+  renderModelLegend(items,total,focusedKey);
 }
 function syncTokenLegend(){
   document.querySelectorAll('[data-token-series]').forEach(button=>button.setAttribute('aria-pressed',String(!usageState.hiddenTokenSeries.has(button.dataset.tokenSeries))));
@@ -1655,6 +1844,17 @@ function syncTokenLegend(){
 function renderUsageCharts(){
   if(!usageState.active||usagePanelEl.hidden||!usageState.overview)return;
   renderTokenChart();renderModelChart();renderCostChart();renderEfficiencyChart();
+  if(chartActive.id)showChartTooltip();
+}
+function scheduleResponsiveDashboardRender(){
+  scheduleMetricFit();
+  if(chartResizeFrame)return;
+  chartResizeFrame=requestAnimationFrame(()=>{chartResizeFrame=0;renderUsageCharts()});
+}
+function initializeDashboardResizeObserver(){
+  if(!window.ResizeObserver)return;
+  dashboardResizeObserver=new ResizeObserver(scheduleResponsiveDashboardRender);
+  document.querySelectorAll('.metric-grid,.chart-card').forEach(element=>dashboardResizeObserver.observe(element));
 }
 function cloneValue(value){return JSON.parse(JSON.stringify(value))}
 function setPricingError(message=''){document.getElementById('pricing-error').textContent=message}
@@ -1752,14 +1952,21 @@ function buildPriceSaveRequest(){
   return{revision:Number(usageState.priceBook&&usageState.priceBook.revision||0),prices,sync_settings:pricingSyncSettings()};
 }
 async function openPricingDialog(){
+  const dialogGeneration=++usageState.pricingDialogGeneration;
   setPricingError();document.getElementById('pricing-status').textContent='Loading saved model prices…';
   usageState.priceBook=null;usageState.priceDraft=null;usageState.pricingSettingsDirty=false;usageState.priceCollectionDirty=false;
   document.getElementById('pricing-list').replaceChildren();setPricingEditorEnabled(false);
   if(!pricingDialogEl.open)pricingDialogEl.showModal();
-  try{applyPriceBook(await requestManagementJSON(freshManagementURL(USAGE_API+'/prices'),{cache:'no-store'}));setPricingEditorEnabled(true)}
-  catch(error){setPricingError(error.message)}
+  try{
+    const pendingWrite=usageState.pricingWriteInFlight;
+    if(pendingWrite){try{await pendingWrite}catch(_error){}}
+    if(dialogGeneration!==usageState.pricingDialogGeneration)return;
+    const book=await requestManagementJSON(freshManagementURL(USAGE_API+'/prices'),{cache:'no-store'});
+    if(dialogGeneration!==usageState.pricingDialogGeneration)return;
+    applyPriceBook(book);setPricingEditorEnabled(true);
+  }catch(error){if(dialogGeneration===usageState.pricingDialogGeneration)setPricingError(error.message)}
 }
-function closePricingDialog(){if(pricingDialogEl.open)pricingDialogEl.close();usageState.priceDraft=null;setPricingError()}
+function closePricingDialog(){usageState.pricingDialogGeneration++;if(pricingDialogEl.open)pricingDialogEl.close();usageState.priceDraft=null;setPricingError()}
 function requestClosePricingDialog(){if(pricingDraftDirty()&&!window.confirm('Discard unsaved pricing changes?'))return;closePricingDialog()}
 function addPriceModel(){
   const input=document.getElementById('pricing-model-name'),name=input.value.trim();
@@ -1773,12 +1980,19 @@ function addPriceModel(){
 async function savePricing(){
   let payload;
   try{payload=buildPriceSaveRequest()}catch(error){setPricingError(error.message);return}
+  const dialogGeneration=usageState.pricingDialogGeneration;
   setPricingEditorEnabled(false);setPricingError();
+  const writeRequest=requestManagementJSON(USAGE_API+'/prices',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  usageState.pricingWriteInFlight=writeRequest;
   try{
-    const book=await requestManagementJSON(USAGE_API+'/prices',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    applyPriceBook(book);showToast('Model pricing saved.','success');
+    const book=await writeRequest;
+    if(dialogGeneration!==usageState.pricingDialogGeneration)return;
+    applyPriceBook(book);closePricingDialog();showToast('Model pricing saved.','success');
     if(usageState.active)refreshUsage(false);
-  }catch(error){setPricingError(error.message)}finally{setPricingEditorEnabled(true)}
+  }catch(error){if(dialogGeneration===usageState.pricingDialogGeneration)setPricingError(error.message)}finally{
+    if(dialogGeneration===usageState.pricingDialogGeneration&&pricingDialogEl.open)setPricingEditorEnabled(true);
+    if(usageState.pricingWriteInFlight===writeRequest)usageState.pricingWriteInFlight=null;
+  }
 }
 async function syncPricing(){
   if(!usageState.priceBook){setPricingError('Load the price book before synchronizing.');return}
@@ -1789,11 +2003,18 @@ async function syncPricing(){
   for(const item of usageState.overview&&usageState.overview.provider_models||[]){if(item.model)models.add(item.model)}
   for(const name of Object.keys(usageState.priceBook.prices||{}))models.add(name);
   if(!models.size){setPricingError('No CPA provider models are available to synchronize.');return}
+  const dialogGeneration=usageState.pricingDialogGeneration;
   setPricingEditorEnabled(false);setPricingError();document.getElementById('pricing-status').textContent='Synchronizing '+formatNumber(models.size)+' models from models.dev…';
+  const writeRequest=requestManagementJSON(USAGE_API+'/prices/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:'models.dev',revision:Number(usageState.priceBook.revision||0),models:Array.from(models),sync_settings:settings})});
+  usageState.pricingWriteInFlight=writeRequest;
   try{
-    const book=await requestManagementJSON(USAGE_API+'/prices/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:'models.dev',revision:Number(usageState.priceBook.revision||0),models:Array.from(models),sync_settings:settings})});
+    const book=await writeRequest;
+    if(dialogGeneration!==usageState.pricingDialogGeneration)return;
     applyPriceBook(book);showToast('Model prices synchronized.','success');if(usageState.active)refreshUsage(false);
-  }catch(error){setPricingError(error.message);document.getElementById('pricing-status').textContent=priceBookStatus(usageState.priceBook)}finally{setPricingEditorEnabled(true)}
+  }catch(error){if(dialogGeneration===usageState.pricingDialogGeneration){setPricingError(error.message);document.getElementById('pricing-status').textContent=priceBookStatus(usageState.priceBook)}}finally{
+    if(dialogGeneration===usageState.pricingDialogGeneration)setPricingEditorEnabled(true);
+    if(usageState.pricingWriteInFlight===writeRequest)usageState.pricingWriteInFlight=null;
+  }
 }
 function openResetDialog(){
   document.getElementById('reset-confirmation').value='';document.getElementById('reset-error').textContent='';document.getElementById('reset-confirm').disabled=true;
@@ -2080,7 +2301,7 @@ async function saveConfiguration(){
     showToast(error.message,'error');
   }finally{setBusy(false)}
 }
-function usageControlChanged(){usageState.group.offset=0;usageState.request.offset=0;refreshUsage(false)}
+function usageControlChanged(){clearChartActive(false);usageState.group.offset=0;usageState.request.offset=0;refreshUsage(false)}
 function sortUsageTable(event){
   const button=event.target.closest('[data-table-kind][data-sort-field]');
   if(!button)return;
@@ -2111,6 +2332,9 @@ applyHostTheme();
 observeHostTheme();
 initializeCustomRange();
 applyUsagePreferences({});
+initializeChartInteractions();
+initializeDashboardResizeObserver();
+scheduleMetricFit();
 tabs.forEach(tab=>{tab.addEventListener('click',()=>activateTab(tab.id==='usage-tab'?'usage':'configuration'));tab.addEventListener('keydown',handleTabKey)});
 connectEl.addEventListener('click',loadConfiguration);
 keyEl.addEventListener('keydown',event=>{if(event.key==='Enter')loadConfiguration()});
@@ -2151,13 +2375,14 @@ document.getElementById('group-column-options').addEventListener('change',change
 document.getElementById('request-column-options').addEventListener('change',changeColumnVisibility);
 usagePanelEl.addEventListener('click',event=>{
   const series=event.target.closest('[data-token-series]');
-  if(series){const key=series.dataset.tokenSeries;if(usageState.hiddenTokenSeries.has(key))usageState.hiddenTokenSeries.delete(key);else usageState.hiddenTokenSeries.add(key);syncTokenLegend();renderTokenChart();scheduleUsagePreferencesSave();return}
+  if(series){const key=series.dataset.tokenSeries;if(usageState.hiddenTokenSeries.has(key))usageState.hiddenTokenSeries.delete(key);else usageState.hiddenTokenSeries.add(key);clearChartActive(false);syncTokenLegend();renderTokenChart();scheduleUsagePreferencesSave();return}
   const zoom=event.target.closest('[data-chart][data-zoom]');
   if(!zoom)return;
   const key=zoom.dataset.chart,action=zoom.dataset.zoom;
   if(action==='reset')usageState.zoom[key]=1;
   else if(action==='in')usageState.zoom[key]=Math.min(8,usageState.zoom[key]*1.6);
   else usageState.zoom[key]=Math.max(1,usageState.zoom[key]/1.6);
+  clearChartActive(false);
   renderUsageCharts();
 });
 document.getElementById('usage-pricing').addEventListener('click',openPricingDialog);
@@ -2183,7 +2408,7 @@ document.getElementById('reset-confirmation').addEventListener('input',event=>{d
 document.getElementById('reset-confirmation').addEventListener('keydown',event=>{if(event.key==='Enter'&&event.target.value==='reset'){event.preventDefault();resetUsage()}});
 document.getElementById('reset-confirm').addEventListener('click',resetUsage);
 document.addEventListener('visibilitychange',()=>{if(!usageState.active)return;if(document.hidden)stopUsagePolling();else refreshUsage(false)});
-window.addEventListener('resize',()=>{if(!usageState.active)return;window.clearTimeout(usageState.resizeTimer);usageState.resizeTimer=window.setTimeout(renderUsageCharts,120)});
+window.addEventListener('resize',()=>{window.clearTimeout(usageState.resizeTimer);usageState.resizeTimer=window.setTimeout(scheduleResponsiveDashboardRender,120)});
 document.addEventListener('keydown',event=>{
   if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'&&!workspaceEl.hidden&&!configurationPanelEl.hidden){event.preventDefault();saveConfiguration()}
 });

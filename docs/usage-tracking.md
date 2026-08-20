@@ -34,14 +34,14 @@ plugins:
   configs:
     model-router:
       enabled: true
-      data_path: "/var/lib/cliproxyapi/model-router-usage.db"
+      data_path: "/CLIProxyAPI/plugins/model-router.db"
       retention_days: 365
       routes: []
 ```
 
 | Field | Default | Validation |
 | --- | --- | --- |
-| `data_path` | CPA root plus `data/model-router-usage.db` | Converted to a clean absolute path; the parent directory is created with mode `0700` |
+| `data_path` | CPA root plus `plugins/model-router.db` | Converted to a clean absolute path; the parent directory is created with mode `0700` |
 | `retention_days` | `365` | Integer from 1 through 3650 |
 
 If `data_path` is absent, resolution checks:
@@ -49,16 +49,18 @@ If `data_path` is absent, resolution checks:
 1. the loaded shared-library path for an ancestor named `plugins`;
 2. the CPA executable directory for a `plugins` directory;
 3. the current working directory for a `plugins` directory;
-4. `./data/model-router-usage.db` as the compatibility fallback.
+4. `<absolute working directory>/plugins/model-router.db` when no CPA layout is found.
 
-Use an explicit absolute path inside a persistent volume when CPA runs in a container. Process restart persistence requires the next process to open the same file. Container replacement persistence requires that file's parent directory to be mounted outside the disposable container layer.
+The resolver does not inspect, copy, or migrate the former default at `<CPA root>/data/model-router-usage.db`. An upgrade with no explicit `data_path` starts a new database. Configure the former path explicitly when its history must remain active.
+
+The plugins directory must be writable and persistently mounted. Use an explicit absolute path elsewhere when production mounts plugin binaries read-only. Process restart persistence requires the next process to open the same file. Container replacement persistence requires that file's parent directory to be mounted outside the disposable container layer.
 
 The database is dedicated to Model Router and uses bbolt with file mode `0600`. A successful record, price edit, or preference edit commits before its API call returns. There is no in-memory write batch to flush during shutdown.
 
 The database contains these buckets:
 
 ```text
-model-router-usage.db
+model-router.db
 ├── meta
 │   ├── schema_version
 │   ├── next_sequence
@@ -171,6 +173,8 @@ The Usage tracking tab includes:
 
 The token chart keeps cache-read and separately reported reasoning segments mutually exclusive with their parent counters according to each record's accounting mode, including when one time bucket mixes providers with different accounting conventions.
 
+All four charts expose a viewport-clamped tooltip on pointer hover or keyboard focus. Arrow keys and Home/End move between buckets or provider segments; Escape dismisses the active readout. Token tooltips show visible token series, the visible total, request count, and estimated cost. Cost and efficiency tooltips show the values represented by their lines. Provider-share tooltips show requests, share, tokens, and cost. Clicking an exact provider segment or legend entry, or pressing Enter/Space on a focused segment, toggles the existing provider-model filter. The aggregate Other segment is inspectable but not filterable.
+
 The browser loads overview, groups, and request details in parallel. Existing metrics, charts, and rows stay mounted during a refresh. Each refresh owns an `AbortController` and generation number; only the newest active generation can render. Table scroll positions are restored after row replacement.
 
 Polling runs every 15 seconds only when:
@@ -181,9 +185,9 @@ AND the document is visible
 AND no newer refresh has replaced the timer
 ```
 
-Leaving the tab or hiding the document stops the timer and aborts the active request. Returning starts one fresh request set. Dashboard preferences are saved to bbolt after a short debounce.
+Leaving the tab or hiding the document stops the timer and aborts the active request. Returning starts one fresh request set. Dashboard preferences are saved to bbolt after a short debounce. Provider, Source, Service tier, and Result are hidden by default in Usage breakdown; every column checkbox change updates `hidden_group_columns`. Existing saved selections, including an empty hidden list, remain authoritative. Request-detail columns keep their existing defaults.
 
-The page follows CPAMC light, white, and dark themes, redraws canvas charts after theme changes, supports keyboard tab navigation, exposes visible focus states, and collapses controls and charts for mobile widths.
+The page follows CPAMC light, white, and dark themes, redraws canvas charts after theme changes, supports keyboard tab and chart navigation, exposes visible focus states, fits metric values without ellipses, and collapses controls and charts for mobile widths. Successful request results use green pills. Saving valid model pricing closes the modal after the persisted price book is applied; validation or request failures leave it open.
 
 ## Management API
 
@@ -239,10 +243,13 @@ Then install the built library in a disposable CPA instance and verify:
 2. Routed and direct streaming and non-streaming calls appear once.
 3. A failed routed target appears separately from the successful retry.
 4. Refresh keeps old values and scroll positions visible while requests are pending.
-5. Prices and preferences remain after a process restart.
-6. Usage, prices, and preferences remain after container recreation when `data_path` is mounted.
-7. Light, white, and dark themes redraw charts without console errors.
-8. Reset removes history but preserves prices and preferences.
+5. Every chart tooltip and highlight works with pointer and keyboard input, including after zoom, resize, refresh, and theme changes.
+6. Metrics show their complete values without ellipses at desktop, tablet, and mobile widths.
+7. Breakdown columns use the default hidden set, and saved column selections survive reload and restart.
+8. A successful price save closes the modal; validation failures keep it open.
+9. Usage, prices, and preferences remain after process restart and container recreation with the writable plugins directory mounted.
+10. Light, white, and dark themes redraw charts without console errors.
+11. Reset removes history but preserves prices and preferences.
 
 ## Origin
 

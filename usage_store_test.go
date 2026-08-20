@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -34,6 +35,7 @@ func TestUsageStorePersistsAndResetPreservesSettings(t *testing.T) {
 	preferences.TimeRange = "custom"
 	preferences.CustomFrom = "2026-08-18T10:00:00"
 	preferences.CustomTo = "2026-08-19T10:00:00"
+	preferences.HiddenGroupColumns = []string{"result", "service_tier", "source"}
 	if _, err := store.SavePreferences(preferences); err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +65,7 @@ func TestUsageStorePersistsAndResetPreservesSettings(t *testing.T) {
 	if loaded, err := store.QueryPriceBook(); err != nil || loaded.Revision != 1 || len(loaded.Prices) != 1 {
 		t.Fatalf("persisted prices = %#v, %v", loaded, err)
 	}
-	if loaded, err := store.QueryPreferences(); err != nil || loaded.RequestPageSize != 50 || loaded.TimeRange != "custom" || loaded.CustomFrom != preferences.CustomFrom || loaded.CustomTo != preferences.CustomTo {
+	if loaded, err := store.QueryPreferences(); err != nil || loaded.RequestPageSize != 50 || loaded.TimeRange != "custom" || loaded.CustomFrom != preferences.CustomFrom || loaded.CustomTo != preferences.CustomTo || !slices.Equal(loaded.HiddenGroupColumns, preferences.HiddenGroupColumns) {
 		t.Fatalf("persisted preferences = %#v, %v", loaded, err)
 	}
 	if err := store.ResetUsage(); err != nil {
@@ -76,8 +78,31 @@ func TestUsageStorePersistsAndResetPreservesSettings(t *testing.T) {
 	if loaded, _ := store.QueryPriceBook(); loaded.Revision != 1 || len(loaded.Prices) != 1 {
 		t.Fatalf("prices after reset = %#v", loaded)
 	}
-	if loaded, _ := store.QueryPreferences(); loaded.RequestPageSize != 50 {
+	if loaded, _ := store.QueryPreferences(); loaded.RequestPageSize != 50 || !slices.Equal(loaded.HiddenGroupColumns, preferences.HiddenGroupColumns) {
 		t.Fatalf("preferences after reset = %#v", loaded)
+	}
+}
+
+func TestDashboardPreferenceColumnDefaults(t *testing.T) {
+	want := []string{"provider", "result", "service_tier", "source"}
+	defaults := defaultDashboardPreferences()
+	if !slices.Equal(defaults.HiddenGroupColumns, want) {
+		t.Fatalf("default hidden group columns = %#v, want %#v", defaults.HiddenGroupColumns, want)
+	}
+	defaults.HiddenGroupColumns[0] = "changed"
+	if next := defaultDashboardPreferences(); !slices.Equal(next.HiddenGroupColumns, want) {
+		t.Fatalf("default hidden group columns shared mutable storage: %#v", next.HiddenGroupColumns)
+	}
+
+	normalized, err := normalizeDashboardPreferences(dashboardPreferences{})
+	if err != nil || !slices.Equal(normalized.HiddenGroupColumns, want) {
+		t.Fatalf("normalized omitted hidden columns = %#v, %v", normalized.HiddenGroupColumns, err)
+	}
+	explicit := defaultDashboardPreferences()
+	explicit.HiddenGroupColumns = []string{}
+	normalized, err = normalizeDashboardPreferences(explicit)
+	if err != nil || len(normalized.HiddenGroupColumns) != 0 {
+		t.Fatalf("normalized explicit visible columns = %#v, %v", normalized.HiddenGroupColumns, err)
 	}
 }
 

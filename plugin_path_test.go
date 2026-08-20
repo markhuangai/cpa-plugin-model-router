@@ -12,7 +12,7 @@ func TestResolveDefaultDataPath(t *testing.T) {
 	if err := os.MkdirAll(plugins, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(root, "data", defaultDataFileName)
+	want := filepath.Join(plugins, defaultDataFileName)
 	if got := resolveDefaultDataPath(filepath.Join(plugins, "linux", "amd64", "model-router.so"), "", ""); got != want {
 		t.Fatalf("plugin path default = %q, want %q", got, want)
 	}
@@ -25,7 +25,28 @@ func TestResolveDefaultDataPath(t *testing.T) {
 }
 
 func TestResolveDefaultDataPathFallsBackOutsideCPALayout(t *testing.T) {
-	if got := resolveDefaultDataPath("/model-router.so", "/CLIProxyAPI", "/"); got != legacyDefaultDataPath {
-		t.Fatalf("fallback = %q, want %q", got, legacyDefaultDataPath)
+	workingDir := t.TempDir()
+	want := filepath.Join(workingDir, "plugins", defaultDataFileName)
+	if got := resolveDefaultDataPath("/model-router.so", "/CLIProxyAPI", workingDir); got != want {
+		t.Fatalf("fallback = %q, want %q", got, want)
+	}
+}
+
+func TestResolveDefaultDataPathDoesNotSelectLegacyDatabase(t *testing.T) {
+	root := t.TempDir()
+	plugins := filepath.Join(root, "plugins")
+	if err := os.MkdirAll(plugins, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(root, "data", "model-router-usage.db")
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte("legacy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(plugins, defaultDataFileName)
+	if got := resolveDefaultDataPath(filepath.Join(plugins, "model-router.so"), "", root); got != want {
+		t.Fatalf("default with legacy database = %q, want %q", got, want)
 	}
 }

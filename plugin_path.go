@@ -6,10 +6,7 @@ import (
 	"strings"
 )
 
-const (
-	legacyDefaultDataPath = "./data/model-router-usage.db"
-	defaultDataFileName   = "model-router-usage.db"
-)
+const defaultDataFileName = "model-router.db"
 
 var defaultDataPathResolver = resolvedDefaultDataPath
 
@@ -22,17 +19,18 @@ func resolvedDefaultDataPath() string {
 
 func resolveDefaultDataPath(modulePath, executablePath, workingDir string) string {
 	if root, ok := cpaRootFromPluginPath(modulePath, workingDir); ok {
-		return filepath.Join(root, "data", defaultDataFileName)
+		return filepath.Join(root, "plugins", defaultDataFileName)
 	}
 	if root, ok := cpaRootWithPluginsDir(filepath.Dir(strings.TrimSpace(executablePath))); ok {
-		return filepath.Join(root, "data", defaultDataFileName)
+		return filepath.Join(root, "plugins", defaultDataFileName)
 	}
 	if absolute, err := filepath.Abs(strings.TrimSpace(workingDir)); err == nil {
 		if root, ok := cpaRootWithPluginsDir(absolute); ok {
-			return filepath.Join(root, "data", defaultDataFileName)
+			return filepath.Join(root, "plugins", defaultDataFileName)
 		}
+		return filepath.Join(absolute, "plugins", defaultDataFileName)
 	}
-	return legacyDefaultDataPath
+	return filepath.Join("plugins", defaultDataFileName)
 }
 
 func cpaRootFromPluginPath(modulePath, workingDir string) (string, bool) {

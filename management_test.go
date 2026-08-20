@@ -111,6 +111,7 @@ func TestModelRouterManagementDashboardReusesCPAMCSessionAndTheme(t *testing.T) 
 		"requestManagementJSON(freshManagementURL(USAGE_API+'/prices'),{cache:'no-store'})",
 		"const ROUTER_FILTER_MODEL_PREFIX='model:'",
 		"const ROUTER_FILTER_ATTRIBUTION_PREFIX='attribution:'",
+		"const DEFAULT_HIDDEN_GROUP_COLUMNS=['provider','result','service_tier','source']",
 		"['attribution',usageState.attribution]",
 		"@media (max-width: 920px) {",
 		".price-grid .price-model-field { grid-column: 1 / -1; }",
@@ -130,15 +131,52 @@ func TestModelRouterManagementDashboardReusesCPAMCSessionAndTheme(t *testing.T) 
 		"window.setTimeout(()=>refreshUsage(false),15000)",
 		"if(value&&value.attribution==='direct')return '—'",
 		"if(value&&value.attribution==='unattributed')return 'Unattributed'",
-		"id=\"token-chart\"",
+		"id=\"token-chart\" class=\"chart-canvas\" role=\"img\"",
 		"id=\"model-chart\"",
 		"id=\"cost-chart\"",
 		"id=\"efficiency-chart\"",
+		"id=\"chart-tooltip\" class=\"chart-tooltip\" role=\"tooltip\"",
+		"function initializeChartInteractions()",
+		"function initializeDashboardResizeObserver()",
+		"badge.className='status-pill '+(result==='success'?'success':'failure')",
+		"applyPriceBook(book);closePricingDialog();showToast('Model pricing saved.'",
 		"id=\"pricing-dialog\"",
 		"id=\"reset-dialog\"",
 	} {
 		if !strings.Contains(page, required) {
 			t.Fatalf("dashboard missing %q", required)
+		}
+	}
+	refreshStart := strings.Index(page, "async function refreshUsage")
+	refreshEndRelative := -1
+	if refreshStart >= 0 {
+		refreshEndRelative = strings.Index(page[refreshStart:], "function validHiddenColumns")
+	}
+	refreshEnd := refreshStart + refreshEndRelative
+	if refreshStart < 0 || refreshEnd < 0 || strings.Contains(page[refreshStart:refreshEnd], "resetChartInteractions()") {
+		t.Fatal("refreshUsage must preserve active chart interactions while redrawing data")
+	}
+	for _, required := range []string{
+		"pricingDialogGeneration:0",
+		"pricingWriteInFlight:null",
+		"const dialogGeneration=++usageState.pricingDialogGeneration",
+		"const pendingWrite=usageState.pricingWriteInFlight",
+		"if(pendingWrite){try{await pendingWrite}catch(_error){}}",
+		"const writeRequest=requestManagementJSON(USAGE_API+'/prices'",
+		"if(usageState.pricingWriteInFlight===writeRequest)usageState.pricingWriteInFlight=null",
+		"const writeRequest=requestManagementJSON(USAGE_API+'/prices/sync'",
+		"if(dialogGeneration!==usageState.pricingDialogGeneration)return",
+		"if(dialogGeneration===usageState.pricingDialogGeneration&&pricingDialogEl.open)",
+		"const chartActive={id:'',index:-1,anchor:null,key:null}",
+		"function chartItemKey(id,item)",
+		"function remapChartActive(id,items)",
+		"focusedKey",
+		"if(entry)entry.focus({preventScroll:true})",
+		"key:'model:'+item.model",
+		"key:'aggregate:other'",
+	} {
+		if !strings.Contains(page, required) {
+			t.Fatalf("dashboard missing async pricing guard %q", required)
 		}
 	}
 	for _, forbidden := range []string{"http://", "https://", "innerHTML", "<input type=\"text\" data-target-field=\"model\""} {
