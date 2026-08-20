@@ -1557,7 +1557,7 @@ function renderUsageDashboard(){
   renderUsageCharts();
 }
 const chartInteractions=new Map();
-const chartActive={id:'',index:-1,anchor:null};
+const chartActive={id:'',index:-1,anchor:null,key:null};
 let chartResizeFrame=0;
 let dashboardResizeObserver=null;
 function chartColor(name){return getComputedStyle(document.documentElement).getPropertyValue(name).trim()}
@@ -1653,26 +1653,26 @@ function renderChartByID(id){
 function activeChartIndex(id,count){return chartActive.id===id&&chartActive.index>=0&&chartActive.index<count?chartActive.index:-1}
 function setChartInteraction(id,interaction){
   chartInteractions.set(id,interaction);
-  if(chartActive.id===id&&chartActive.index>=interaction.items.length){chartActive.id='';chartActive.index=-1;chartActive.anchor=null;chartTooltipEl.hidden=true}
+  if(chartActive.id===id&&chartActive.index>=interaction.items.length){chartActive.id='';chartActive.index=-1;chartActive.anchor=null;chartActive.key=null;chartTooltipEl.hidden=true}
 }
 function clearChartInteraction(id){
   chartInteractions.delete(id);
-  if(chartActive.id===id){chartActive.id='';chartActive.index=-1;chartActive.anchor=null;chartTooltipEl.hidden=true}
+  if(chartActive.id===id){chartActive.id='';chartActive.index=-1;chartActive.anchor=null;chartActive.key=null;chartTooltipEl.hidden=true}
 }
 function clearChartActive(redraw=true){
   const previous=chartActive.id;
-  chartActive.id='';chartActive.index=-1;chartActive.anchor=null;chartTooltipEl.hidden=true;
+  chartActive.id='';chartActive.index=-1;chartActive.anchor=null;chartActive.key=null;chartTooltipEl.hidden=true;
   if(redraw&&previous)renderChartByID(previous);
 }
 function resetChartInteractions(){
   chartInteractions.clear();
-  chartActive.id='';chartActive.index=-1;chartActive.anchor=null;chartTooltipEl.hidden=true;
+  chartActive.id='';chartActive.index=-1;chartActive.anchor=null;chartActive.key=null;chartTooltipEl.hidden=true;
 }
 function setChartActive(id,index,anchor){
   const interaction=chartInteractions.get(id);
   if(!interaction||index<0||index>=interaction.items.length){clearChartActive();return}
-  const previous=chartActive.id,changed=previous!==id||chartActive.index!==index;
-  chartActive.id=id;chartActive.index=index;chartActive.anchor=anchor||null;
+  const item=interaction.items[index],previous=chartActive.id,changed=previous!==id||chartActive.index!==index;
+  chartActive.id=id;chartActive.index=index;chartActive.anchor=anchor||null;chartActive.key=id==='model-chart'?item.model:null;
   if(changed){if(previous&&previous!==id)renderChartByID(previous);renderChartByID(id)}
   showChartTooltip();
 }
@@ -1791,7 +1791,7 @@ function setProviderModelFilter(model){
 function modelTooltip(item,total){
   return{title:item.model,rows:[{label:'Requests',value:formatNumber(item.requests),color:item.color},{label:'Share',value:(item.requests/total*100).toFixed(2)+'%'},{label:'Total tokens',value:formatNumber(item.total_tokens)},{label:'Estimated cost',value:formatUSD(item.cost_usd)}]};
 }
-function renderModelLegend(items,total){
+function renderModelLegend(items,total,focusedModel=''){
   const legend=document.getElementById('model-legend'),signature=JSON.stringify(items.map(item=>[item.model,item.requests,item.total_tokens,item.cost_usd,item.filterable]));
   if(legend.dataset.signature!==signature){
     const fragment=document.createDocumentFragment();
@@ -1808,22 +1808,33 @@ function renderModelLegend(items,total){
       if(item.filterable)entry.addEventListener('click',()=>setProviderModelFilter(item.model));
       fragment.appendChild(entry);
     });
+    if(focusedModel&&chartActive.id==='model-chart'&&chartActive.anchor&&chartActive.anchor.type==='element')chartActive.anchor=null;
     legend.replaceChildren(fragment);legend.dataset.signature=signature;
+    if(focusedModel){
+      const index=items.findIndex(item=>item.model===focusedModel),entry=index<0?null:legend.querySelector('[data-model-index="'+index+'"]');
+      if(entry)entry.focus();
+    }
   }
   legend.querySelectorAll('[data-model-index]').forEach(entry=>{const index=Number(entry.dataset.modelIndex),item=items[index];entry.classList.toggle('is-active',activeChartIndex('model-chart',items.length)===index);if(item&&item.filterable)entry.setAttribute('aria-pressed',String(usageState.providerModel===item.model))});
 }
 function renderModelChart(){
-  const chart=prepareChart('model-chart'),source=(usageState.overview&&usageState.overview.provider_models||[]).filter(item=>Number(item.requests||0)>0).sort((left,right)=>Number(right.requests||0)-Number(left.requests||0)),legend=document.getElementById('model-legend');
+  const previousInteraction=chartInteractions.get('model-chart'),previousItem=chartActive.id==='model-chart'&&previousInteraction?previousInteraction.items[chartActive.index]:null,activeModel=previousItem&&previousItem.model||'',focusedEntry=document.activeElement&&document.activeElement.closest('#model-legend [data-model-index]'),focusedModel=focusedEntry&&previousInteraction?((previousInteraction.items[Number(focusedEntry.dataset.modelIndex)]||{}).model||''):'',chart=prepareChart('model-chart'),source=(usageState.overview&&usageState.overview.provider_models||[]).filter(item=>Number(item.requests||0)>0).sort((left,right)=>Number(right.requests||0)-Number(left.requests||0)),legend=document.getElementById('model-legend');
   if(!source.length){clearChartInteraction('model-chart');drawEmptyChart(chart,'No provider model requests.');legend.replaceChildren();legend.dataset.signature='';return}
   const palette=['#2d6cdf','#24836b','#a96708','#8657c8','#b83b43','#47a7dc','#70a84f','#b88755'];
   const items=source.slice(0,7).map((item,index)=>({model:item.model,requests:Number(item.requests||0),total_tokens:Number(item.total_tokens||0),cost_usd:Number(item.cost_usd||0),filterable:true,color:palette[index%palette.length]}));
   if(source.length>7){const rest=source.slice(7);items.push({model:'Other',requests:rest.reduce((sum,item)=>sum+Number(item.requests||0),0),total_tokens:rest.reduce((sum,item)=>sum+Number(item.total_tokens||0),0),cost_usd:rest.reduce((sum,item)=>sum+Number(item.cost_usd||0),0),filterable:false,color:palette[7%palette.length]})}
-  const total=items.reduce((sum,item)=>sum+item.requests,0),context=chart.context,cx=chart.width/2,cy=chart.height/2-4,radius=Math.min(chart.width,chart.height)*.31,lineWidth=Math.max(22,radius*.28),active=activeChartIndex('model-chart',items.length);
+  const total=items.reduce((sum,item)=>sum+item.requests,0),context=chart.context,cx=chart.width/2,cy=chart.height/2-4,radius=Math.min(chart.width,chart.height)*.31,lineWidth=Math.max(22,radius*.28);
+  if(activeModel){
+    const nextIndex=items.findIndex(item=>item.model===activeModel);
+    if(nextIndex<0)clearChartActive(false);
+    else{chartActive.index=nextIndex;chartActive.key=activeModel}
+  }
+  const remappedActive=activeChartIndex('model-chart',items.length);
   context.lineWidth=lineWidth;context.strokeStyle=chartColor('--surface-soft');context.beginPath();context.arc(cx,cy,radius,0,Math.PI*2);context.stroke();
   let angle=-Math.PI/2;
-  items.forEach((item,index)=>{item.start=angle;item.end=angle+item.requests/total*Math.PI*2;item.anchor={x:cx+Math.cos((item.start+item.end)/2)*radius,y:cy+Math.sin((item.start+item.end)/2)*radius};context.save();if((active>=0&&active!==index)||(usageState.providerModel&&usageState.providerModel!==item.model))context.globalAlpha=.28;context.lineWidth=index===active||usageState.providerModel===item.model?lineWidth+5:lineWidth;context.strokeStyle=item.color;context.beginPath();context.arc(cx,cy,radius,item.start,item.end);context.stroke();context.restore();angle=item.end});
+  items.forEach((item,index)=>{item.start=angle;item.end=angle+item.requests/total*Math.PI*2;item.anchor={x:cx+Math.cos((item.start+item.end)/2)*radius,y:cy+Math.sin((item.start+item.end)/2)*radius};context.save();if((remappedActive>=0&&remappedActive!==index)||(usageState.providerModel&&usageState.providerModel!==item.model))context.globalAlpha=.28;context.lineWidth=index===remappedActive||usageState.providerModel===item.model?lineWidth+5:lineWidth;context.strokeStyle=item.color;context.beginPath();context.arc(cx,cy,radius,item.start,item.end);context.stroke();context.restore();angle=item.end});
   context.fillStyle=chartColor('--ink');context.textAlign='center';context.textBaseline='middle';context.font='750 23px "Cascadia Code",monospace';context.fillText(formatCompact(total),cx,cy-5);context.fillStyle=chartColor('--muted');context.font='11px "Segoe UI",sans-serif';context.fillText('requests',cx,cy+17);
-  renderModelLegend(items,total);
+  renderModelLegend(items,total,focusedModel);
   const hitTest=(x,y)=>{const distance=Math.hypot(x-cx,y-cy);if(distance<radius-lineWidth/2-6||distance>radius+lineWidth/2+6)return-1;let point=Math.atan2(y-cy,x-cx);if(point < -Math.PI/2)point+=Math.PI*2;return items.findIndex(item=>point>=item.start&&point<=item.end)};
   setChartInteraction('model-chart',{canvas:chart.canvas,width:chart.width,height:chart.height,items,hitTest,describe:item=>modelTooltip(item,total),activate:item=>{if(item.filterable)setProviderModelFilter(item.model)}});
 }

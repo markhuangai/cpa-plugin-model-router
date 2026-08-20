@@ -161,6 +161,10 @@ func TestModelRouterManagementDashboardReusesCPAMCSessionAndTheme(t *testing.T) 
 		"const dialogGeneration=++usageState.pricingDialogGeneration",
 		"if(dialogGeneration!==usageState.pricingDialogGeneration)return",
 		"if(dialogGeneration===usageState.pricingDialogGeneration&&pricingDialogEl.open)",
+		"const chartActive={id:'',index:-1,anchor:null,key:null}",
+		"focusedModel",
+		"chartActive.key=activeModel",
+		"if(entry)entry.focus()",
 	} {
 		if !strings.Contains(page, required) {
 			t.Fatalf("dashboard missing async pricing guard %q", required)
