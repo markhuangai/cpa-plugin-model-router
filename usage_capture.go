@@ -23,6 +23,7 @@ type directUsageCapture struct {
 	serviceTier     string
 	accountingMode  string
 	reasoningMode   string
+	totalExplicit   bool
 	maskedAPIKey    string
 	generate        bool
 	failed          bool
@@ -183,8 +184,14 @@ func (capture *directUsageCapture) observePayload(body []byte) {
 		if accounting.ReasoningMode != "" {
 			capture.reasoningMode = accounting.ReasoningMode
 		}
+		if accounting.TotalExplicit {
+			capture.totalExplicit = true
+		}
 		if ok {
 			mergeUsageDetail(&capture.detail, detail)
+			if !capture.totalExplicit {
+				capture.detail.TotalTokens = synthesizedUsageTotal(capture.detail, usagePayloadAccounting{AccountingMode: capture.accountingMode, ReasoningMode: capture.reasoningMode})
+			}
 		}
 	}
 }
@@ -216,6 +223,7 @@ func usageJSONPayloads(body []byte) [][]byte {
 type usagePayloadAccounting struct {
 	AccountingMode string
 	ReasoningMode  string
+	TotalExplicit  bool
 }
 
 func parseUsagePayload(payload []byte) (pluginapi.UsageDetail, string, usagePayloadAccounting, bool) {
@@ -230,6 +238,7 @@ func parseUsagePayload(payload []byte) (pluginapi.UsageDetail, string, usagePayl
 		"interaction.usage",
 		"interaction.total_usage",
 		"interaction.metadata.total_usage",
+		"message.usage",
 	)
 	if !node.Exists() {
 		node = firstGJSONNode(root, "response.usageMetadata", "usageMetadata", "usage_metadata")
@@ -250,7 +259,7 @@ func parseUsagePayload(payload []byte) (pluginapi.UsageDetail, string, usagePayl
 		if detail.TotalTokens == 0 {
 			detail.TotalTokens = saturatingTokenSum(detail.InputTokens, detail.OutputTokens, detail.ReasoningTokens)
 		}
-		return detail, tier, usagePayloadAccounting{AccountingMode: accountingModeInputIncludesCache, ReasoningMode: reasoningModeSeparate}, hasUsageTokens(detail)
+		return detail, tier, usagePayloadAccounting{AccountingMode: accountingModeInputIncludesCache, ReasoningMode: reasoningModeSeparate, TotalExplicit: node.Get("totalTokenCount").Exists()}, hasUsageTokens(detail)
 	}
 
 	cacheRead := firstGJSONInt(node, "cache_read_input_tokens", "cache_read_tokens", "cacheReadTokens")
@@ -305,7 +314,19 @@ func parseUsagePayload(payload []byte) (pluginapi.UsageDetail, string, usagePayl
 	if node.Get("thinking_tokens").Exists() || node.Get("total_thought_tokens").Exists() {
 		accounting.ReasoningMode = reasoningModeSeparate
 	}
+	accounting.TotalExplicit = node.Get("total_tokens").Exists() || node.Get("totalTokenCount").Exists()
 	return detail, tier, accounting, hasUsageTokens(detail)
+}
+
+func synthesizedUsageTotal(detail pluginapi.UsageDetail, accounting usagePayloadAccounting) int64 {
+	values := []int64{detail.InputTokens, detail.OutputTokens}
+	if accounting.AccountingMode == accountingModeInputExcludesCache {
+		values = append(values, detail.CacheReadTokens, detail.CacheCreationTokens)
+	}
+	if accounting.ReasoningMode == reasoningModeSeparate {
+		values = append(values, detail.ReasoningTokens)
+	}
+	return saturatingTokenSum(values...)
 }
 
 func mergeUsageDetail(current *pluginapi.UsageDetail, next pluginapi.UsageDetail) {

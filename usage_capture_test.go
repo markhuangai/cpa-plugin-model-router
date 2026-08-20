@@ -62,6 +62,26 @@ func TestUsageCaptureParsesSplitStream(t *testing.T) {
 	}
 }
 
+func TestUsageCaptureRecomputesSynthesizedStreamTotals(t *testing.T) {
+	capture := directUsageCapture{}
+	capture.observePayload([]byte(`{"usage":{"input_tokens":5,"cache_read_input_tokens":3}}`))
+	capture.observePayload([]byte(`{"usage":{"output_tokens":4}}`))
+	if capture.detail.TotalTokens != 12 {
+		t.Fatalf("synthesized stream total = %d, want 12", capture.detail.TotalTokens)
+	}
+	capture.observePayload([]byte(`{"usage":{"total_tokens":99}}`))
+	if capture.detail.TotalTokens != 99 {
+		t.Fatalf("explicit stream total = %d, want 99", capture.detail.TotalTokens)
+	}
+}
+
+func TestParseUsagePayloadReadsClaudeMessageStartUsage(t *testing.T) {
+	detail, _, accounting, ok := parseUsagePayload([]byte(`{"type":"message_start","message":{"usage":{"input_tokens":5,"cache_read_input_tokens":3}}}`))
+	if !ok || detail.InputTokens != 5 || detail.CacheReadTokens != 3 || accounting.AccountingMode != accountingModeInputExcludesCache {
+		t.Fatalf("Claude message_start usage = %#v, %#v, %v", detail, accounting, ok)
+	}
+}
+
 func TestUsageCaptureInfersProviderAccountingFromPayload(t *testing.T) {
 	start := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
 	claude := newRoutedUsageCapture(pluginapi.ExecutorRequest{Format: "openai"}, "claude-sonnet-4-5", start)
