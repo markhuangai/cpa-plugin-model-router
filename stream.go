@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
@@ -49,7 +50,17 @@ func (p *modelRouterPlugin) executeStreamWithHost(_ context.Context, request plu
 			break
 		}
 		target := targetModel(requestedModel, selection.model)
-		receivedPayload, err := forwardStreamAttempt(request, bodyInfo, target, requestedModel, pluginStreamID, host)
+		capture := newRoutedUsageCapture(request, target, time.Now().UTC())
+		mark := p.attribution.MarkRouted(route.Alias, target, request.Headers, capture)
+		receivedPayload, err := forwardStreamAttempt(request, bodyInfo, target, requestedModel, pluginStreamID, host, &capture)
+		status := capture.statusCode
+		if err != nil {
+			if errorStatus := statusFromError(err); errorStatus > 0 {
+				status = errorStatus
+			}
+		}
+		capture.finishAttempt(status, err != nil, time.Now().UTC())
+		p.recordUsageFallback(mark, capture)
 		if err == nil {
 			return nil
 		}
@@ -68,10 +79,13 @@ func (p *modelRouterPlugin) executeStreamWithHost(_ context.Context, request plu
 	return newRouteError(http.StatusServiceUnavailable, "model_route_unavailable", route.Alias, fmt.Sprintf("no available candidate for model route %q", route.Alias), detail)
 }
 
-func forwardStreamAttempt(request pluginapi.ExecutorRequest, bodyInfo executionBody, target, requestedModel, pluginStreamID string, host modelHost) (bool, error) {
+func forwardStreamAttempt(request pluginapi.ExecutorRequest, bodyInfo executionBody, target, requestedModel, pluginStreamID string, host modelHost, capture *directUsageCapture) (bool, error) {
 	response, err := host.StartStream(hostRequest(request, bodyInfo, target, true))
 	if err != nil {
 		return false, err
+	}
+	if capture != nil {
+		capture.statusCode = response.StatusCode
 	}
 	if response.StatusCode >= 400 {
 		_ = host.CloseStream(response.StreamID)
@@ -93,6 +107,12 @@ func forwardStreamAttempt(request pluginapi.ExecutorRequest, bodyInfo executionB
 		}
 		if len(chunk.Payload) > 0 {
 			receivedPayload = true
+			if capture != nil {
+				if capture.firstTokenAt.IsZero() {
+					capture.firstTokenAt = time.Now().UTC()
+				}
+				capture.observeStreamPayload(chunk.Payload)
+			}
 			if rewritten := rewriter.Rewrite(chunk.Payload); len(rewritten) > 0 {
 				if err := host.Emit(pluginStreamID, rewritten); err != nil {
 					return true, err

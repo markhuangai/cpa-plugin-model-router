@@ -39,11 +39,20 @@ func (p *modelRouterPlugin) executeWithHost(request pluginapi.ExecutorRequest, h
 			break
 		}
 		target := targetModel(requestedModel, selection.model)
+		startedAt := time.Now().UTC()
+		capture := newRoutedUsageCapture(request, target, startedAt)
+		mark := p.attribution.MarkRouted(route.Alias, target, request.Headers, capture)
 		response, err := host.Execute(hostRequest(request, bodyInfo, target, false))
 		status := response.StatusCode
 		if status == 0 && err == nil {
 			status = http.StatusOK
 		}
+		if status == 0 && err != nil {
+			status = statusFromError(err)
+		}
+		capture.observePayload(response.Body)
+		capture.finishAttempt(status, err != nil || status < 200 || status >= 300, time.Now().UTC())
+		p.recordUsageFallback(mark, capture)
 		if err == nil && status >= 200 && status < 300 {
 			return pluginapi.ExecutorResponse{
 				Payload: rewriteResponseModel(response.Body, requestedModel),

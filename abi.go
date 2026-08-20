@@ -80,7 +80,8 @@ type abiError struct {
 }
 
 type lifecycleRequest struct {
-	ConfigYAML []byte `json:"config_yaml"`
+	ConfigYAML    []byte `json:"config_yaml"`
+	SchemaVersion uint32 `json:"schema_version"`
 }
 
 type executorRPCRequest struct {
@@ -104,6 +105,11 @@ type abiCapabilities struct {
 	ModelRegistrar        bool                         `json:"model_registrar"`
 	ModelRouter           bool                         `json:"model_router"`
 	Executor              bool                         `json:"executor"`
+	RequestInterceptor    bool                         `json:"request_interceptor"`
+	RequestLifecycle      bool                         `json:"request_lifecycle_plugin"`
+	ResponseInterceptor   bool                         `json:"response_interceptor"`
+	StreamInterceptor     bool                         `json:"response_stream_interceptor"`
+	UsagePlugin           bool                         `json:"usage_plugin"`
 	ManagementAPI         bool                         `json:"management_api"`
 	ExecutorModelScope    pluginapi.ExecutorModelScope `json:"executor_model_scope"`
 	ExecutorInputFormats  []string                     `json:"executor_input_formats"`
@@ -120,8 +126,8 @@ var modelRouterABIState = struct {
 
 const maxCGoRequestLen = C.size_t(1<<31 - 1)
 
-// The plugin uses no schema-v2 request-lifecycle fields, so advertising v1 keeps older CPA v7 hosts compatible.
-const registrationSchemaVersion uint32 = 1
+const registrationSchemaVersion uint32 = 2
+const streamBodyOmissionSchemaVersion uint32 = 3
 
 //export cliproxy_plugin_init
 func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_api) C.int {
@@ -176,10 +182,14 @@ func ModelRouterPluginFree(pointer unsafe.Pointer, _ C.size_t) {
 func ModelRouterPluginShutdown() {
 	modelRouterABIState.Lock()
 	modelRouterABIState.shuttingDown = true
+	plugin := modelRouterABIState.plugin
 	modelRouterABIState.plugin = nil
 	modelRouterABIState.metadata = pluginapi.Metadata{}
 	modelRouterABIState.Unlock()
 	modelRouterABIState.inFlight.Wait()
+	if plugin != nil && plugin.store != nil {
+		_ = plugin.store.Close()
+	}
 	C.model_router_store_host(nil)
 }
 
@@ -195,7 +205,10 @@ func handleModelRouterABIMethod(ctx context.Context, method string, request []by
 		if err := json.Unmarshal(request, &rpcRequest); err != nil {
 			return nil, fmt.Errorf("decode management.handle request: %w", err)
 		}
-		return okEnvelope(handleModelRouterManagement(rpcRequest.ManagementRequest))
+		path := strings.TrimRight(strings.TrimSpace(rpcRequest.Path), "/")
+		if !strings.HasPrefix(path, modelRouterUsageBasePath+"/") {
+			return okEnvelope(handleModelRouterManagement(nil, rpcRequest.ManagementRequest))
+		}
 	}
 	plugin, metadata, done, err := beginModelRouterCall()
 	if err != nil {
@@ -203,6 +216,12 @@ func handleModelRouterABIMethod(ctx context.Context, method string, request []by
 	}
 	defer done()
 	switch method {
+	case pluginabi.MethodManagementHandle:
+		var rpcRequest managementRPCRequest
+		if err := json.Unmarshal(request, &rpcRequest); err != nil {
+			return nil, fmt.Errorf("decode management.handle request: %w", err)
+		}
+		return okEnvelope(handleModelRouterManagement(plugin, rpcRequest.ManagementRequest))
 	case pluginabi.MethodModelRegister:
 		response, err := plugin.RegisterModels(ctx, pluginapi.ModelRegistrationRequest{Plugin: metadata})
 		return okEnvelopeWithError(response, err)
@@ -236,6 +255,49 @@ func handleModelRouterABIMethod(ctx context.Context, method string, request []by
 		return errorForExecution(err, "model_route_count_tokens_unsupported"), nil
 	case pluginabi.MethodExecutorHTTPRequest:
 		return errorEnvelope("unsupported_method", "executor.http_request is not supported by model-router", 0), nil
+	case pluginabi.MethodRequestInterceptBefore, pluginabi.MethodRequestInterceptAfter:
+		var rpcRequest pluginapi.RequestInterceptRequest
+		if err := json.Unmarshal(request, &rpcRequest); err != nil {
+			return nil, fmt.Errorf("decode %s request: %w", method, err)
+		}
+		var response pluginapi.RequestInterceptResponse
+		var err error
+		if method == pluginabi.MethodRequestInterceptBefore {
+			response, err = plugin.InterceptRequestBeforeAuth(ctx, rpcRequest)
+		} else {
+			response, err = plugin.InterceptRequestAfterAuth(ctx, rpcRequest)
+		}
+		return okEnvelopeWithError(response, err)
+	case pluginabi.MethodRequestComplete:
+		var completion pluginapi.RequestCompletion
+		if err := json.Unmarshal(request, &completion); err != nil {
+			return nil, fmt.Errorf("decode request.complete request: %w", err)
+		}
+		if err := plugin.HandleRequestComplete(ctx, completion); err != nil {
+			return nil, err
+		}
+		return okEnvelope(map[string]any{})
+	case pluginabi.MethodResponseInterceptAfter:
+		var rpcRequest pluginapi.ResponseInterceptRequest
+		if err := json.Unmarshal(request, &rpcRequest); err != nil {
+			return nil, fmt.Errorf("decode response.intercept_after request: %w", err)
+		}
+		response, err := plugin.InterceptResponse(ctx, rpcRequest)
+		return okEnvelopeWithError(response, err)
+	case pluginabi.MethodResponseInterceptStreamChunk:
+		var rpcRequest pluginapi.StreamChunkInterceptRequest
+		if err := json.Unmarshal(request, &rpcRequest); err != nil {
+			return nil, fmt.Errorf("decode response.intercept_stream_chunk request: %w", err)
+		}
+		response, err := plugin.InterceptStreamChunk(ctx, rpcRequest)
+		return okEnvelopeWithError(response, err)
+	case pluginabi.MethodUsageHandle:
+		var record pluginapi.UsageRecord
+		if err := json.Unmarshal(request, &record); err != nil {
+			return nil, fmt.Errorf("decode usage.handle request: %w", err)
+		}
+		plugin.HandleUsage(ctx, record)
+		return okEnvelope(map[string]any{})
 	default:
 		return errorEnvelope("unknown_method", "unknown method: "+method, 0), nil
 	}
@@ -249,9 +311,9 @@ func registerModelRouter(raw []byte) ([]byte, error) {
 		}
 	}
 	modelRouterABIState.Lock()
-	var previous *routeRuntime
+	var previous *modelRouterPlugin
 	if modelRouterABIState.plugin != nil {
-		previous = modelRouterABIState.plugin.runtime
+		previous = modelRouterABIState.plugin
 	}
 	modelRouterABIState.Unlock()
 	plugin, metadata, err := newModelRouterPlugin(request.ConfigYAML, previous)
@@ -264,13 +326,22 @@ func registerModelRouter(raw []byte) ([]byte, error) {
 	modelRouterABIState.shuttingDown = false
 	modelRouterABIState.Unlock()
 	formats := []string{"openai", "openai-response", "claude", "gemini", "codex", "antigravity", "interactions"}
+	schemaVersion := registrationSchemaVersion
+	if request.SchemaVersion >= streamBodyOmissionSchemaVersion {
+		schemaVersion = streamBodyOmissionSchemaVersion
+	}
 	return okEnvelope(abiRegistration{
-		SchemaVersion: registrationSchemaVersion,
+		SchemaVersion: schemaVersion,
 		Metadata:      metadata,
 		Capabilities: abiCapabilities{
 			ModelRegistrar:        true,
 			ModelRouter:           true,
 			Executor:              true,
+			RequestInterceptor:    true,
+			RequestLifecycle:      true,
+			ResponseInterceptor:   true,
+			StreamInterceptor:     true,
+			UsagePlugin:           true,
 			ManagementAPI:         true,
 			ExecutorModelScope:    pluginapi.ExecutorModelScopeStatic,
 			ExecutorInputFormats:  formats,

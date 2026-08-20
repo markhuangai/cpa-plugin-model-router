@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -15,6 +16,8 @@ const (
 	routeStrategyPriority   = "priority"
 	routeStrategyRoundRobin = "round-robin"
 	defaultCooldownSeconds  = 60
+	defaultRetentionDays    = 365
+	maxRetentionDays        = 3650
 )
 
 type modelRoute struct {
@@ -33,16 +36,20 @@ type modelRouteYAML struct {
 }
 
 type routerConfig struct {
-	Enabled bool
-	Routes  []modelRoute
+	Enabled       bool
+	DataPath      string
+	RetentionDays int
+	Routes        []modelRoute
 }
 
 type routerConfigYAML struct {
-	Enabled      *bool             `yaml:"enabled,omitempty"`
-	Priority     int               `yaml:"priority,omitempty"`
-	Store        yaml.Node         `yaml:"store,omitempty"`
-	Routes       *[]modelRouteYAML `yaml:"routes,omitempty"`
-	LegacyRoutes *[]modelRouteYAML `yaml:"model-routes,omitempty"`
+	Enabled       *bool             `yaml:"enabled,omitempty"`
+	Priority      int               `yaml:"priority,omitempty"`
+	Store         yaml.Node         `yaml:"store,omitempty"`
+	DataPath      string            `yaml:"data_path,omitempty"`
+	RetentionDays *int              `yaml:"retention_days,omitempty"`
+	Routes        *[]modelRouteYAML `yaml:"routes,omitempty"`
+	LegacyRoutes  *[]modelRouteYAML `yaml:"model-routes,omitempty"`
 }
 
 func decodeRouterConfig(raw []byte) (routerConfig, error) {
@@ -63,6 +70,21 @@ func decodeRouterConfig(raw []byte) (routerConfig, error) {
 	}
 	if wire.Routes != nil && wire.LegacyRoutes != nil {
 		return routerConfig{}, errors.New("model-router config must not contain both routes and model-routes")
+	}
+	dataPath := strings.TrimSpace(wire.DataPath)
+	if dataPath == "" {
+		dataPath = defaultDataPathResolver()
+	}
+	absoluteDataPath, err := filepath.Abs(filepath.Clean(dataPath))
+	if err != nil {
+		return routerConfig{}, fmt.Errorf("resolve data_path: %w", err)
+	}
+	retentionDays := defaultRetentionDays
+	if wire.RetentionDays != nil {
+		retentionDays = *wire.RetentionDays
+	}
+	if retentionDays < 1 || retentionDays > maxRetentionDays {
+		return routerConfig{}, fmt.Errorf("retention_days must be between 1 and %d", maxRetentionDays)
 	}
 	enabled := true
 	if wire.Enabled != nil {
@@ -115,7 +137,7 @@ func decodeRouterConfig(raw []byte) (routerConfig, error) {
 	if !enabled {
 		routes = nil
 	}
-	return routerConfig{Enabled: enabled, Routes: routes}, nil
+	return routerConfig{Enabled: enabled, DataPath: absoluteDataPath, RetentionDays: retentionDays, Routes: routes}, nil
 }
 
 func validateRoute(route modelRoute, index int, aliases map[string]int) error {

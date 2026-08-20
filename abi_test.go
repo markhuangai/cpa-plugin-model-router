@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -30,7 +32,7 @@ func TestABIRegistrationRoutingAndCountTokens(t *testing.T) {
 	if err := json.Unmarshal(registrationEnvelope.Result, &registration); err != nil {
 		t.Fatalf("decode registration result: %v", err)
 	}
-	if !registrationEnvelope.OK || registration.SchemaVersion != registrationSchemaVersion || registration.Metadata.Name != pluginName || registration.Metadata.Version != "0.2.2" || !registration.Capabilities.ModelRegistrar || !registration.Capabilities.ModelRouter || !registration.Capabilities.Executor || !registration.Capabilities.ManagementAPI {
+	if !registrationEnvelope.OK || registration.SchemaVersion != registrationSchemaVersion || registration.Metadata.Name != pluginName || registration.Metadata.Version != "0.2.2" || !registration.Capabilities.ModelRegistrar || !registration.Capabilities.ModelRouter || !registration.Capabilities.Executor || !registration.Capabilities.RequestInterceptor || !registration.Capabilities.RequestLifecycle || !registration.Capabilities.ResponseInterceptor || !registration.Capabilities.StreamInterceptor || !registration.Capabilities.UsagePlugin || !registration.Capabilities.ManagementAPI {
 		t.Fatalf("registration = %#v", registration)
 	}
 
@@ -54,6 +56,23 @@ func TestABIRegistrationRoutingAndCountTokens(t *testing.T) {
 		t.Fatalf("route = %#v", route)
 	}
 
+	usageRequest, err := json.Marshal(pluginapi.UsageRecord{
+		Provider: "openai", Model: "provider-a", RequestedAt: time.Now().UTC(), Detail: pluginapi.UsageDetail{InputTokens: 2, OutputTokens: 1, TotalTokens: 3},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handleModelRouterABIMethod(t.Context(), pluginabi.MethodUsageHandle, usageRequest); err != nil {
+		t.Fatalf("usage.handle error = %v", err)
+	}
+	modelRouterABIState.Lock()
+	activePlugin := modelRouterABIState.plugin
+	modelRouterABIState.Unlock()
+	page, err := activePlugin.store.Requests(usageFilter{From: time.Now().UTC().Add(-time.Hour), To: time.Now().UTC().Add(time.Hour)}, "time", "desc", 0, 10)
+	if err != nil || page.Total != 1 || page.Items[0].TotalTokens != 3 {
+		t.Fatalf("usage records = %#v, %v", page, err)
+	}
+
 	raw, err = handleModelRouterABIMethod(t.Context(), pluginabi.MethodExecutorCountTokens, nil)
 	if err != nil {
 		t.Fatalf("executor.count_tokens error = %v", err)
@@ -67,18 +86,53 @@ func TestABIRegistrationRoutingAndCountTokens(t *testing.T) {
 	}
 }
 
+func TestABIRegistrationUsesStreamBodyOmissionWhenHostSupportsIt(t *testing.T) {
+	resetModelRouterABIState(t)
+	request, err := json.Marshal(lifecycleRequest{ConfigYAML: []byte("routes: []\n"), SchemaVersion: streamBodyOmissionSchemaVersion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := handleModelRouterABIMethod(t.Context(), pluginabi.MethodPluginRegister, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope abiEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	var registration abiRegistration
+	if err := json.Unmarshal(envelope.Result, &registration); err != nil {
+		t.Fatal(err)
+	}
+	if registration.SchemaVersion != streamBodyOmissionSchemaVersion {
+		t.Fatalf("schema version = %d, want %d", registration.SchemaVersion, streamBodyOmissionSchemaVersion)
+	}
+}
+
 func resetModelRouterABIState(t *testing.T) {
 	t.Helper()
+	previousResolver := defaultDataPathResolver
+	testDataPath := filepath.Join(t.TempDir(), "model-router-usage.db")
+	defaultDataPathResolver = func() string { return testDataPath }
 	modelRouterABIState.Lock()
+	previousPlugin := modelRouterABIState.plugin
 	modelRouterABIState.plugin = nil
 	modelRouterABIState.metadata = pluginapi.Metadata{}
 	modelRouterABIState.shuttingDown = false
 	modelRouterABIState.Unlock()
+	if previousPlugin != nil && previousPlugin.store != nil {
+		_ = previousPlugin.store.Close()
+	}
 	t.Cleanup(func() {
 		modelRouterABIState.Lock()
+		plugin := modelRouterABIState.plugin
 		modelRouterABIState.plugin = nil
 		modelRouterABIState.metadata = pluginapi.Metadata{}
 		modelRouterABIState.shuttingDown = false
 		modelRouterABIState.Unlock()
+		if plugin != nil && plugin.store != nil {
+			_ = plugin.store.Close()
+		}
+		defaultDataPathResolver = previousResolver
 	})
 }

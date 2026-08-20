@@ -34,8 +34,28 @@ func TestModelRouterABIAdvertisesConfigurationResource(t *testing.T) {
 	if len(management.Resources) != 1 || management.Resources[0].Path != "/config" || management.Resources[0].Menu != "Model Router" {
 		t.Fatalf("resources = %#v", management.Resources)
 	}
-	if len(management.Routes) != 1 || management.Routes[0].Method != http.MethodPost || management.Routes[0].Path != "/plugins/model-router/validate" {
-		t.Fatalf("routes = %#v", management.Routes)
+	wantedRoutes := map[string]bool{
+		http.MethodPost + " /plugins/model-router/validate":          false,
+		http.MethodGet + " /plugins/model-router/usage/overview":     false,
+		http.MethodGet + " /plugins/model-router/usage/groups":       false,
+		http.MethodGet + " /plugins/model-router/usage/requests":     false,
+		http.MethodGet + " /plugins/model-router/usage/prices":       false,
+		http.MethodPut + " /plugins/model-router/usage/prices":       false,
+		http.MethodPost + " /plugins/model-router/usage/prices/sync": false,
+		http.MethodGet + " /plugins/model-router/usage/preferences":  false,
+		http.MethodPut + " /plugins/model-router/usage/preferences":  false,
+		http.MethodPost + " /plugins/model-router/usage/reset":       false,
+	}
+	for _, route := range management.Routes {
+		key := route.Method + " " + route.Path
+		if _, wanted := wantedRoutes[key]; wanted {
+			wantedRoutes[key] = true
+		}
+	}
+	for route, found := range wantedRoutes {
+		if !found {
+			t.Fatalf("management routes missing %s: %#v", route, management.Routes)
+		}
 	}
 }
 
@@ -79,6 +99,43 @@ func TestModelRouterManagementDashboardReusesCPAMCSessionAndTheme(t *testing.T) 
 		"<select data-target-field=\"model\"",
 		"model+' (unavailable)'",
 		"data-action=\"add-target\"",
+		"role=\"tablist\" aria-label=\"Model Router sections\"",
+		"id=\"configuration-tab\" class=\"page-tab\" type=\"button\" role=\"tab\" aria-selected=\"true\"",
+		"id=\"usage-tab\" class=\"page-tab\" type=\"button\" role=\"tab\" aria-selected=\"false\"",
+		"id=\"configuration-panel\" class=\"tab-panel\" role=\"tabpanel\"",
+		"id=\"usage-panel\" class=\"tab-panel usage-panel\" role=\"tabpanel\"",
+		"/v0/management/plugins/model-router/usage",
+		"requestManagementJSON(USAGE_API+'/overview?'",
+		"requestManagementJSON(USAGE_API+'/groups?'",
+		"requestManagementJSON(USAGE_API+'/requests?'",
+		"requestManagementJSON(freshManagementURL(USAGE_API+'/prices'),{cache:'no-store'})",
+		"const ROUTER_FILTER_MODEL_PREFIX='model:'",
+		"const ROUTER_FILTER_ATTRIBUTION_PREFIX='attribution:'",
+		"['attribution',usageState.attribution]",
+		"@media (max-width: 920px) {",
+		".price-grid .price-model-field { grid-column: 1 / -1; }",
+		".price-grid > * { min-width: 0; }",
+		".price-source { display: block; min-width: 0;",
+		"function effectiveCacheReadValue(value)",
+		"effective_cache_read_tokens",
+		"document.querySelectorAll('#pricing-dialog input, #pricing-dialog select, #pricing-dialog textarea, #pricing-dialog button')",
+		"function flushUsagePreferencesSave(generation)",
+		"preferenceSaveInFlight",
+		"preferenceSaveGeneration",
+		"custom_from:usageState.customFrom",
+		"custom_to:usageState.customTo",
+		"const controller=new AbortController()",
+		"generation!==usageState.generation",
+		"document.addEventListener('visibilitychange'",
+		"window.setTimeout(()=>refreshUsage(false),15000)",
+		"if(value&&value.attribution==='direct')return '—'",
+		"if(value&&value.attribution==='unattributed')return 'Unattributed'",
+		"id=\"token-chart\"",
+		"id=\"model-chart\"",
+		"id=\"cost-chart\"",
+		"id=\"efficiency-chart\"",
+		"id=\"pricing-dialog\"",
+		"id=\"reset-dialog\"",
 	} {
 		if !strings.Contains(page, required) {
 			t.Fatalf("dashboard missing %q", required)
@@ -134,7 +191,7 @@ func TestModelRouterManagementValidationUsesPluginParser(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			response := handleModelRouterManagement(pluginapi.ManagementRequest{
+			response := handleModelRouterManagement(nil, pluginapi.ManagementRequest{
 				Method: http.MethodPost,
 				Path:   modelRouterValidationPath,
 				Body:   []byte(test.body),
@@ -147,7 +204,7 @@ func TestModelRouterManagementValidationUsesPluginParser(t *testing.T) {
 }
 
 func TestModelRouterManagementRejectsUnsupportedMethod(t *testing.T) {
-	response := handleModelRouterManagement(pluginapi.ManagementRequest{Method: http.MethodDelete, Path: modelRouterDashboardPath})
+	response := handleModelRouterManagement(nil, pluginapi.ManagementRequest{Method: http.MethodDelete, Path: modelRouterDashboardPath})
 	if response.StatusCode != http.StatusMethodNotAllowed || !strings.Contains(string(response.Body), "method_not_allowed") {
 		t.Fatalf("response = %#v, body=%s", response, response.Body)
 	}

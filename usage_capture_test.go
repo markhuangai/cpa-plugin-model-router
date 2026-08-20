@@ -1,0 +1,285 @@
+package main
+
+import (
+	"net/http"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+)
+
+func TestParseUsagePayloadProtocols(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want pluginapi.UsageDetail
+		tier string
+	}{
+		{
+			name: "openai chat",
+			body: `{"usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18,"prompt_tokens_details":{"cached_tokens":3},"completion_tokens_details":{"reasoning_tokens":2}},"service_tier":"priority"}`,
+			want: pluginapi.UsageDetail{InputTokens: 11, OutputTokens: 7, ReasoningTokens: 2, CachedTokens: 3, CacheReadTokens: 3, TotalTokens: 18},
+			tier: "priority",
+		},
+		{
+			name: "openai responses",
+			body: `{"response":{"usage":{"input_tokens":5,"output_tokens":4,"total_tokens":9,"input_tokens_details":{"cached_tokens":1},"output_tokens_details":{"reasoning_tokens":2}}}}`,
+			want: pluginapi.UsageDetail{InputTokens: 5, OutputTokens: 4, ReasoningTokens: 2, CachedTokens: 1, CacheReadTokens: 1, TotalTokens: 9},
+		},
+		{
+			name: "claude",
+			body: `{"usage":{"input_tokens":5,"output_tokens":4,"cache_read_input_tokens":3,"cache_creation_input_tokens":2}}`,
+			want: pluginapi.UsageDetail{InputTokens: 5, OutputTokens: 4, CachedTokens: 3, CacheReadTokens: 3, CacheCreationTokens: 2, TotalTokens: 14},
+		},
+		{
+			name: "claude cache creation only",
+			body: `{"usage":{"input_tokens":5,"cache_creation_input_tokens":2}}`,
+			want: pluginapi.UsageDetail{InputTokens: 5, CacheCreationTokens: 2, TotalTokens: 7},
+		},
+		{
+			name: "gemini",
+			body: `{"usageMetadata":{"promptTokenCount":5,"toolUsePromptTokenCount":2,"candidatesTokenCount":4,"thoughtsTokenCount":3,"cachedContentTokenCount":1,"totalTokenCount":14}}`,
+			want: pluginapi.UsageDetail{InputTokens: 7, OutputTokens: 4, ReasoningTokens: 3, CachedTokens: 1, CacheReadTokens: 1, TotalTokens: 14},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, tier, _, ok := parseUsagePayload([]byte(test.body))
+			if !ok || got != test.want || tier != test.tier {
+				t.Fatalf("parseUsagePayload() = %#v, %q, %v; want %#v, %q, true", got, tier, ok, test.want, test.tier)
+			}
+		})
+	}
+}
+
+func TestUsageCaptureParsesSplitStream(t *testing.T) {
+	start := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	capture := directUsageCapture{requestedAt: start, generate: true}
+	capture.observeStream(pluginapi.StreamChunkInterceptRequest{ChunkIndex: 0, Body: []byte(`data: {"response":{"usage":{"input_tokens":8,`)}, start.Add(100*time.Millisecond))
+	capture.observeStream(pluginapi.StreamChunkInterceptRequest{ChunkIndex: 1, Body: []byte(`"output_tokens":2,"total_tokens":10}}}` + "\n\n")}, start.Add(150*time.Millisecond))
+	capture.complete(pluginapi.RequestCompletion{Outcome: pluginapi.RequestCompletionSucceeded, StartedAt: start, CompletedAt: start.Add(time.Second), StatusCode: http.StatusOK})
+	if capture.detail.InputTokens != 8 || capture.detail.OutputTokens != 2 || capture.detail.TotalTokens != 10 {
+		t.Fatalf("stream detail = %#v", capture.detail)
+	}
+	if got := durationBetween(capture.requestedAt, capture.firstTokenAt); got != 100*time.Millisecond {
+		t.Fatalf("TTFT = %v", got)
+	}
+}
+
+func TestUsageCaptureRecomputesSynthesizedStreamTotals(t *testing.T) {
+	capture := directUsageCapture{}
+	capture.observePayload([]byte(`{"usage":{"input_tokens":5,"cache_read_input_tokens":3}}`))
+	capture.observePayload([]byte(`{"usage":{"output_tokens":4}}`))
+	if capture.detail.TotalTokens != 12 {
+		t.Fatalf("synthesized stream total = %d, want 12", capture.detail.TotalTokens)
+	}
+	capture.observePayload([]byte(`{"usage":{"total_tokens":99}}`))
+	if capture.detail.TotalTokens != 99 {
+		t.Fatalf("explicit stream total = %d, want 99", capture.detail.TotalTokens)
+	}
+	partial := directUsageCapture{}
+	partial.observePayload([]byte(`{"usage":{"input_tokens":5,"total_tokens":5}}`))
+	partial.observePayload([]byte(`{"usage":{"output_tokens":4}}`))
+	if partial.detail.TotalTokens != 9 {
+		t.Fatalf("partial explicit stream total = %d, want 9", partial.detail.TotalTokens)
+	}
+}
+
+func TestParseUsagePayloadReadsClaudeMessageStartUsage(t *testing.T) {
+	detail, _, accounting, ok := parseUsagePayload([]byte(`{"type":"message_start","message":{"usage":{"input_tokens":5,"cache_read_input_tokens":3}}}`))
+	if !ok || detail.InputTokens != 5 || detail.CacheReadTokens != 3 || accounting.AccountingMode != accountingModeInputExcludesCache {
+		t.Fatalf("Claude message_start usage = %#v, %#v, %v", detail, accounting, ok)
+	}
+}
+
+func TestUsageCaptureInfersProviderAccountingFromPayload(t *testing.T) {
+	start := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	claude := newRoutedUsageCapture(pluginapi.ExecutorRequest{Format: "openai"}, "claude-sonnet-4-5", start)
+	claude.observePayload([]byte(`{"usage":{"input_tokens":5,"cache_read_input_tokens":3,"output_tokens":4}}`))
+	if claude.accountingMode != accountingModeInputExcludesCache {
+		t.Fatalf("Claude accounting mode = %q", claude.accountingMode)
+	}
+	gemini := newRoutedUsageCapture(pluginapi.ExecutorRequest{Format: "openai"}, "gemini-2.5-pro", start)
+	gemini.observePayload([]byte(`{"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":4,"thoughtsTokenCount":3}}`))
+	if gemini.accountingMode != accountingModeInputIncludesCache || gemini.reasoningMode != reasoningModeSeparate {
+		t.Fatalf("Gemini accounting metadata = %#v", gemini)
+	}
+	stored := gemini.storedRecord(attributionMarker{routerModel: "smart"})
+	if stored.AccountingMode != accountingModeInputIncludesCache || stored.ReasoningMode != reasoningModeSeparate {
+		t.Fatalf("stored Gemini accounting metadata = %#v", stored)
+	}
+}
+
+func TestDirectUsageFallbackSuppressesLateOfficialRecord(t *testing.T) {
+	plugin := testUsageCapturePlugin(t)
+	start := time.Now().UTC()
+	before := pluginapi.RequestInterceptRequest{
+		RequestID: "direct-1", SourceFormat: "openai", Model: "work/working-model", RequestedModel: "work/working-model",
+		Headers:  http.Header{"Authorization": {"Bearer local-client-secret"}},
+		Metadata: map[string]any{"service_tier": "priority", "generate": true},
+	}
+	if _, err := plugin.InterceptRequestBeforeAuth(t.Context(), before); err != nil {
+		t.Fatal(err)
+	}
+	after := before
+	after.Model = "working-model"
+	after.ToFormat = "openai"
+	if _, err := plugin.InterceptRequestAfterAuth(t.Context(), after); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.InterceptResponse(t.Context(), pluginapi.ResponseInterceptRequest{
+		RequestID: "direct-1", Model: "working-model", RequestedModel: "work/working-model", StatusCode: http.StatusOK,
+		Body: []byte(`{"model":"working-model","usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := plugin.HandleRequestComplete(t.Context(), pluginapi.RequestCompletion{
+		RequestID: "direct-1", Model: "working-model", RequestedModel: "work/working-model", Outcome: pluginapi.RequestCompletionSucceeded,
+		StatusCode: http.StatusOK, StartedAt: start, CompletedAt: start.Add(200 * time.Millisecond),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	plugin.HandleUsage(t.Context(), pluginapi.UsageRecord{
+		Provider: "openai-compatibility", Model: "working-model", Alias: "work/working-model", APIKey: "local-client-secret", RequestedAt: start,
+		Detail: pluginapi.UsageDetail{InputTokens: 3, OutputTokens: 2, TotalTokens: 5}, Generate: true,
+	})
+	page := captureRequestPage(t, plugin)
+	if page.Total != 1 || page.Items[0].Attribution != attributionDirect || page.Items[0].RouterModel != "" || page.Items[0].ProviderModel != "working-model" || page.Items[0].TotalTokens != 5 {
+		t.Fatalf("direct fallback page = %#v", page)
+	}
+	if page.Items[0].MaskedAPIKey != "lo******et" || page.Items[0].Source != "work" {
+		t.Fatalf("direct fallback sensitive dimensions = %#v", page.Items[0])
+	}
+}
+
+func TestOfficialUsageSuppressesDirectFallback(t *testing.T) {
+	plugin := testUsageCapturePlugin(t)
+	start := time.Now().UTC()
+	request := pluginapi.RequestInterceptRequest{
+		RequestID: "direct-official", Model: "work/working-model", RequestedModel: "work/working-model",
+		Headers: http.Header{"Authorization": {"Bearer local-client-secret"}},
+	}
+	_, _ = plugin.InterceptRequestBeforeAuth(t.Context(), request)
+	plugin.HandleUsage(t.Context(), pluginapi.UsageRecord{
+		Provider: "official-provider", Model: "work/working-model", APIKey: "local-client-secret", RequestedAt: start,
+		Detail: pluginapi.UsageDetail{InputTokens: 9, TotalTokens: 9}, Generate: true,
+	})
+	_, _ = plugin.InterceptResponse(t.Context(), pluginapi.ResponseInterceptRequest{RequestID: request.RequestID, StatusCode: http.StatusOK, Body: []byte(`{"usage":{"prompt_tokens":1,"total_tokens":1}}`)})
+	_ = plugin.HandleRequestComplete(t.Context(), pluginapi.RequestCompletion{RequestID: request.RequestID, Outcome: pluginapi.RequestCompletionSucceeded, StartedAt: start, CompletedAt: start.Add(time.Second)})
+	page := captureRequestPage(t, plugin)
+	if page.Total != 1 || page.Items[0].Provider != "official-provider" || page.Items[0].TotalTokens != 9 {
+		t.Fatalf("official usage page = %#v", page)
+	}
+}
+
+func TestRoutedFallbackRecordsEachAttemptAndSuppressesLateUsage(t *testing.T) {
+	plugin := testUsageCapturePlugin(t, modelRoute{Alias: "smart", Strategy: routeStrategyPriority, CooldownSeconds: 30, Models: []string{"fail/fail-model", "work/working-model"}})
+	host := &fakeModelHost{execute: func(request pluginapi.HostModelExecutionRequest) (pluginapi.HostModelExecutionResponse, error) {
+		if request.Model == "fail/fail-model" {
+			return pluginapi.HostModelExecutionResponse{StatusCode: http.StatusTooManyRequests, Body: []byte(`{"error":"rate limit"}`)}, nil
+		}
+		return pluginapi.HostModelExecutionResponse{StatusCode: http.StatusOK, Body: []byte(`{"model":"working-model","usage":{"prompt_tokens":4,"completion_tokens":1,"total_tokens":5}}`)}, nil
+	}}
+	request := pluginapi.ExecutorRequest{Model: "smart", SourceFormat: "openai", Headers: http.Header{"Authorization": {"Bearer local-client-secret"}}}
+	if _, err := plugin.executeWithHost(request, host); err != nil {
+		t.Fatal(err)
+	}
+	plugin.HandleUsage(t.Context(), pluginapi.UsageRecord{Model: "fail-model", Alias: "fail/fail-model", APIKey: "local-client-secret", RequestedAt: time.Now().UTC(), Failed: true, Failure: pluginapi.UsageFailure{StatusCode: 429}})
+	plugin.HandleUsage(t.Context(), pluginapi.UsageRecord{Model: "working-model", Alias: "work/working-model", APIKey: "local-client-secret", RequestedAt: time.Now().UTC(), Detail: pluginapi.UsageDetail{TotalTokens: 5}})
+	page := captureRequestPage(t, plugin)
+	if page.Total != 2 {
+		t.Fatalf("routed attempts = %#v", page)
+	}
+	failed, succeeded := false, false
+	for _, item := range page.Items {
+		if item.Attribution != attributionRouted || item.RouterModel != "smart" {
+			t.Fatalf("routed attribution = %#v", item)
+		}
+		failed = failed || item.ProviderModel == "fail/fail-model" && item.Failed && item.StatusCode == http.StatusTooManyRequests
+		succeeded = succeeded || item.ProviderModel == "work/working-model" && !item.Failed && item.TotalTokens == 5
+	}
+	if !failed || !succeeded {
+		t.Fatalf("routed attempts = %#v", page.Items)
+	}
+}
+
+func TestRoutedUsagePreservesProviderQualifiedTarget(t *testing.T) {
+	start := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	capture := newRoutedUsageCapture(pluginapi.ExecutorRequest{Format: "openai"}, "provider-a/model", start)
+	capture.observePayload([]byte(`{"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}`))
+	stored := capture.storedRecord(attributionMarker{routerModel: "smart"})
+	if stored.Provider != "provider-a" || stored.ProviderModel != "provider-a/model" {
+		t.Fatalf("provider-qualified routed record = %#v", stored)
+	}
+}
+
+func TestAmbiguousTimestampLessUsageIsSuppressed(t *testing.T) {
+	plugin := testUsageCapturePlugin(t)
+	headers := http.Header{"X-Api-Key": {"local-client-secret"}}
+	plugin.attribution.MarkRouted("first", "gpt-5.4", headers)
+	plugin.attribution.MarkRouted("second", "gpt-5.4", headers)
+	plugin.HandleUsage(t.Context(), pluginapi.UsageRecord{
+		Model: "gpt-5.4", APIKey: "local-client-secret", Detail: pluginapi.UsageDetail{TotalTokens: 9},
+	})
+	page := captureRequestPage(t, plugin)
+	if page.Total != 0 {
+		t.Fatalf("ambiguous official usage page = %#v, want no persisted callback", page)
+	}
+	if len(plugin.attribution.markers) != 2 || plugin.attribution.markers[0].fallback || plugin.attribution.markers[1].fallback {
+		t.Fatalf("markers after ambiguous official usage = %#v", plugin.attribution.markers)
+	}
+}
+
+func TestDisabledPluginDoesNotCaptureUsageLifecycle(t *testing.T) {
+	plugin := testUsageCapturePlugin(t)
+	plugin.config.Enabled = false
+	request := pluginapi.RequestInterceptRequest{
+		RequestID: "disabled-request", Model: "provider/model", RequestedModel: "provider/model",
+		Headers: http.Header{"Authorization": {"Bearer disabled-secret"}},
+	}
+	if _, err := plugin.InterceptRequestBeforeAuth(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.InterceptRequestAfterAuth(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.InterceptResponse(t.Context(), pluginapi.ResponseInterceptRequest{RequestID: request.RequestID, StatusCode: http.StatusOK, Body: []byte(`{"usage":{"input_tokens":1}}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.InterceptStreamChunk(t.Context(), pluginapi.StreamChunkInterceptRequest{RequestID: request.RequestID, ChunkIndex: 1, Body: []byte(`data: {"usage":{"input_tokens":1}}\n\n`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := plugin.HandleRequestComplete(t.Context(), pluginapi.RequestCompletion{RequestID: request.RequestID, Outcome: pluginapi.RequestCompletionSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	plugin.HandleUsage(t.Context(), pluginapi.UsageRecord{Model: "provider/model", APIKey: "disabled-secret", Detail: pluginapi.UsageDetail{TotalTokens: 1}})
+	page := captureRequestPage(t, plugin)
+	if page.Total != 0 || len(plugin.attribution.markers) != 0 {
+		t.Fatalf("disabled plugin captured usage: page=%#v markers=%#v", page, plugin.attribution.markers)
+	}
+}
+
+func testUsageCapturePlugin(t *testing.T, routes ...modelRoute) *modelRouterPlugin {
+	t.Helper()
+	store, err := openUsageStore(filepath.Join(t.TempDir(), "usage.db"), 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	runtime := newRouteRuntime(nil)
+	runtime.Sync(routes)
+	return &modelRouterPlugin{
+		config: routerConfig{Enabled: true, Routes: routes}, runtime: runtime, store: store, attribution: newAttributionTracker(nil),
+	}
+}
+
+func captureRequestPage(t *testing.T, plugin *modelRouterPlugin) usageRequestPage {
+	t.Helper()
+	page, err := plugin.store.Requests(usageFilter{From: time.Now().UTC().Add(-time.Hour), To: time.Now().UTC().Add(time.Hour)}, "time", "asc", 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return page
+}
