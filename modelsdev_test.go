@@ -114,3 +114,13 @@ func TestModelsDevSyncPersistsTiersAndPreservesManualPrices(t *testing.T) {
 		t.Fatalf("persisted synchronized book = %#v, %v", reopened, err)
 	}
 }
+
+func TestNormalizeSyncModelsDeduplicatesNormalizedNames(t *testing.T) {
+	models, err := normalizeSyncModels([]string{"GPT-5", " gpt-5 ", "claude-3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 2 || models[0] != "GPT-5" || models[1] != "claude-3" {
+		t.Fatalf("normalized sync models = %#v", models)
+	}
+}

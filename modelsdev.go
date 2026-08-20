@@ -172,10 +172,10 @@ func normalizeSyncModels(input []string) ([]string, error) {
 		if !utf8.ValidString(model) || utf8.RuneCountInString(model) > 256 {
 			return nil, fmt.Errorf("synchronized model name %q is invalid or too long", model)
 		}
-		if _, exists := seen[model]; exists {
+		if _, exists := seen[routeKey(model)]; exists {
 			continue
 		}
-		seen[model] = struct{}{}
+		seen[routeKey(model)] = struct{}{}
 		models = append(models, model)
 	}
 	if len(models) == 0 {

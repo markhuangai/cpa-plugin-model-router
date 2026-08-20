@@ -129,10 +129,11 @@ func (filter usageFilter) matches(record storedUsageRecord) bool {
 type usageSeriesPoint struct {
 	Time string `json:"time"`
 	usageCounters
-	AverageLatencyNS uint64  `json:"average_latency_ns"`
-	AverageTTFTNS    uint64  `json:"average_ttft_ns"`
-	AverageTPS       float64 `json:"average_tps"`
-	CostUSD          float64 `json:"cost_usd"`
+	CacheReadIncludedTokens uint64  `json:"cache_read_included_tokens,omitempty"`
+	AverageLatencyNS        uint64  `json:"average_latency_ns"`
+	AverageTTFTNS           uint64  `json:"average_ttft_ns"`
+	AverageTPS              float64 `json:"average_tps"`
+	CostUSD                 float64 `json:"cost_usd"`
 
 	latencyTotal   uint64
 	ttftTotal      uint64

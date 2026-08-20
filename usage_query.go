@@ -54,6 +54,17 @@ func (store *usageStore) Overview(filter usageFilter, granularity string) (usage
 			series[key] = point
 		}
 		point.usageCounters.add(record)
+		mode := cost.AccountingMode
+		if mode == "" {
+			mode = defaultAccountingMode(record.Provider, record.ExecutorType)
+		}
+		if mode == accountingModeInputIncludesCache {
+			cacheRead := record.CacheReadTokens
+			if cacheRead == 0 {
+				cacheRead = record.CachedTokens
+			}
+			point.CacheReadIncludedTokens += cacheRead
+		}
 		point.latencyTotal += record.LatencyNS
 		point.ttftTotal += record.TTFTNS
 		if record.TTFTNS > 0 {

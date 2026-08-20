@@ -169,6 +169,8 @@ The Usage tracking tab includes:
 - model pricing and models.dev sync;
 - an explicit typed confirmation for history reset.
 
+The token chart keeps cache-read segments mutually exclusive with input according to each record's accounting mode, including when one time bucket mixes providers with different cache accounting conventions.
+
 The browser loads overview, groups, and request details in parallel. Existing metrics, charts, and rows stay mounted during a refresh. Each refresh owns an `AbortController` and generation number; only the newest active generation can render. Table scroll positions are restored after row replacement.
 
 Polling runs every 15 seconds only when:

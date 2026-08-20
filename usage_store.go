@@ -626,7 +626,7 @@ func looksLikeCredential(value string) bool {
 			return true
 		}
 	}
-	if len(value) < 8 || strings.ContainsAny(value, " \t\r\n:@") {
+	if len(value) < 8 || strings.ContainsAny(value, " \t\r\n") {
 		return false
 	}
 	letters, digits := 0, 0
@@ -636,7 +636,7 @@ func looksLikeCredential(value string) bool {
 			letters++
 		case character >= '0' && character <= '9':
 			digits++
-		case character == '-' || character == '_' || character == '.' || character == '+' || character == '/' || character == '=':
+		case character == '-' || character == '_' || character == '.' || character == '+' || character == '/' || character == '=' || character == ':' || character == '@':
 		default:
 			return false
 		}

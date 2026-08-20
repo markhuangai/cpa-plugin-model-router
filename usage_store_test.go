@@ -82,7 +82,7 @@ func TestUsageStorePersistsAndResetPreservesSettings(t *testing.T) {
 }
 
 func TestSafeStoredUsageSourceRejectsCredentialShapedValues(t *testing.T) {
-	for _, source := range []string{"abcdefgh12345678", "abcdefghijklmno", "123456789012345", "AbCd+1234==", "Ab/Cd+1234=="} {
+	for _, source := range []string{"abcdefgh12345678", "abcdefghijklmno", "123456789012345", "AbCd+1234==", "Ab/Cd+1234==", "client:secret-token", "client@secret-token"} {
 		record := pluginapi.UsageRecord{Provider: "openai", ExecutorType: "openai", Source: source}
 		if got := safeStoredUsageSource(record); got != "openai" {
 			t.Errorf("safe source for %q = %q, want provider fallback", source, got)
@@ -198,6 +198,36 @@ func TestUsageOverviewIncludesEfficiencyAverages(t *testing.T) {
 	point := overview.Series[0]
 	if point.AverageLatencyNS != uint64(3*time.Second) || point.AverageTTFTNS != uint64(750*time.Millisecond) || !near(point.AverageTPS, 5.833333333333333) {
 		t.Fatalf("efficiency point = %#v", point)
+	}
+}
+
+func TestUsageOverviewTracksCacheAccountingModes(t *testing.T) {
+	store, err := openUsageStore(filepath.Join(t.TempDir(), "usage.db"), 365)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC().Truncate(time.Hour).Add(time.Minute)
+	if _, err := store.SavePriceBook(saveModelPricesRequest{Prices: map[string]modelPrice{
+		"openai/model":    {tokenRates: tokenRates{Input: 1}, AccountingMode: accountingModeInputIncludesCache},
+		"anthropic/model": {tokenRates: tokenRates{Input: 1}, AccountingMode: accountingModeInputExcludesCache},
+	}}, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range []storedUsageRecord{
+		{RequestedAt: now, Provider: "openai", ProviderModel: "openai/model", InputTokens: 10, CacheReadTokens: 3},
+		{RequestedAt: now.Add(time.Minute), Provider: "anthropic", ProviderModel: "anthropic/model", InputTokens: 5, CacheReadTokens: 3},
+	} {
+		if err := store.Record(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	overview, err := store.Overview(usageFilter{From: now.Add(-time.Minute), To: now.Add(time.Hour)}, "hour")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(overview.Series) != 1 || overview.Series[0].CacheReadIncludedTokens != 3 {
+		t.Fatalf("cache accounting series = %#v", overview.Series)
 	}
 }
 
