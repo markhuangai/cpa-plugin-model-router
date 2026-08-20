@@ -169,11 +169,17 @@ func normalizeModelPrices(input map[string]modelPrice, now time.Time) (map[strin
 		return nil, fmt.Errorf("model prices must contain at most %d entries", maxModelPriceEntries)
 	}
 	result := make(map[string]modelPrice, len(input))
+	seen := make(map[string]string, len(input))
 	for rawModel, rawPrice := range input {
 		model := strings.TrimSpace(rawModel)
 		if model == "" || !utf8.ValidString(model) || utf8.RuneCountInString(model) > 256 {
 			return nil, fmt.Errorf("model price name %q is invalid or too long", rawModel)
 		}
+		key := routeKey(model)
+		if previous, exists := seen[key]; exists {
+			return nil, fmt.Errorf("model price names %q and %q are duplicates after normalization", previous, rawModel)
+		}
+		seen[key] = rawModel
 		price, err := normalizeModelPrice(model, rawPrice, now)
 		if err != nil {
 			return nil, err

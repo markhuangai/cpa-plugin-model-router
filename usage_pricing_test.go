@@ -2,6 +2,7 @@ package main
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -47,6 +48,17 @@ func TestModelPriceResolverMappingsAndAmbiguity(t *testing.T) {
 	}, settings)
 	if _, ok := resolver.resolve("gpt-5.4"); ok {
 		t.Fatal("ambiguous normalized prices must not resolve")
+	}
+}
+
+func TestNormalizeModelPricesRejectsNormalizedDuplicateNames(t *testing.T) {
+	for _, prices := range []map[string]modelPrice{
+		{"gpt-5": {}, " gpt-5 ": {}},
+		{"GPT-5": {}, "gpt-5": {}},
+	} {
+		if _, err := normalizeModelPrices(prices, time.Now().UTC()); err == nil || !strings.Contains(err.Error(), "duplicate") {
+			t.Fatalf("normalizeModelPrices(%#v) error = %v", prices, err)
+		}
 	}
 }
 
