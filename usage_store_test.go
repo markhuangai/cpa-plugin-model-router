@@ -82,7 +82,7 @@ func TestUsageStorePersistsAndResetPreservesSettings(t *testing.T) {
 }
 
 func TestSafeStoredUsageSourceRejectsCredentialShapedValues(t *testing.T) {
-	for _, source := range []string{"abcdefgh12345678", "abcdefghijklmno", "123456789012345", "AbCd+1234==", "Ab/Cd+1234==", "client:secret-token", "client@secret-token"} {
+	for _, source := range []string{"abcdefgh12345678", "abcdefghijklmno", "123456789012345", "AbCd+1234==", "Ab/Cd+1234==", "client:secret-token", "client@secret-token", "client$secret"} {
 		record := pluginapi.UsageRecord{Provider: "openai", ExecutorType: "openai", Source: source}
 		if got := safeStoredUsageSource(record); got != "openai" {
 			t.Errorf("safe source for %q = %q, want provider fallback", source, got)
@@ -228,6 +228,30 @@ func TestUsageOverviewTracksCacheAccountingModes(t *testing.T) {
 	}
 	if len(overview.Series) != 1 || overview.Series[0].CacheReadIncludedTokens != 3 {
 		t.Fatalf("cache accounting series = %#v", overview.Series)
+	}
+}
+
+func TestUsageOverviewTracksReasoningAccountingModes(t *testing.T) {
+	store, err := openUsageStore(filepath.Join(t.TempDir(), "usage.db"), 365)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC().Truncate(time.Hour).Add(time.Minute)
+	for _, record := range []storedUsageRecord{
+		{RequestedAt: now, Provider: "openai", ProviderModel: "openai/model", OutputTokens: 7, ReasoningTokens: 2},
+		{RequestedAt: now.Add(time.Minute), Provider: "google", ProviderModel: "google/model", OutputTokens: 4, ReasoningTokens: 3},
+	} {
+		if err := store.Record(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	overview, err := store.Overview(usageFilter{From: now.Add(-time.Minute), To: now.Add(time.Hour)}, "hour")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(overview.Series) != 1 || overview.Series[0].ReasoningIncludedTokens != 2 {
+		t.Fatalf("reasoning accounting series = %#v", overview.Series)
 	}
 }
 

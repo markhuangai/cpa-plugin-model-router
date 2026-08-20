@@ -380,13 +380,12 @@ func estimateUsageCost(record storedUsageRecord, resolver modelPriceResolver) es
 	}
 	billableInput, contextTokens := record.InputTokens, record.InputTokens
 	if mode == accountingModeInputIncludesCache {
-		cacheTokens := saturatingAdd(cacheRead, cacheCreation)
-		if billableInput > cacheTokens {
-			billableInput -= cacheTokens
+		if billableInput > cacheRead {
+			billableInput -= cacheRead
 		} else {
 			billableInput = 0
 		}
-		contextTokens = saturatingAdd(billableInput, cacheTokens)
+		contextTokens = saturatingAdd(record.InputTokens, cacheCreation)
 	} else {
 		contextTokens = saturatingAdd(record.InputTokens, saturatingAdd(cacheRead, cacheCreation))
 	}
@@ -425,6 +424,10 @@ func defaultAccountingMode(provider, executor string) string {
 		return accountingModeInputExcludesCache
 	}
 	return accountingModeInputIncludesCache
+}
+
+func reasoningIncludedInOutput(provider, executor string) bool {
+	return !equalFold(provider, "google") && !equalFold(provider, "gemini") && !equalFold(executor, "gemini")
 }
 
 func tokenCostUSD(tokens uint64, perMillion float64) float64 {

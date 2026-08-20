@@ -636,9 +636,6 @@ func looksLikeCredential(value string) bool {
 			letters++
 		case character >= '0' && character <= '9':
 			digits++
-		case character == '-' || character == '_' || character == '.' || character == '+' || character == '/' || character == '=' || character == ':' || character == '@':
-		default:
-			return false
 		}
 	}
 	return letters > 0 || digits > 0

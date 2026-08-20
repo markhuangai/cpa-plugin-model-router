@@ -20,17 +20,17 @@ func TestEstimateUsageCostAccountingTiersAndServiceTier(t *testing.T) {
 	resolver := newModelPriceResolver(map[string]modelPrice{"gpt-5.4": price}, defaultPriceSyncSettings())
 	record := storedUsageRecord{ProviderModel: "gpt-5.4(high)", InputTokens: 100, OutputTokens: 20, CacheReadTokens: 20, CacheCreationTokens: 5}
 	cost := estimateUsageCost(record, resolver)
-	if !cost.Priced || cost.BillableInputTokens != 75 || cost.ContextTokens != 100 || !near(cost.TotalUSD, .00012875) {
+	if !cost.Priced || cost.BillableInputTokens != 80 || cost.ContextTokens != 105 || cost.TierThreshold != 100 || !near(cost.TotalUSD, .0013375) {
 		t.Fatalf("base cost = %#v", cost)
 	}
 	record.InputTokens = 130
 	cost = estimateUsageCost(record, resolver)
-	if cost.TierThreshold != 100 || !near(cost.InputUSD, .00105) {
+	if cost.TierThreshold != 100 || cost.BillableInputTokens != 110 || !near(cost.InputUSD, .0011) {
 		t.Fatalf("context-tier cost = %#v", cost)
 	}
 	record.ServiceTier = "priority"
 	cost = estimateUsageCost(record, resolver)
-	if cost.PriceServiceTier != "priority" || cost.TierThreshold != 0 || !near(cost.InputUSD, .000315) {
+	if cost.PriceServiceTier != "priority" || cost.TierThreshold != 0 || !near(cost.InputUSD, .00033) {
 		t.Fatalf("service-tier cost = %#v", cost)
 	}
 }

@@ -1544,7 +1544,7 @@ function drawXLabels(chart,points){
 function tokenChartValue(point,item,definitions){
   let value=Number(point[item.field]||(item.fallback&&point[item.fallback])||0);
   if(item.key==='input'&&definitions.some(definition=>definition.key==='cache_read'))value=Math.max(0,value-Number(point.cache_read_included_tokens||0));
-  if(item.key==='output'&&definitions.some(definition=>definition.key==='reasoning'))value=Math.max(0,value-Number(point.reasoning_tokens||0));
+  if(item.key==='output'&&definitions.some(definition=>definition.key==='reasoning'))value=Math.max(0,value-Number(point.reasoning_included_tokens||0));
   return value;
 }
 function renderTokenChart(){
