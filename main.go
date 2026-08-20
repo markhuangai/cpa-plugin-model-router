@@ -12,7 +12,7 @@ const (
 	pluginName = "Model Router"
 )
 
-var pluginVersion = "0.2.2"
+var pluginVersion = "0.3.1"
 
 type modelRouterPlugin struct {
 	config           routerConfig
@@ -74,7 +74,7 @@ func newModelRouterPlugin(configYAML []byte, previous *modelRouterPlugin) (*mode
 		GitHubRepository: "https://github.com/markhuangai/cpa-plugin-model-router",
 		ConfigFields: []pluginapi.ConfigField{
 			{Name: "routes", Type: pluginapi.ConfigFieldTypeArray, Description: "Logical model aliases backed by priority or round-robin target pools."},
-			{Name: "data_path", Type: pluginapi.ConfigFieldTypeString, Description: "bbolt usage database path; defaults to the CPA data directory beside the discovered plugins directory."},
+			{Name: "data_path", Type: pluginapi.ConfigFieldTypeString, Description: "bbolt usage database path; defaults to model-router.db in the discovered CPA plugins directory."},
 			{Name: "retention_days", Type: pluginapi.ConfigFieldTypeInteger, Description: "Number of UTC days of usage aggregates and request details to retain (1-3650)."},
 		},
 	}

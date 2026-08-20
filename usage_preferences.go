@@ -8,6 +8,8 @@ import (
 
 const maxDashboardPageSize = 500
 
+var defaultHiddenGroupColumns = []string{"provider", "result", "service_tier", "source"}
+
 type dashboardPreferences struct {
 	RequestPageSize      int      `json:"request_page_size"`
 	GroupPageSize        int      `json:"group_page_size"`
@@ -27,15 +29,16 @@ type dashboardPreferences struct {
 
 func defaultDashboardPreferences() dashboardPreferences {
 	return dashboardPreferences{
-		RequestPageSize: 100,
-		GroupPageSize:   100,
-		TimeRange:       "24h",
-		Granularity:     "hour",
-		RequestSort:     "time",
-		RequestOrder:    "desc",
-		GroupDimension:  "provider_model",
-		GroupSort:       "total_tokens",
-		GroupOrder:      "desc",
+		RequestPageSize:    100,
+		GroupPageSize:      100,
+		HiddenGroupColumns: append([]string(nil), defaultHiddenGroupColumns...),
+		TimeRange:          "24h",
+		Granularity:        "hour",
+		RequestSort:        "time",
+		RequestOrder:       "desc",
+		GroupDimension:     "provider_model",
+		GroupSort:          "total_tokens",
+		GroupOrder:         "desc",
 	}
 }
 
@@ -46,6 +49,9 @@ func normalizeDashboardPreferences(input dashboardPreferences) (dashboardPrefere
 	}
 	if input.GroupPageSize == 0 {
 		input.GroupPageSize = defaults.GroupPageSize
+	}
+	if input.HiddenGroupColumns == nil {
+		input.HiddenGroupColumns = append([]string(nil), defaults.HiddenGroupColumns...)
 	}
 	if input.RequestPageSize < 1 || input.RequestPageSize > maxDashboardPageSize || input.GroupPageSize < 1 || input.GroupPageSize > maxDashboardPageSize {
 		return dashboardPreferences{}, fmt.Errorf("dashboard page sizes must be between 1 and %d", maxDashboardPageSize)

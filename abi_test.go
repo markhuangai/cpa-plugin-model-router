@@ -32,7 +32,7 @@ func TestABIRegistrationRoutingAndCountTokens(t *testing.T) {
 	if err := json.Unmarshal(registrationEnvelope.Result, &registration); err != nil {
 		t.Fatalf("decode registration result: %v", err)
 	}
-	if !registrationEnvelope.OK || registration.SchemaVersion != registrationSchemaVersion || registration.Metadata.Name != pluginName || registration.Metadata.Version != "0.2.2" || !registration.Capabilities.ModelRegistrar || !registration.Capabilities.ModelRouter || !registration.Capabilities.Executor || !registration.Capabilities.RequestInterceptor || !registration.Capabilities.RequestLifecycle || !registration.Capabilities.ResponseInterceptor || !registration.Capabilities.StreamInterceptor || !registration.Capabilities.UsagePlugin || !registration.Capabilities.ManagementAPI {
+	if !registrationEnvelope.OK || registration.SchemaVersion != registrationSchemaVersion || registration.Metadata.Name != pluginName || registration.Metadata.Version != "0.3.1" || !registration.Capabilities.ModelRegistrar || !registration.Capabilities.ModelRouter || !registration.Capabilities.Executor || !registration.Capabilities.RequestInterceptor || !registration.Capabilities.RequestLifecycle || !registration.Capabilities.ResponseInterceptor || !registration.Capabilities.StreamInterceptor || !registration.Capabilities.UsagePlugin || !registration.Capabilities.ManagementAPI {
 		t.Fatalf("registration = %#v", registration)
 	}
 
@@ -112,7 +112,7 @@ func TestABIRegistrationUsesStreamBodyOmissionWhenHostSupportsIt(t *testing.T) {
 func resetModelRouterABIState(t *testing.T) {
 	t.Helper()
 	previousResolver := defaultDataPathResolver
-	testDataPath := filepath.Join(t.TempDir(), "model-router-usage.db")
+	testDataPath := filepath.Join(t.TempDir(), defaultDataFileName)
 	defaultDataPathResolver = func() string { return testDataPath }
 	modelRouterABIState.Lock()
 	previousPlugin := modelRouterABIState.plugin

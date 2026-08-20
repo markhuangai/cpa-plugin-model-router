@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -87,7 +88,7 @@ func TestModelRouterWithCLIProxyAPI(t *testing.T) {
 
 	workDir := t.TempDir()
 	pluginsDir := filepath.Join(workDir, "plugins")
-	usagePath := filepath.Join(workDir, "data", "model-router-usage.db")
+	usagePath := filepath.Join(pluginsDir, defaultDataFileName)
 	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +116,6 @@ plugins:
     model-router:
       enabled: true
       priority: 100
-      data_path: %q
       retention_days: 45
       routes:
         - alias: smoke-router-alias
@@ -139,7 +139,7 @@ openai-compatibility:
       - api-key: work-provider-key
     models:
       - name: working-model
-`, port, filepath.Join(workDir, "auth"), pluginsDir, usagePath, provider.URL+"/v1", provider.URL+"/v1")
+`, port, filepath.Join(workDir, "auth"), pluginsDir, provider.URL+"/v1", provider.URL+"/v1")
 	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -150,6 +150,9 @@ openai-compatibility:
 	verifyModelRouterManagementUI(t, baseURL, logs)
 	if !waitForSmokeModel(t, baseURL, "smoke-router-alias", 10*time.Second) {
 		t.Fatalf("model route alias smoke-router-alias was not registered\n%s", logs.String())
+	}
+	if _, err := os.Stat(usagePath); err != nil {
+		t.Fatalf("default usage database was not created at %q: %v", usagePath, err)
 	}
 	usageStart := time.Now().UTC().Add(-time.Second)
 	for requestIndex := 0; requestIndex < 2; requestIndex++ {
@@ -228,8 +231,9 @@ openai-compatibility:
 	}
 	preferences := defaultDashboardPreferences()
 	preferences.RequestPageSize = 25
+	preferences.HiddenGroupColumns = []string{"result", "service_tier", "source"}
 	savedPreferences := putSmokeManagementJSON[dashboardPreferences, dashboardPreferences](t, baseURL, modelRouterUsageBasePath+"/preferences", preferences)
-	if savedPreferences.RequestPageSize != 25 {
+	if savedPreferences.RequestPageSize != 25 || !slices.Equal(savedPreferences.HiddenGroupColumns, preferences.HiddenGroupColumns) {
 		t.Fatalf("saved preferences = %#v", savedPreferences)
 	}
 
@@ -248,7 +252,7 @@ openai-compatibility:
 		t.Fatalf("prices were lost across restart: %#v", restartedPrices)
 	}
 	restartedPreferences := getSmokeManagementJSON[dashboardPreferences](t, baseURL, modelRouterUsageBasePath+"/preferences")
-	if restartedPreferences.RequestPageSize != 25 {
+	if restartedPreferences.RequestPageSize != 25 || !slices.Equal(restartedPreferences.HiddenGroupColumns, preferences.HiddenGroupColumns) {
 		t.Fatalf("preferences were lost across restart: %#v", restartedPreferences)
 	}
 }
