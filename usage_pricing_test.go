@@ -118,6 +118,49 @@ func TestPriceBookRevisionAndManualSyncPrecedence(t *testing.T) {
 	}
 }
 
+func TestApplyPriceSyncPreservesCaseInsensitiveManualPrice(t *testing.T) {
+	store, err := openUsageStore(t.TempDir()+"/usage.db", 365)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC()
+	book, err := store.SavePriceBook(saveModelPricesRequest{Prices: map[string]modelPrice{
+		"GPT-5": {tokenRates: tokenRates{Input: 1}},
+	}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	synced, err := store.ApplyPriceSync(map[string]modelPrice{
+		"gpt-5": {tokenRates: tokenRates{Input: 9}, Source: priceSourceModelsDev},
+	}, defaultPriceSyncSettings(), priceSyncMetadata{Source: priceSourceModelsDev}, book.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(synced.Prices) != 1 || synced.Prices["GPT-5"].Input != 1 || synced.LastSync.SkippedManual != 1 {
+		t.Fatalf("case-insensitive manual precedence = %#v", synced)
+	}
+}
+
+func TestApplyPriceSyncRejectsNormalizedIncomingDuplicates(t *testing.T) {
+	store, err := openUsageStore(t.TempDir()+"/usage.db", 365)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	book, err := store.QueryPriceBook()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.ApplyPriceSync(map[string]modelPrice{
+		"GPT-5": {tokenRates: tokenRates{Input: 1}, Source: priceSourceModelsDev},
+		"gpt-5": {tokenRates: tokenRates{Input: 2}, Source: priceSourceModelsDev},
+	}, defaultPriceSyncSettings(), priceSyncMetadata{Source: priceSourceModelsDev}, book.Revision)
+	if err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("normalized incoming duplicate error = %v", err)
+	}
+}
+
 func near(left, right float64) bool {
 	return math.Abs(left-right) < 1e-12
 }

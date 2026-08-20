@@ -142,6 +142,25 @@ func (tracker *attributionTracker) Match(record pluginapi.UsageRecord) attributi
 	if len(indexes) == 0 {
 		return attributionResult{Kind: attributionUnresolved}
 	}
+	if !hasRequestedAt {
+		// A timestamp-less record cannot distinguish an active marker from a fallback tombstone.
+		fallbackIndexes := make([]int, 0, len(indexes))
+		for _, candidate := range indexes {
+			if tracker.markers[candidate].fallback {
+				fallbackIndexes = append(fallbackIndexes, candidate)
+			}
+		}
+		if len(fallbackIndexes) > 0 {
+			index := tracker.closestIndexLocked(fallbackIndexes, requestedAt)
+			closest := tracker.equallyCloseIndexesLocked(fallbackIndexes, requestedAt, index)
+			if tracker.conflictingIndexesLocked(closest) {
+				tracker.removeIndexesLocked(closest)
+				return attributionResult{Kind: attributionUnresolved}
+			}
+			tracker.removeIndexesLocked([]int{index})
+			return attributionResult{Suppress: true}
+		}
+	}
 	index := tracker.closestIndexLocked(indexes, requestedAt)
 	closest := tracker.equallyCloseIndexesLocked(indexes, requestedAt, index)
 	if tracker.conflictingIndexesLocked(closest) {

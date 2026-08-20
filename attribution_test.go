@@ -58,6 +58,27 @@ func TestAttributionTrackerMatchesTimestampLessUsageAfterWindow(t *testing.T) {
 	}
 }
 
+func TestAttributionTrackerTimestampLessUsagePrefersFallbackTombstone(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	tracker := newAttributionTracker(func() time.Time { return now })
+	headers := http.Header{"X-Api-Key": {"key-one"}}
+	first := tracker.MarkRouted("first", "gpt-5.4", headers)
+	if _, claimed := tracker.claim(first); !claimed {
+		t.Fatal("first marker was not converted to a fallback tombstone")
+	}
+	now = now.Add(2 * time.Second)
+	tracker.MarkRouted("second", "gpt-5.4", headers)
+	if got := tracker.Match(pluginapi.UsageRecord{Model: "gpt-5.4", APIKey: "key-one"}); !got.Suppress {
+		t.Fatalf("timestamp-less fallback match = %#v, want suppression", got)
+	}
+	if len(tracker.markers) != 1 || tracker.markers[0].fallback || tracker.markers[0].routerModel != "second" {
+		t.Fatalf("active marker after fallback suppression = %#v", tracker.markers)
+	}
+	if got := tracker.Match(pluginapi.UsageRecord{Model: "gpt-5.4", APIKey: "key-one"}); got.Kind != attributionRouted || got.RouterModel != "second" {
+		t.Fatalf("active marker after timestamp-less fallback = %#v", got)
+	}
+}
+
 func TestAttributionTrackerExpiresAndCapsMarkers(t *testing.T) {
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	tracker := newAttributionTracker(func() time.Time { return now })

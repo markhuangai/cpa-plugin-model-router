@@ -394,13 +394,18 @@ func (store *usageStore) SavePriceBook(request saveModelPricesRequest, now time.
 }
 
 func (store *usageStore) ApplyPriceSync(prices map[string]modelPrice, settings priceSyncSettings, metadata priceSyncMetadata, revision uint64) (modelPriceBook, error) {
+	now := time.Now().UTC()
+	normalizedPrices, err := normalizeModelPrices(prices, now)
+	if err != nil {
+		return modelPriceBook{}, err
+	}
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 	if store.db == nil {
 		return modelPriceBook{}, errors.New("usage database is closed")
 	}
 	result := modelPriceBook{}
-	err := store.db.Update(func(transaction *bolt.Tx) error {
+	err = store.db.Update(func(transaction *bolt.Tx) error {
 		current, err := priceBookFromTransaction(transaction)
 		if err != nil {
 			return err
@@ -411,17 +416,32 @@ func (store *usageStore) ApplyPriceSync(prices map[string]modelPrice, settings p
 		if current.Prices == nil {
 			current.Prices = map[string]modelPrice{}
 		}
-		for model, price := range prices {
-			if existing, exists := current.Prices[model]; exists && existing.Source == priceSourceManual {
+		current.Prices, err = normalizeModelPrices(current.Prices, now)
+		if err != nil {
+			return err
+		}
+		existingByKey := make(map[string]string, len(current.Prices))
+		for model := range current.Prices {
+			existingByKey[routeKey(model)] = model
+		}
+		for model, price := range normalizedPrices {
+			existingModel, exists := existingByKey[routeKey(model)]
+			if exists && current.Prices[existingModel].Source == priceSourceManual {
 				metadata.SkippedManual++
 				continue
 			}
-			if _, exists := current.Prices[model]; exists {
+			if exists {
 				metadata.Updated++
+				current.Prices[existingModel] = price
 			} else {
 				metadata.Created++
+				existingByKey[routeKey(model)] = model
+				current.Prices[model] = price
 			}
-			current.Prices[model] = price
+		}
+		current.Prices, err = normalizeModelPrices(current.Prices, now)
+		if err != nil {
+			return err
 		}
 		current.SchemaVersion = usageSchemaVersion
 		current.Revision++
@@ -614,7 +634,7 @@ func looksLikeCredential(value string) bool {
 			return false
 		}
 	}
-	return letters > 0 && digits > 0
+	return letters > 0 || digits > 0
 }
 
 func durationUint64(value time.Duration) uint64 {
