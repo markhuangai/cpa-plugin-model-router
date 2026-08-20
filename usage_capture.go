@@ -23,7 +23,6 @@ type directUsageCapture struct {
 	serviceTier     string
 	accountingMode  string
 	reasoningMode   string
-	totalExplicit   bool
 	maskedAPIKey    string
 	generate        bool
 	failed          bool
@@ -184,14 +183,10 @@ func (capture *directUsageCapture) observePayload(body []byte) {
 		if accounting.ReasoningMode != "" {
 			capture.reasoningMode = accounting.ReasoningMode
 		}
-		if accounting.TotalExplicit {
-			capture.totalExplicit = true
-		}
 		if ok {
 			mergeUsageDetail(&capture.detail, detail)
-			if !capture.totalExplicit {
-				capture.detail.TotalTokens = synthesizedUsageTotal(capture.detail, usagePayloadAccounting{AccountingMode: capture.accountingMode, ReasoningMode: capture.reasoningMode})
-			}
+			synthesized := synthesizedUsageTotal(capture.detail, usagePayloadAccounting{AccountingMode: capture.accountingMode, ReasoningMode: capture.reasoningMode})
+			capture.detail.TotalTokens = maxInt64(capture.detail.TotalTokens, synthesized)
 		}
 	}
 }

@@ -73,6 +73,12 @@ func TestUsageCaptureRecomputesSynthesizedStreamTotals(t *testing.T) {
 	if capture.detail.TotalTokens != 99 {
 		t.Fatalf("explicit stream total = %d, want 99", capture.detail.TotalTokens)
 	}
+	partial := directUsageCapture{}
+	partial.observePayload([]byte(`{"usage":{"input_tokens":5,"total_tokens":5}}`))
+	partial.observePayload([]byte(`{"usage":{"output_tokens":4}}`))
+	if partial.detail.TotalTokens != 9 {
+		t.Fatalf("partial explicit stream total = %d, want 9", partial.detail.TotalTokens)
+	}
 }
 
 func TestParseUsagePayloadReadsClaudeMessageStartUsage(t *testing.T) {
@@ -208,6 +214,35 @@ func TestAmbiguousTimestampLessUsageIsSuppressed(t *testing.T) {
 	}
 	if len(plugin.attribution.markers) != 2 || plugin.attribution.markers[0].fallback || plugin.attribution.markers[1].fallback {
 		t.Fatalf("markers after ambiguous official usage = %#v", plugin.attribution.markers)
+	}
+}
+
+func TestDisabledPluginDoesNotCaptureUsageLifecycle(t *testing.T) {
+	plugin := testUsageCapturePlugin(t)
+	plugin.config.Enabled = false
+	request := pluginapi.RequestInterceptRequest{
+		RequestID: "disabled-request", Model: "provider/model", RequestedModel: "provider/model",
+		Headers: http.Header{"Authorization": {"Bearer disabled-secret"}},
+	}
+	if _, err := plugin.InterceptRequestBeforeAuth(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.InterceptRequestAfterAuth(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.InterceptResponse(t.Context(), pluginapi.ResponseInterceptRequest{RequestID: request.RequestID, StatusCode: http.StatusOK, Body: []byte(`{"usage":{"input_tokens":1}}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.InterceptStreamChunk(t.Context(), pluginapi.StreamChunkInterceptRequest{RequestID: request.RequestID, ChunkIndex: 1, Body: []byte(`data: {"usage":{"input_tokens":1}}\n\n`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := plugin.HandleRequestComplete(t.Context(), pluginapi.RequestCompletion{RequestID: request.RequestID, Outcome: pluginapi.RequestCompletionSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	plugin.HandleUsage(t.Context(), pluginapi.UsageRecord{Model: "provider/model", APIKey: "disabled-secret", Detail: pluginapi.UsageDetail{TotalTokens: 1}})
+	page := captureRequestPage(t, plugin)
+	if page.Total != 0 || len(plugin.attribution.markers) != 0 {
+		t.Fatalf("disabled plugin captured usage: page=%#v markers=%#v", page, plugin.attribution.markers)
 	}
 }
 

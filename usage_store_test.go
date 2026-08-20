@@ -19,7 +19,7 @@ func TestUsageStorePersistsAndResetPreservesSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Add(-time.Minute)
-	plugin := &modelRouterPlugin{store: store, attribution: newAttributionTracker(func() time.Time { return now })}
+	plugin := &modelRouterPlugin{config: routerConfig{Enabled: true}, store: store, attribution: newAttributionTracker(func() time.Time { return now })}
 	plugin.attribution.MarkRouted("auto", "gpt-5.4", mapHeader("Authorization", "Bearer raw-client-secret"))
 	plugin.HandleUsage(t.Context(), pluginapi.UsageRecord{
 		Provider: "openai", ExecutorType: "openai", Model: "gpt-5.4", APIKey: "raw-client-secret", AuthType: "api-key", Source: "raw-provider-secret", RequestedAt: now,
@@ -228,6 +228,50 @@ func TestUsageOverviewTracksCacheAccountingModes(t *testing.T) {
 	}
 	if len(overview.Series) != 1 || overview.Series[0].CacheReadIncludedTokens != 3 {
 		t.Fatalf("cache accounting series = %#v", overview.Series)
+	}
+}
+
+func TestUsageAggregatesEffectiveCacheReadAliases(t *testing.T) {
+	store, err := openUsageStore(filepath.Join(t.TempDir(), "usage.db"), 365)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC().Truncate(time.Hour).Add(time.Minute)
+	for _, record := range []storedUsageRecord{
+		{RequestedAt: now, ProviderModel: "cached-only", CachedTokens: 4},
+		{RequestedAt: now.Add(time.Minute), ProviderModel: "cache-read", CacheReadTokens: 6},
+		{RequestedAt: now.Add(2 * time.Minute), ProviderModel: "both", CachedTokens: 8, CacheReadTokens: 3},
+	} {
+		if err := store.Record(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	filter := usageFilter{From: now.Add(-time.Minute), To: now.Add(time.Hour)}
+	overview, err := store.Overview(filter, "hour")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.Summary.EffectiveCacheReadTokens != 13 || len(overview.Series) != 1 || overview.Series[0].EffectiveCacheReadTokens != 13 {
+		t.Fatalf("effective cache aliases = summary=%#v series=%#v", overview.Summary, overview.Series)
+	}
+	groups, err := store.Groups(filter, "provider_model", "total_tokens", "desc", 0, 10)
+	if err != nil || len(groups.Items) != 3 {
+		t.Fatalf("effective cache groups = %#v, %v", groups, err)
+	}
+	for _, item := range groups.Items {
+		want := uint64(0)
+		switch item.ProviderModel {
+		case "cached-only":
+			want = 4
+		case "cache-read":
+			want = 6
+		case "both":
+			want = 3
+		}
+		if item.EffectiveCacheReadTokens != want {
+			t.Fatalf("group %q effective cache = %d, want %d", item.ProviderModel, item.EffectiveCacheReadTokens, want)
+		}
 	}
 }
 

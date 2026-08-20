@@ -1317,12 +1317,17 @@ function setMetric(id,value,detailID,detail){
   document.getElementById(id).textContent=value;
   document.getElementById(detailID).textContent=detail;
 }
+function effectiveCacheReadValue(value){
+  if(!value)return 0;
+  if(Object.prototype.hasOwnProperty.call(value,'effective_cache_read_tokens'))return Number(value.effective_cache_read_tokens||0);
+  return Number(value.cache_read_tokens||value.cached_tokens||0);
+}
 function renderUsageSummary(){
   const overview=usageState.overview;
   if(!overview)return;
   const summary=overview.summary||{};
   const costs=overview.costs||{};
-  setMetric('metric-tokens',formatCompact(summary.total_tokens),'metric-token-detail',formatNumber(summary.input_tokens)+' input · '+formatNumber(summary.output_tokens)+' output · '+formatNumber(summary.cache_read_tokens||summary.cached_tokens)+' cache');
+  setMetric('metric-tokens',formatCompact(summary.total_tokens),'metric-token-detail',formatNumber(summary.input_tokens)+' input · '+formatNumber(summary.output_tokens)+' output · '+formatNumber(effectiveCacheReadValue(summary))+' cache');
   setMetric('metric-cost',formatUSD(costs.total_usd),'metric-cost-detail',formatNumber(costs.priced_requests)+' of '+formatNumber(costs.requests)+' requests priced');
   const success=Math.max(0,Number(summary.requests||0)-Number(summary.failed_requests||0));
   const rate=Number(summary.requests||0)?success/Number(summary.requests)*100:0;
@@ -1432,6 +1437,7 @@ function groupCell(row,item,column){
   case 'router_model':return tableCell(row,routerDisplay(item),true);
   case 'provider_model':case 'provider':case 'source':case 'service_tier':return tableCell(row,item[column.key],true);
   case 'result':return statusCell(row,item.result);
+  case 'cache_read_tokens':return tableCell(row,formatNumber(effectiveCacheReadValue(item)));
   case 'latency':return tableCell(row,formatDuration(item.average_latency_ns));
   case 'ttft':return tableCell(row,formatDuration(item.average_ttft_ns));
   case 'tps':return tableCell(row,formatTPS(item.average_tps));
@@ -1450,7 +1456,7 @@ function requestCell(row,item,column){
   case 'tps':return tableCell(row,formatTPS(item.tps));
   case 'cost':return tableCell(row,item.estimated_cost&&item.estimated_cost.priced?formatUSD(item.estimated_cost.total_usd):'—');
   case 'api_key':return tableCell(row,item.masked_api_key,true);
-  case 'cache_read_tokens':return tableCell(row,formatNumber(item.cache_read_tokens||item.cached_tokens));
+  case 'cache_read_tokens':return tableCell(row,formatNumber(effectiveCacheReadValue(item)));
   default:return tableCell(row,formatNumber(item[column.key]));
   }
 }
@@ -1543,7 +1549,7 @@ function drawXLabels(chart,points){
   points.forEach((point,index)=>{if(index%step&&index!==points.length-1)return;const x=chart.left+chart.plotWidth*(index+.5)/points.length;context.fillText(bucketLabel(point.time),x,chart.top+chart.plotHeight+8)});
 }
 function tokenChartValue(point,item,definitions){
-  let value=Number(point[item.field]||(item.fallback&&point[item.fallback])||0);
+  let value=item.key==='cache_read'?effectiveCacheReadValue(point):Number(point[item.field]||(item.fallback&&point[item.fallback])||0);
   if(item.key==='input'&&definitions.some(definition=>definition.key==='cache_read'))value=Math.max(0,value-Number(point.cache_read_included_tokens||0));
   if(item.key==='output'&&definitions.some(definition=>definition.key==='reasoning'))value=Math.max(0,value-Number(point.reasoning_included_tokens||0));
   return value;
@@ -1553,7 +1559,7 @@ function renderTokenChart(){
   const definitions=[
     {key:'input',field:'input_tokens',color:'--chart-input'},
     {key:'output',field:'output_tokens',color:'--chart-output'},
-    {key:'cache_read',field:'cache_read_tokens',fallback:'cached_tokens',color:'--chart-cache'},
+    {key:'cache_read',field:'effective_cache_read_tokens',color:'--chart-cache'},
     {key:'reasoning',field:'reasoning_tokens',color:'--chart-reasoning'}
   ].filter(item=>!usageState.hiddenTokenSeries.has(item.key));
   if(!points.length){drawEmptyChart(chart,'No token usage in this range.');return}
@@ -1635,7 +1641,10 @@ function renderUsageCharts(){
 function cloneValue(value){return JSON.parse(JSON.stringify(value))}
 function setPricingError(message=''){document.getElementById('pricing-error').textContent=message}
 function setPricingEditorEnabled(enabled){
-  for(const id of ['pricing-model-name','pricing-add','pricing-sync','pricing-save'])document.getElementById(id).disabled=!enabled;
+  for(const control of document.querySelectorAll('#pricing-dialog input, #pricing-dialog select, #pricing-dialog textarea, #pricing-dialog button')){
+    if(control.id==='pricing-close'||control.id==='pricing-cancel')continue;
+    control.disabled=!enabled;
+  }
 }
 function pricingDraftDirty(){return Boolean(usageState.pricingSettingsDirty||usageState.priceCollectionDirty)||(Array.isArray(usageState.priceDraft)&&usageState.priceDraft.some(item=>item.dirty))}
 function freshManagementURL(url){return url+(url.includes('?')?'&':'?')+'fresh='+Date.now()}

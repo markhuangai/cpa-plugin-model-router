@@ -100,7 +100,7 @@ func (p *modelRouterPlugin) HttpRequest(_ context.Context, _ pluginapi.ExecutorH
 }
 
 func (p *modelRouterPlugin) HandleUsage(_ context.Context, record pluginapi.UsageRecord) {
-	if p == nil || p.store == nil || p.attribution == nil {
+	if p == nil || !p.config.Enabled || p.store == nil || p.attribution == nil {
 		return
 	}
 	attribution := p.attribution.Match(record)
@@ -111,7 +111,7 @@ func (p *modelRouterPlugin) HandleUsage(_ context.Context, record pluginapi.Usag
 }
 
 func (p *modelRouterPlugin) InterceptRequestBeforeAuth(_ context.Context, request pluginapi.RequestInterceptRequest) (pluginapi.RequestInterceptResponse, error) {
-	if p == nil || p.attribution == nil {
+	if p == nil || !p.config.Enabled || p.attribution == nil {
 		return pluginapi.RequestInterceptResponse{}, nil
 	}
 	if _, routed := p.matchingRoute(request.RequestedModel); routed {
@@ -123,28 +123,28 @@ func (p *modelRouterPlugin) InterceptRequestBeforeAuth(_ context.Context, reques
 }
 
 func (p *modelRouterPlugin) InterceptRequestAfterAuth(_ context.Context, request pluginapi.RequestInterceptRequest) (pluginapi.RequestInterceptResponse, error) {
-	if p != nil && p.attribution != nil {
+	if p != nil && p.config.Enabled && p.attribution != nil {
 		p.attribution.updateDirectRequest(request)
 	}
 	return pluginapi.RequestInterceptResponse{}, nil
 }
 
 func (p *modelRouterPlugin) InterceptResponse(_ context.Context, request pluginapi.ResponseInterceptRequest) (pluginapi.ResponseInterceptResponse, error) {
-	if p != nil && p.attribution != nil {
+	if p != nil && p.config.Enabled && p.attribution != nil {
 		p.attribution.observeDirectResponse(request)
 	}
 	return pluginapi.ResponseInterceptResponse{}, nil
 }
 
 func (p *modelRouterPlugin) InterceptStreamChunk(_ context.Context, request pluginapi.StreamChunkInterceptRequest) (pluginapi.StreamChunkInterceptResponse, error) {
-	if p != nil && p.attribution != nil {
+	if p != nil && p.config.Enabled && p.attribution != nil {
 		p.attribution.observeDirectStream(request)
 	}
 	return pluginapi.StreamChunkInterceptResponse{}, nil
 }
 
 func (p *modelRouterPlugin) HandleRequestComplete(_ context.Context, completion pluginapi.RequestCompletion) error {
-	if p == nil || p.store == nil || p.attribution == nil {
+	if p == nil || !p.config.Enabled || p.store == nil || p.attribution == nil {
 		return nil
 	}
 	marker, claimed := p.attribution.completeDirect(completion)

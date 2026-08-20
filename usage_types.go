@@ -5,15 +5,16 @@ import "time"
 const usageSchemaVersion = 1
 
 type usageCounters struct {
-	Requests            uint64 `json:"requests"`
-	FailedRequests      uint64 `json:"failed_requests"`
-	InputTokens         uint64 `json:"input_tokens"`
-	OutputTokens        uint64 `json:"output_tokens"`
-	ReasoningTokens     uint64 `json:"reasoning_tokens"`
-	CachedTokens        uint64 `json:"cached_tokens"`
-	CacheReadTokens     uint64 `json:"cache_read_tokens"`
-	CacheCreationTokens uint64 `json:"cache_creation_tokens"`
-	TotalTokens         uint64 `json:"total_tokens"`
+	Requests                 uint64 `json:"requests"`
+	FailedRequests           uint64 `json:"failed_requests"`
+	InputTokens              uint64 `json:"input_tokens"`
+	OutputTokens             uint64 `json:"output_tokens"`
+	ReasoningTokens          uint64 `json:"reasoning_tokens"`
+	CachedTokens             uint64 `json:"cached_tokens"`
+	CacheReadTokens          uint64 `json:"cache_read_tokens"`
+	EffectiveCacheReadTokens uint64 `json:"effective_cache_read_tokens"`
+	CacheCreationTokens      uint64 `json:"cache_creation_tokens"`
+	TotalTokens              uint64 `json:"total_tokens"`
 }
 
 func (counters *usageCounters) add(record storedUsageRecord) {
@@ -26,6 +27,11 @@ func (counters *usageCounters) add(record storedUsageRecord) {
 	counters.ReasoningTokens += record.ReasoningTokens
 	counters.CachedTokens += record.CachedTokens
 	counters.CacheReadTokens += record.CacheReadTokens
+	effectiveCacheRead := record.CacheReadTokens
+	if effectiveCacheRead == 0 {
+		effectiveCacheRead = record.CachedTokens
+	}
+	counters.EffectiveCacheReadTokens += effectiveCacheRead
 	counters.CacheCreationTokens += record.CacheCreationTokens
 	counters.TotalTokens += record.TotalTokens
 }
