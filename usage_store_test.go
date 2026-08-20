@@ -31,6 +31,9 @@ func TestUsageStorePersistsAndResetPreservesSettings(t *testing.T) {
 	}
 	preferences := defaultDashboardPreferences()
 	preferences.RequestPageSize = 50
+	preferences.TimeRange = "custom"
+	preferences.CustomFrom = "2026-08-18T10:00:00"
+	preferences.CustomTo = "2026-08-19T10:00:00"
 	if _, err := store.SavePreferences(preferences); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +63,7 @@ func TestUsageStorePersistsAndResetPreservesSettings(t *testing.T) {
 	if loaded, err := store.QueryPriceBook(); err != nil || loaded.Revision != 1 || len(loaded.Prices) != 1 {
 		t.Fatalf("persisted prices = %#v, %v", loaded, err)
 	}
-	if loaded, err := store.QueryPreferences(); err != nil || loaded.RequestPageSize != 50 {
+	if loaded, err := store.QueryPreferences(); err != nil || loaded.RequestPageSize != 50 || loaded.TimeRange != "custom" || loaded.CustomFrom != preferences.CustomFrom || loaded.CustomTo != preferences.CustomTo {
 		t.Fatalf("persisted preferences = %#v, %v", loaded, err)
 	}
 	if err := store.ResetUsage(); err != nil {
@@ -75,6 +78,13 @@ func TestUsageStorePersistsAndResetPreservesSettings(t *testing.T) {
 	}
 	if loaded, _ := store.QueryPreferences(); loaded.RequestPageSize != 50 {
 		t.Fatalf("preferences after reset = %#v", loaded)
+	}
+}
+
+func TestSafeStoredUsageSourceRejectsShortCredentialShapedValues(t *testing.T) {
+	record := pluginapi.UsageRecord{Provider: "openai", ExecutorType: "openai", Source: "abcdefgh12345678"}
+	if got := safeStoredUsageSource(record); got != "openai" {
+		t.Fatalf("safe source = %q, want provider fallback", got)
 	}
 }
 
@@ -160,6 +170,32 @@ func TestUsageOverviewIncludesEfficiencyAverages(t *testing.T) {
 	point := overview.Series[0]
 	if point.AverageLatencyNS != uint64(3*time.Second) || point.AverageTTFTNS != uint64(750*time.Millisecond) || !near(point.AverageTPS, 5.833333333333333) {
 		t.Fatalf("efficiency point = %#v", point)
+	}
+}
+
+func TestUsageEfficiencyAveragesIgnoreUnmeasuredTTFT(t *testing.T) {
+	store, err := openUsageStore(filepath.Join(t.TempDir(), "usage.db"), 365)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC().Truncate(time.Hour).Add(time.Minute)
+	for _, record := range []storedUsageRecord{
+		{RequestedAt: now, Attribution: attributionDirect, ProviderModel: "model", OutputTokens: 10, LatencyNS: uint64(2 * time.Second), TTFTNS: uint64(time.Second)},
+		{RequestedAt: now.Add(time.Minute), Attribution: attributionDirect, ProviderModel: "model", OutputTokens: 15, LatencyNS: uint64(4 * time.Second)},
+	} {
+		if err := store.Record(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	filter := usageFilter{From: now.Add(-time.Minute), To: now.Add(time.Hour)}
+	overview, err := store.Overview(filter, "hour")
+	if err != nil || len(overview.Series) != 1 || overview.Series[0].AverageTTFTNS != uint64(time.Second) {
+		t.Fatalf("overview TTFT = %#v, %v", overview.Series, err)
+	}
+	groups, err := store.Groups(filter, "provider_model", "ttft", "desc", 0, 10)
+	if err != nil || len(groups.Items) != 1 || groups.Items[0].AverageTTFTNS != uint64(time.Second) {
+		t.Fatalf("group TTFT = %#v, %v", groups.Items, err)
 	}
 }
 

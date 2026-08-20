@@ -599,7 +599,7 @@ func looksLikeCredential(value string) bool {
 			return true
 		}
 	}
-	if len(value) < 24 || strings.ContainsAny(value, " /\\:@") {
+	if len(value) < 8 || strings.ContainsAny(value, " /\\:@") {
 		return false
 	}
 	letters, digits := 0, 0

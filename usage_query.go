@@ -56,6 +56,9 @@ func (store *usageStore) Overview(filter usageFilter, granularity string) (usage
 		point.usageCounters.add(record)
 		point.latencyTotal += record.LatencyNS
 		point.ttftTotal += record.TTFTNS
+		if record.TTFTNS > 0 {
+			point.ttftRequests++
+		}
 		generation := record.LatencyNS
 		if record.TTFTNS > 0 && record.LatencyNS >= record.TTFTNS {
 			generation -= record.TTFTNS
@@ -99,7 +102,9 @@ func (store *usageStore) Overview(filter usageFilter, granularity string) (usage
 	for _, point := range series {
 		if point.Requests > 0 {
 			point.AverageLatencyNS = point.latencyTotal / point.Requests
-			point.AverageTTFTNS = point.ttftTotal / point.Requests
+		}
+		if point.ttftRequests > 0 {
+			point.AverageTTFTNS = point.ttftTotal / point.ttftRequests
 		}
 		if point.timingRequests > 0 {
 			point.AverageTPS = point.tpsTotal / float64(point.timingRequests)
@@ -145,6 +150,7 @@ type groupAccumulator struct {
 	group          usageGroup
 	latencyTotal   uint64
 	ttftTotal      uint64
+	ttftRequests   uint64
 	tpsTotal       float64
 	timingRequests uint64
 }
@@ -175,6 +181,9 @@ func (store *usageStore) Groups(filter usageFilter, dimension, sortField, order 
 		accumulator.group.usageCounters.add(record)
 		accumulator.latencyTotal += record.LatencyNS
 		accumulator.ttftTotal += record.TTFTNS
+		if record.TTFTNS > 0 {
+			accumulator.ttftRequests++
+		}
 		generation := record.LatencyNS
 		if record.TTFTNS > 0 && record.LatencyNS >= record.TTFTNS {
 			generation -= record.TTFTNS
@@ -194,7 +203,9 @@ func (store *usageStore) Groups(filter usageFilter, dimension, sortField, order 
 		requests := accumulator.group.Requests
 		if requests > 0 {
 			accumulator.group.AverageLatencyNS = accumulator.latencyTotal / requests
-			accumulator.group.AverageTTFTNS = accumulator.ttftTotal / requests
+		}
+		if accumulator.ttftRequests > 0 {
+			accumulator.group.AverageTTFTNS = accumulator.ttftTotal / accumulator.ttftRequests
 		}
 		if accumulator.timingRequests > 0 {
 			accumulator.group.AverageTPS = accumulator.tpsTotal / float64(accumulator.timingRequests)

@@ -1133,10 +1133,11 @@ function localDateTimeValue(value){
   return value.getFullYear()+'-'+pad(value.getMonth()+1)+'-'+pad(value.getDate())+'T'+pad(value.getHours())+':'+pad(value.getMinutes())+':'+pad(value.getSeconds());
 }
 function initializeCustomRange(){
-  if(usageState.customFrom&&usageState.customTo)return;
-  const now=new Date();
-  usageState.customTo=localDateTimeValue(now);
-  usageState.customFrom=localDateTimeValue(new Date(now.getTime()-24*60*60*1000));
+  if(!(usageState.customFrom&&usageState.customTo)){
+    const now=new Date();
+    usageState.customTo=localDateTimeValue(now);
+    usageState.customFrom=localDateTimeValue(new Date(now.getTime()-24*60*60*1000));
+  }
   usageFromEl.value=usageState.customFrom;
   usageToEl.value=usageState.customTo;
 }
@@ -1239,6 +1240,8 @@ function applyUsagePreferences(preferences){
   usageState.group.dimension=String(preferences.group_dimension||'provider_model');
   usageState.group.sort=String(preferences.group_sort||'total_tokens');
   usageState.group.order=preferences.group_order==='asc'?'asc':'desc';
+  usageState.customFrom=String(preferences.custom_from||'');
+  usageState.customTo=String(preferences.custom_to||'');
   usageState.hiddenRequestColumns=validHiddenColumns(preferences.hidden_request_columns,requestColumns);
   usageState.hiddenGroupColumns=validHiddenColumns(preferences.hidden_group_columns,groupColumns);
   usageState.hiddenTokenSeries=new Set((Array.isArray(preferences.hidden_token_series)?preferences.hidden_token_series:[]).filter(value=>['input','output','cache_read','reasoning'].includes(value)));
@@ -1264,7 +1267,7 @@ function usagePreferencesPayload(){
     hidden_request_columns:Array.from(usageState.hiddenRequestColumns),hidden_group_columns:Array.from(usageState.hiddenGroupColumns),
     time_range:usageState.range,granularity:usageState.granularity,request_sort:usageState.request.sort,request_order:usageState.request.order,
     group_dimension:usageState.group.dimension,group_sort:usageState.group.sort,group_order:usageState.group.order,
-    hidden_token_series:Array.from(usageState.hiddenTokenSeries)
+    hidden_token_series:Array.from(usageState.hiddenTokenSeries),custom_from:usageState.customFrom,custom_to:usageState.customTo
   };
 }
 function scheduleUsagePreferencesSave(){
@@ -2095,8 +2098,8 @@ usageProviderModelEl.addEventListener('change',()=>{usageState.providerModel=usa
 usageSourceEl.addEventListener('change',()=>{usageState.source=usageSourceEl.value;usageControlChanged()});
 usageServiceTierEl.addEventListener('change',()=>{usageState.serviceTier=usageServiceTierEl.value;usageControlChanged()});
 usageResultEl.addEventListener('change',()=>{usageState.result=usageResultEl.value;usageControlChanged()});
-usageFromEl.addEventListener('change',()=>{usageState.customFrom=usageFromEl.value;if(usageState.range==='custom')usageControlChanged()});
-usageToEl.addEventListener('change',()=>{usageState.customTo=usageToEl.value;if(usageState.range==='custom')usageControlChanged()});
+usageFromEl.addEventListener('change',()=>{usageState.customFrom=usageFromEl.value;if(usageState.range==='custom'){scheduleUsagePreferencesSave();usageControlChanged()}});
+usageToEl.addEventListener('change',()=>{usageState.customTo=usageToEl.value;if(usageState.range==='custom'){scheduleUsagePreferencesSave();usageControlChanged()}});
 usageRefreshEl.addEventListener('click',()=>refreshUsage(false));
 document.getElementById('group-dimension').addEventListener('change',event=>{usageState.group.dimension=event.target.value;usageState.group.offset=0;scheduleUsagePreferencesSave();refreshUsage(false)});
 document.getElementById('group-page-size').addEventListener('change',event=>{usageState.group.limit=Number(event.target.value);usageState.group.offset=0;scheduleUsagePreferencesSave();refreshUsage(false)});

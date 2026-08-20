@@ -47,6 +47,17 @@ func TestAttributionTrackerRequiresCredentialAndUnanimousRoute(t *testing.T) {
 	}
 }
 
+func TestAttributionTrackerMatchesTimestampLessUsageAfterWindow(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	tracker := newAttributionTracker(func() time.Time { return now })
+	tracker.MarkRouted("auto", "gpt-5.4", http.Header{"X-Api-Key": {"key-one"}})
+	now = now.Add(attributionWindow + time.Second)
+	got := tracker.Match(pluginapi.UsageRecord{Model: "gpt-5.4", APIKey: "key-one"})
+	if got.Kind != attributionRouted || got.RouterModel != "auto" {
+		t.Fatalf("timestamp-less attribution = %#v", got)
+	}
+}
+
 func TestAttributionTrackerExpiresAndCapsMarkers(t *testing.T) {
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	tracker := newAttributionTracker(func() time.Time { return now })
@@ -65,7 +76,7 @@ func TestAttributionTrackerExpiresAndCapsMarkers(t *testing.T) {
 }
 
 func TestMaskAPIKey(t *testing.T) {
-	for input, want := range map[string]string{"sk-client-ab": "sk******ab", "abcd": "******", "": ""} {
+	for input, want := range map[string]string{"sk-client-ab": "sk******ab", "abcde": "******", "abcd": "******", "": ""} {
 		if got := maskAPIKey(input); got != want {
 			t.Fatalf("maskAPIKey(%q) = %q, want %q", input, got, want)
 		}

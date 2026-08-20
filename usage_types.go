@@ -136,6 +136,7 @@ type usageSeriesPoint struct {
 
 	latencyTotal   uint64
 	ttftTotal      uint64
+	ttftRequests   uint64
 	tpsTotal       float64
 	timingRequests uint64
 }

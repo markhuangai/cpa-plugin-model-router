@@ -21,6 +21,8 @@ type dashboardPreferences struct {
 	GroupSort            string   `json:"group_sort"`
 	GroupOrder           string   `json:"group_order"`
 	HiddenTokenSeries    []string `json:"hidden_token_series"`
+	CustomFrom           string   `json:"custom_from,omitempty"`
+	CustomTo             string   `json:"custom_to,omitempty"`
 }
 
 func defaultDashboardPreferences() dashboardPreferences {
@@ -55,6 +57,8 @@ func normalizeDashboardPreferences(input dashboardPreferences) (dashboardPrefere
 	input.GroupDimension = defaultAllowed(input.GroupDimension, defaults.GroupDimension, groupDimensions...)
 	input.GroupSort = defaultAllowed(input.GroupSort, defaults.GroupSort, groupSortFields...)
 	input.GroupOrder = defaultAllowed(input.GroupOrder, defaults.GroupOrder, "asc", "desc")
+	input.CustomFrom = strings.TrimSpace(input.CustomFrom)
+	input.CustomTo = strings.TrimSpace(input.CustomTo)
 	var err error
 	if input.HiddenRequestColumns, err = normalizeColumnList(input.HiddenRequestColumns, requestColumnFields); err != nil {
 		return dashboardPreferences{}, fmt.Errorf("hidden_request_columns: %w", err)

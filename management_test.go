@@ -113,6 +113,8 @@ func TestModelRouterManagementDashboardReusesCPAMCSessionAndTheme(t *testing.T) 
 		"['attribution',usageState.attribution]",
 		"@media (max-width: 920px) {",
 		".price-grid .price-model-field { grid-column: 1 / -1; }",
+		"custom_from:usageState.customFrom",
+		"custom_to:usageState.customTo",
 		"const controller=new AbortController()",
 		"generation!==usageState.generation",
 		"document.addEventListener('visibilitychange'",

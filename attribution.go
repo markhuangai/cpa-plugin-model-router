@@ -124,8 +124,9 @@ func (tracker *attributionTracker) Match(record pluginapi.UsageRecord) attributi
 	if tracker == nil {
 		return attributionResult{Kind: attributionUnresolved}
 	}
+	hasRequestedAt := !record.RequestedAt.IsZero()
 	requestedAt := record.RequestedAt.UTC()
-	if requestedAt.IsZero() {
+	if !hasRequestedAt {
 		requestedAt = tracker.now().UTC()
 	}
 	fingerprint, hasCredential := tracker.fingerprint(strings.TrimSpace(record.APIKey))
@@ -134,9 +135,9 @@ func (tracker *attributionTracker) Match(record pluginapi.UsageRecord) attributi
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
 	tracker.pruneLocked(tracker.now().UTC())
-	indexes := tracker.matchingIndexesLocked(requestedAt, fingerprint, hasCredential, models, false)
+	indexes := tracker.matchingIndexesLocked(requestedAt, fingerprint, hasCredential, models, false, hasRequestedAt)
 	if len(indexes) == 0 {
-		indexes = tracker.matchingIndexesLocked(requestedAt, fingerprint, hasCredential, models, true)
+		indexes = tracker.matchingIndexesLocked(requestedAt, fingerprint, hasCredential, models, true, hasRequestedAt)
 	}
 	if len(indexes) == 0 {
 		return attributionResult{Kind: attributionUnresolved}
@@ -301,15 +302,17 @@ func (tracker *attributionTracker) directMarkerLocked(requestID string) *attribu
 	return nil
 }
 
-func (tracker *attributionTracker) matchingIndexesLocked(requestedAt time.Time, fingerprint [sha256.Size]byte, hasCredential bool, models []string, stripSuffix bool) []int {
+func (tracker *attributionTracker) matchingIndexesLocked(requestedAt time.Time, fingerprint [sha256.Size]byte, hasCredential bool, models []string, stripSuffix, enforceWindow bool) []int {
 	indexes := make([]int, 0, 2)
 	for index, marker := range tracker.markers {
 		if marker.hasCredential != hasCredential || (hasCredential && !hmac.Equal(marker.credential[:], fingerprint[:])) {
 			continue
 		}
-		delta := marker.startedAt.Sub(requestedAt)
-		if delta < -attributionWindow || delta > attributionWindow {
-			continue
+		if enforceWindow {
+			delta := marker.startedAt.Sub(requestedAt)
+			if delta < -attributionWindow || delta > attributionWindow {
+				continue
+			}
 		}
 		markerModel := normalizedAttributionModel(marker.providerModel, stripSuffix)
 		for _, model := range models {
@@ -406,7 +409,7 @@ func maskAPIKey(value string) string {
 	if len(runes) == 0 {
 		return ""
 	}
-	if len(runes) < 5 {
+	if len(runes) < 8 {
 		return "******"
 	}
 	return string(runes[:2]) + "******" + string(runes[len(runes)-2:])
