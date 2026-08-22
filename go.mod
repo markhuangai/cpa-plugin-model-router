@@ -3,6 +3,7 @@ module github.com/markhuangai/cpa-plugin-model-router
 go 1.26.0
 
 require (
+	github.com/mattn/go-sqlite3 v1.14.50
 	github.com/router-for-me/CLIProxyAPI/v7 v7.2.123
 	github.com/tidwall/gjson v1.18.0
 	github.com/tidwall/sjson v1.2.5

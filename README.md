@@ -20,7 +20,7 @@ The plugin does not call providers directly. For each selected physical model it
 - Preserve unchanged cooldown and round-robin state when CPA reconfigures the plugin.
 - Configure ordered routes and target pools through a dedicated CPA management page.
 - Track routed attempts and direct provider requests with separate router-model and provider-model identities.
-- Persist request usage, minute aggregates, USD model prices, and dashboard preferences in a dedicated bbolt database.
+- Persist request usage, minute aggregates, USD model prices, and dashboard preferences in a dedicated SQLite database with WAL enabled.
 - Review tokens, estimated cost, latency, TTFT, throughput, failures, and pricing coverage without replacing visible data during refreshes.
 
 ## Compatibility
@@ -64,14 +64,27 @@ Only two usage-storage settings are supported:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `data_path` | CPA `plugins/model-router.db` | Dedicated bbolt database path. Explicit relative paths resolve from the CPA process working directory. |
+| `data_path` | CPA `plugins/model-router.db` | Dedicated SQLite database path. Explicit relative paths resolve from the CPA process working directory. |
 | `retention_days` | `365` | UTC days of request details and aggregates to retain, from 1 through 3650. |
 
 When `data_path` is omitted, the plugin locates the CPA root from the loaded library, then the CPA executable, then the current working directory. It stores the database at `<CPA root>/plugins/model-router.db`; outside a detected CPA layout it uses `<working directory>/plugins/model-router.db`. The plugins directory must be writable and persistently mounted. Use an explicit absolute `data_path` when the plugin directory is read-only or stored on a disposable container layer.
 
-Version 0.3.1 does not look for or migrate the former omitted-path default at `<CPA root>/data/model-router-usage.db`. To keep using that database, set its path explicitly before upgrading. The file is bbolt data despite the `.db` extension; it is not SQLite.
+Version 0.4.0 opens the configured path as SQLite in WAL mode. When that path contains a v0.3.x bbolt database, the first v0.4.0 open performs a one-time, integrity-checked migration and retains the original file as `<data_path>.bbolt-v1.bak`. The migration marker and temporary file make an interrupted copy recoverable; a changed or corrupt source is rejected rather than overwritten. The former omitted-path default at `<CPA root>/data/model-router-usage.db` is not discovered automatically, so set that path explicitly when its history must remain active.
 
-Every completed attempt is committed synchronously. Usage history, prices, and dashboard preferences therefore survive a normal CPA restart when the same database file remains mounted and writable. Retention deletes expired records and lets bbolt reuse their pages, but it does not guarantee that the file shrinks on disk. High-volume installations should monitor the database file and choose retention based on request rate and available storage.
+Every completed attempt is committed synchronously. Usage history, prices, and dashboard preferences therefore survive a normal CPA restart when the same database file remains mounted and writable. WAL allows an old and a new plugin generation to overlap while CPA hot-loads a compatible update. Retention deletes expired rows; SQLite may retain reusable pages, so high-volume installations should monitor the database file and choose retention based on request rate and available storage.
+
+### Updating from v0.3.x
+
+The bbolt-to-SQLite transition is the only controlled interruption required by this plugin. Keep CPA running, stop new requests, and use CPA's plugin management update flow to unload and replace the loaded `model-router` library once. Do not delete `model-router.db`; it is the migration source. After the new library registers, verify that `<data_path>.bbolt-v1.bak` exists and that the Usage tracking page still shows the previous history. Future v0.4.x updates use SQLite WAL and can hot-load while generations overlap.
+
+If migration reports a source-digest, corruption, or registration error, leave the marker and backup files in place and restore the previous artifact. The exact rollback is:
+
+```bash
+cp -- "<data_path>.bbolt-v1.bak" "<data_path>"
+rm -f -- "<data_path>.migration-v1.json" "<data_path>.sqlite-v1.migrating"
+```
+
+Only run that rollback while the `model-router` plugin is unloaded. The backup is a copy of the original bbolt file; never overwrite it with an unverified database.
 
 ### Configuration UI
 
@@ -245,14 +258,14 @@ The database is not encrypted by the plugin. Protect the configured path with fi
 
 ## Publishing And Plugin Store Registration
 
-The release workflow accepts tags such as `v0.3.1` and builds these CPA Plugin Store assets:
+The release workflow accepts tags such as `v0.4.0` and builds these CPA Plugin Store assets:
 
 ```text
-model-router_0.3.1_linux_amd64.zip
-model-router_0.3.1_linux_arm64.zip
-model-router_0.3.1_darwin_amd64.zip
-model-router_0.3.1_darwin_arm64.zip
-model-router_0.3.1_windows_amd64.zip
+model-router_0.4.0_linux_amd64.zip
+model-router_0.4.0_linux_arm64.zip
+model-router_0.4.0_darwin_amd64.zip
+model-router_0.4.0_darwin_arm64.zip
+model-router_0.4.0_windows_amd64.zip
 checksums.txt
 ```
 

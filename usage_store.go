@@ -1,7 +1,7 @@
 package main
 
 import (
-	"encoding/binary"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,32 +9,23 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
-	bolt "go.etcd.io/bbolt"
+	_ "github.com/mattn/go-sqlite3"
 )
 
-var (
-	usageMetaBucket     = []byte("meta")
-	usageRequestsBucket = []byte("requests")
-	usageMinutesBucket  = []byte("minutes")
-
-	usageSchemaKey      = []byte("schema_version")
-	usageSequenceKey    = []byte("next_sequence")
-	usageLastPruneKey   = []byte("last_prune_day")
-	usagePricesKey      = []byte("prices")
-	usagePreferencesKey = []byte("preferences")
-
-	errPriceRevisionConflict = errors.New("model price revision conflict")
+const (
+	usageStorageSchemaVersion = 1
+	sqliteBusyTimeoutMS       = 5000
 )
+
+var errPriceRevisionConflict = errors.New("model price revision conflict")
 
 type usageStore struct {
 	mu            sync.RWMutex
-	db            *bolt.DB
+	db            *sql.DB
 	path          string
 	retentionDays int
 	errorMu       sync.RWMutex
@@ -77,7 +68,7 @@ func (store *usageStore) Reconfigure(path string, retentionDays int) error {
 	if samePath {
 		store.mu.Lock()
 		store.retentionDays = retentionDays
-		err := pruneUsageDatabase(store.db, retentionDays, time.Now().UTC(), true)
+		err := pruneSQLiteDatabase(store.db, retentionDays, time.Now().UTC(), true)
 		store.mu.Unlock()
 		if err != nil {
 			store.recordError(err)
@@ -87,19 +78,11 @@ func (store *usageStore) Reconfigure(path string, retentionDays int) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create usage data directory: %w", err)
 	}
-	database, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: 2 * time.Second})
+	database, err := openUsageDatabase(path)
 	if err != nil {
-		return fmt.Errorf("open usage database: %w", err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		_ = database.Close()
-		return fmt.Errorf("restrict usage database permissions: %w", err)
-	}
-	if err := initializeUsageDatabase(database); err != nil {
-		_ = database.Close()
 		return err
 	}
-	if err := pruneUsageDatabase(database, retentionDays, time.Now().UTC(), true); err != nil {
+	if err := pruneSQLiteDatabase(database, retentionDays, time.Now().UTC(), true); err != nil {
 		_ = database.Close()
 		return err
 	}
@@ -118,40 +101,154 @@ func (store *usageStore) Reconfigure(path string, retentionDays int) error {
 	return nil
 }
 
-func initializeUsageDatabase(database *bolt.DB) error {
-	return database.Update(func(transaction *bolt.Tx) error {
-		meta, err := transaction.CreateBucketIfNotExists(usageMetaBucket)
-		if err != nil {
-			return err
+func openUsageDatabase(path string) (*sql.DB, error) {
+	markerPath := path + ".migration-v1.json"
+	if _, err := os.Stat(markerPath); err == nil {
+		if err := migrateLegacyBbolt(path); err != nil {
+			return nil, fmt.Errorf("recover legacy usage migration: %w", err)
 		}
-		for _, name := range [][]byte{usageRequestsBucket, usageMinutesBucket} {
-			if _, err := transaction.CreateBucketIfNotExists(name); err != nil {
-				return err
-			}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("inspect usage migration marker: %w", err)
+	}
+	temporaryPath := path + ".sqlite-v1.migrating"
+	if temporaryKind, err := usageDatabaseKind(temporaryPath); err != nil {
+		return nil, err
+	} else if temporaryKind != usageDatabaseMissing {
+		return nil, fmt.Errorf("usage database has an abandoned migration temporary file %q", temporaryPath)
+	}
+	kind, err := usageDatabaseKind(path)
+	if err != nil {
+		return nil, err
+	}
+	if kind == usageDatabaseLegacyBbolt {
+		if err := migrateLegacyBbolt(path); err != nil {
+			return nil, fmt.Errorf("migrate legacy usage database: %w", err)
 		}
-		if raw := meta.Get(usageSchemaKey); len(raw) > 0 {
-			version := binary.BigEndian.Uint32(paddedUint32(raw))
-			if version > usageSchemaVersion {
-				return fmt.Errorf("usage database schema %d is newer than supported schema %d", version, usageSchemaVersion)
-			}
-			if version < usageSchemaVersion {
-				return fmt.Errorf("usage database schema %d requires an unsupported migration", version)
-			}
-			return nil
+	} else if kind == usageDatabaseUnknown {
+		return nil, fmt.Errorf("usage database %q is neither SQLite nor a supported legacy bbolt database", path)
+	} else if kind == usageDatabaseMissing {
+		backupPath := path + ".bbolt-v1.bak"
+		if backupKind, err := usageDatabaseKind(backupPath); err != nil {
+			return nil, err
+		} else if backupKind != usageDatabaseMissing {
+			return nil, fmt.Errorf("usage database primary file is missing while legacy backup %q remains", backupPath)
 		}
-		var version [4]byte
-		binary.BigEndian.PutUint32(version[:], usageSchemaVersion)
-		return meta.Put(usageSchemaKey, version[:])
-	})
+	}
+	return openSQLiteDatabase(path, "WAL")
 }
 
-func paddedUint32(raw []byte) []byte {
-	if len(raw) >= 4 {
-		return raw[len(raw)-4:]
+func sqliteDSN(path, journalMode string) string {
+	fileURL := &url.URL{Scheme: "file", Path: filepath.ToSlash(sqliteAbsolutePath(path))}
+	query := url.Values{}
+	query.Set("_busy_timeout", fmt.Sprintf("%d", sqliteBusyTimeoutMS))
+	query.Set("_foreign_keys", "on")
+	query.Set("_journal_mode", journalMode)
+	query.Set("_synchronous", "FULL")
+	query.Set("_txlock", "immediate")
+	fileURL.RawQuery = query.Encode()
+	return fileURL.String()
+}
+
+func sqliteAbsolutePath(path string) string {
+	absolute, err := filepath.Abs(path)
+	if err == nil {
+		return absolute
 	}
-	result := make([]byte, 4)
-	copy(result[4-len(raw):], raw)
-	return result
+	return path
+}
+
+func openSQLiteDatabase(path string, journalMode string) (*sql.DB, error) {
+	database, err := sql.Open("sqlite3", sqliteDSN(path, journalMode))
+	if err != nil {
+		return nil, fmt.Errorf("open SQLite usage database: %w", err)
+	}
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
+	if err := database.Ping(); err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("connect SQLite usage database: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("restrict usage database permissions: %w", err)
+	}
+	if err := initializeSQLiteDatabase(database); err != nil {
+		_ = database.Close()
+		return nil, err
+	}
+	if journalMode == "WAL" {
+		var actual string
+		if err := database.QueryRow("PRAGMA journal_mode").Scan(&actual); err != nil {
+			_ = database.Close()
+			return nil, fmt.Errorf("verify SQLite journal mode: %w", err)
+		}
+		if !strings.EqualFold(actual, "wal") {
+			_ = database.Close()
+			return nil, fmt.Errorf("SQLite journal mode is %q, want WAL", actual)
+		}
+	}
+	if err := chmodSQLiteSidecars(path); err != nil {
+		_ = database.Close()
+		return nil, err
+	}
+	return database, nil
+}
+
+func initializeSQLiteDatabase(database *sql.DB) error {
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS store_state (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			storage_schema_version INTEGER NOT NULL,
+			next_sequence INTEGER NOT NULL DEFAULT 0,
+			last_prune_day TEXT,
+			prices_json BLOB,
+			preferences_json BLOB
+		)`,
+		`CREATE TABLE IF NOT EXISTS requests (
+			sequence INTEGER PRIMARY KEY,
+			requested_at_ns INTEGER NOT NULL,
+			payload BLOB NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS requests_requested_at_sequence ON requests(requested_at_ns, sequence)`,
+		`CREATE TABLE IF NOT EXISTS minute_aggregates (
+			key BLOB PRIMARY KEY,
+			minute_ns INTEGER NOT NULL,
+			payload BLOB NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS minute_aggregates_minute ON minute_aggregates(minute_ns)`,
+		`INSERT OR IGNORE INTO store_state(id, storage_schema_version, next_sequence) VALUES (1, ?, 0)`,
+	}
+	for index, statement := range statements {
+		if index == len(statements)-1 {
+			if _, err := database.Exec(statement, usageStorageSchemaVersion); err != nil {
+				return fmt.Errorf("initialize SQLite state: %w", err)
+			}
+			continue
+		}
+		if _, err := database.Exec(statement); err != nil {
+			return fmt.Errorf("initialize SQLite schema: %w", err)
+		}
+	}
+	var version int
+	if err := database.QueryRow("SELECT storage_schema_version FROM store_state WHERE id = 1").Scan(&version); err != nil {
+		return fmt.Errorf("read SQLite storage schema: %w", err)
+	}
+	if version > usageStorageSchemaVersion {
+		return fmt.Errorf("usage database storage schema %d is newer than supported schema %d", version, usageStorageSchemaVersion)
+	}
+	if version < usageStorageSchemaVersion {
+		return fmt.Errorf("usage database storage schema %d requires an unsupported migration", version)
+	}
+	return nil
+}
+
+func chmodSQLiteSidecars(path string) error {
+	for _, sidecar := range []string{path + "-wal", path + "-shm"} {
+		if err := os.Chmod(sidecar, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("restrict SQLite sidecar permissions: %w", err)
+		}
+	}
+	return nil
 }
 
 func (store *usageStore) Record(record storedUsageRecord) error {
@@ -160,30 +257,44 @@ func (store *usageStore) Record(record storedUsageRecord) error {
 	if store.db == nil {
 		return errors.New("usage database is closed")
 	}
-	err := store.db.Update(func(transaction *bolt.Tx) error {
-		meta := transaction.Bucket(usageMetaBucket)
-		requests := transaction.Bucket(usageRequestsBucket)
-		minutes := transaction.Bucket(usageMinutesBucket)
-		sequence := decodeUint64(meta.Get(usageSequenceKey)) + 1
-		record.Sequence = sequence
-		var encodedSequence [8]byte
-		binary.BigEndian.PutUint64(encodedSequence[:], sequence)
-		if err := meta.Put(usageSequenceKey, encodedSequence[:]); err != nil {
+	err := func() error {
+		transaction, err := store.db.Begin()
+		if err != nil {
 			return err
 		}
-		key := usageRequestKey(record.RequestedAt, sequence)
+		committed := false
+		defer func() {
+			if !committed {
+				_ = transaction.Rollback()
+			}
+		}()
+		var sequence int64
+		if err := transaction.QueryRow(`UPDATE store_state SET next_sequence = next_sequence + 1 WHERE id = 1 RETURNING next_sequence`).Scan(&sequence); err != nil {
+			return err
+		}
+		if sequence < 1 {
+			return errors.New("usage sequence overflow")
+		}
+		record.Sequence = uint64(sequence)
 		value, err := json.Marshal(record)
 		if err != nil {
 			return err
 		}
-		if err := requests.Put(key, value); err != nil {
+		if _, err := transaction.Exec(`INSERT INTO requests(sequence, requested_at_ns, payload) VALUES (?, ?, ?)`, sequence, record.RequestedAt.UTC().UnixNano(), value); err != nil {
 			return err
 		}
-		if err := updateMinuteAggregate(minutes, record); err != nil {
+		if err := updateMinuteAggregateSQLite(transaction, record); err != nil {
 			return err
 		}
-		return pruneUsageTransaction(transaction, store.retentionDays, time.Now().UTC(), false)
-	})
+		if err := pruneSQLiteTransaction(transaction, store.retentionDays, time.Now().UTC(), false); err != nil {
+			return err
+		}
+		if err := transaction.Commit(); err != nil {
+			return err
+		}
+		committed = true
+		return nil
+	}()
 	if err != nil {
 		store.recordError(err)
 		log.Printf("model-router: persist usage: %v", err)
@@ -193,7 +304,7 @@ func (store *usageStore) Record(record storedUsageRecord) error {
 	return err
 }
 
-func updateMinuteAggregate(bucket *bolt.Bucket, record storedUsageRecord) error {
+func updateMinuteAggregateSQLite(transaction *sql.Tx, record storedUsageRecord) error {
 	minute := record.RequestedAt.UTC().Truncate(time.Minute)
 	dimensions, err := json.Marshal([]string{record.Attribution, record.RouterModel, record.ProviderModel, record.Provider, record.Source, record.ServiceTier, record.result()})
 	if err != nil {
@@ -204,7 +315,12 @@ func updateMinuteAggregate(bucket *bolt.Bucket, record storedUsageRecord) error 
 		Minute: minute, Attribution: record.Attribution, RouterModel: record.RouterModel, ProviderModel: record.ProviderModel,
 		Provider: record.Provider, Source: record.Source, ServiceTier: record.ServiceTier, Result: record.result(),
 	}
-	if raw := bucket.Get(key); len(raw) > 0 {
+	var raw []byte
+	err = transaction.QueryRow(`SELECT payload FROM minute_aggregates WHERE key = ?`, key).Scan(&raw)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &aggregate); err != nil {
 			return fmt.Errorf("decode minute aggregate: %w", err)
 		}
@@ -216,55 +332,53 @@ func updateMinuteAggregate(bucket *bolt.Bucket, record storedUsageRecord) error 
 	if err != nil {
 		return err
 	}
-	return bucket.Put(key, value)
-}
-
-func usageRequestKey(requestedAt time.Time, sequence uint64) []byte {
-	key := make([]byte, 16)
-	binary.BigEndian.PutUint64(key[:8], uint64(requestedAt.UTC().UnixNano()))
-	binary.BigEndian.PutUint64(key[8:], sequence)
-	return key
+	_, err = transaction.Exec(`INSERT INTO minute_aggregates(key, minute_ns, payload) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET payload = excluded.payload`, key, minute.UnixNano(), value)
+	return err
 }
 
 func timestampPrefix(value time.Time) []byte {
 	key := make([]byte, 8)
-	binary.BigEndian.PutUint64(key, uint64(value.UTC().UnixNano()))
+	putBigEndianUint64(key, uint64(value.UTC().UnixNano()))
 	return key
 }
 
-func decodeUint64(raw []byte) uint64 {
-	if len(raw) < 8 {
-		return 0
+func putBigEndianUint64(destination []byte, value uint64) {
+	for index := 7; index >= 0; index-- {
+		destination[index] = byte(value)
+		value >>= 8
 	}
-	return binary.BigEndian.Uint64(raw[len(raw)-8:])
 }
 
-func pruneUsageDatabase(database *bolt.DB, retentionDays int, now time.Time, force bool) error {
-	return database.Update(func(transaction *bolt.Tx) error {
-		return pruneUsageTransaction(transaction, retentionDays, now, force)
-	})
+func pruneSQLiteDatabase(database *sql.DB, retentionDays int, now time.Time, force bool) error {
+	transaction, err := database.Begin()
+	if err != nil {
+		return err
+	}
+	if err := pruneSQLiteTransaction(transaction, retentionDays, now, force); err != nil {
+		_ = transaction.Rollback()
+		return err
+	}
+	return transaction.Commit()
 }
 
-func pruneUsageTransaction(transaction *bolt.Tx, retentionDays int, now time.Time, force bool) error {
-	meta := transaction.Bucket(usageMetaBucket)
+func pruneSQLiteTransaction(transaction *sql.Tx, retentionDays int, now time.Time, force bool) error {
 	today := now.UTC().Format("2006-01-02")
-	if !force && string(meta.Get(usageLastPruneKey)) == today {
+	var lastPrune sql.NullString
+	if err := transaction.QueryRow(`SELECT last_prune_day FROM store_state WHERE id = 1`).Scan(&lastPrune); err != nil {
+		return err
+	}
+	if !force && lastPrune.Valid && lastPrune.String == today {
 		return nil
 	}
-	cutoff := now.UTC().AddDate(0, 0, -retentionDays)
-	for _, name := range [][]byte{usageRequestsBucket, usageMinutesBucket} {
-		bucket := transaction.Bucket(name)
-		cursor := bucket.Cursor()
-		for key, _ := cursor.First(); key != nil; key, _ = cursor.Next() {
-			if len(key) < 8 || int64(binary.BigEndian.Uint64(key[:8])) >= cutoff.UnixNano() {
-				break
-			}
-			if err := cursor.Delete(); err != nil {
-				return err
-			}
-		}
+	cutoff := now.UTC().AddDate(0, 0, -retentionDays).UnixNano()
+	if _, err := transaction.Exec(`DELETE FROM requests WHERE requested_at_ns < ?`, cutoff); err != nil {
+		return err
 	}
-	return meta.Put(usageLastPruneKey, []byte(today))
+	if _, err := transaction.Exec(`DELETE FROM minute_aggregates WHERE minute_ns < ?`, cutoff); err != nil {
+		return err
+	}
+	_, err := transaction.Exec(`UPDATE store_state SET last_prune_day = ? WHERE id = 1`, today)
+	return err
 }
 
 func (store *usageStore) records(filter usageFilter) ([]storedUsageRecord, error) {
@@ -273,38 +387,47 @@ func (store *usageStore) records(filter usageFilter) ([]storedUsageRecord, error
 	if store.db == nil {
 		return nil, errors.New("usage database is closed")
 	}
-	records := make([]storedUsageRecord, 0)
-	err := store.db.View(func(transaction *bolt.Tx) error {
-		bucket := transaction.Bucket(usageRequestsBucket)
-		cursor := bucket.Cursor()
-		var key, value []byte
-		if filter.From.IsZero() {
-			key, value = cursor.First()
-		} else {
-			key, value = cursor.Seek(timestampPrefix(filter.From))
-		}
-		for ; key != nil; key, value = cursor.Next() {
-			if len(key) < 8 {
-				continue
-			}
-			timestamp := time.Unix(0, int64(binary.BigEndian.Uint64(key[:8]))).UTC()
-			if !filter.To.IsZero() && !timestamp.Before(filter.To) {
-				break
-			}
-			var record storedUsageRecord
-			if err := json.Unmarshal(value, &record); err != nil {
-				return fmt.Errorf("decode usage record: %w", err)
-			}
-			if filter.matches(record) {
-				records = append(records, record)
-			}
-		}
-		return nil
-	})
+	query := `SELECT requested_at_ns, payload FROM requests`
+	args := make([]any, 0, 2)
+	conditions := make([]string, 0, 2)
+	if !filter.From.IsZero() {
+		conditions = append(conditions, "requested_at_ns >= ?")
+		args = append(args, filter.From.UTC().UnixNano())
+	}
+	if !filter.To.IsZero() {
+		conditions = append(conditions, "requested_at_ns < ?")
+		args = append(args, filter.To.UTC().UnixNano())
+	}
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	query += " ORDER BY requested_at_ns, sequence"
+	rows, err := store.db.Query(query, args...)
 	if err != nil {
 		store.recordError(err)
+		return nil, err
 	}
-	return records, err
+	defer rows.Close()
+	records := make([]storedUsageRecord, 0)
+	for rows.Next() {
+		var timestamp int64
+		var value []byte
+		if err := rows.Scan(&timestamp, &value); err != nil {
+			return nil, err
+		}
+		var record storedUsageRecord
+		if err := json.Unmarshal(value, &record); err != nil {
+			return nil, fmt.Errorf("decode usage record: %w", err)
+		}
+		if filter.matches(record) {
+			records = append(records, record)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		store.recordError(err)
+		return nil, err
+	}
+	return records, nil
 }
 
 func (store *usageStore) ResetUsage() error {
@@ -313,25 +436,29 @@ func (store *usageStore) ResetUsage() error {
 	if store.db == nil {
 		return errors.New("usage database is closed")
 	}
-	err := store.db.Update(func(transaction *bolt.Tx) error {
-		for _, name := range [][]byte{usageRequestsBucket, usageMinutesBucket} {
-			if err := transaction.DeleteBucket(name); err != nil && !errors.Is(err, bolt.ErrBucketNotFound) {
-				return err
-			}
-			if _, err := transaction.CreateBucket(name); err != nil {
-				return err
-			}
-		}
-		meta := transaction.Bucket(usageMetaBucket)
-		if err := meta.Delete(usageSequenceKey); err != nil {
-			return err
-		}
-		return meta.Delete(usageLastPruneKey)
-	})
-	if err != nil {
-		store.recordError(err)
+	transaction, err := store.db.Begin()
+	if err == nil {
+		_, err = transaction.Exec(`DELETE FROM requests`)
 	}
-	return err
+	if err == nil {
+		_, err = transaction.Exec(`DELETE FROM minute_aggregates`)
+	}
+	if err == nil {
+		_, err = transaction.Exec(`UPDATE store_state SET next_sequence = 0, last_prune_day = NULL WHERE id = 1`)
+	}
+	if err != nil {
+		if transaction != nil {
+			_ = transaction.Rollback()
+		}
+		store.recordError(err)
+		return err
+	}
+	if err := transaction.Commit(); err != nil {
+		store.recordError(err)
+		return err
+	}
+	store.clearError()
+	return nil
 }
 
 func (store *usageStore) QueryPriceBook() (modelPriceBook, error) {
@@ -341,13 +468,11 @@ func (store *usageStore) QueryPriceBook() (modelPriceBook, error) {
 		return modelPriceBook{}, errors.New("usage database is closed")
 	}
 	book := emptyModelPriceBook()
-	err := store.db.View(func(transaction *bolt.Tx) error {
-		raw := transaction.Bucket(usageMetaBucket).Get(usagePricesKey)
-		if len(raw) == 0 {
-			return nil
-		}
-		return json.Unmarshal(raw, &book)
-	})
+	var raw []byte
+	err := store.db.QueryRow(`SELECT prices_json FROM store_state WHERE id = 1`).Scan(&raw)
+	if err == nil && len(raw) > 0 {
+		err = json.Unmarshal(raw, &book)
+	}
 	if book.Prices == nil {
 		book.Prices = map[string]modelPrice{}
 	}
@@ -368,32 +493,42 @@ func (store *usageStore) SavePriceBook(request saveModelPricesRequest, now time.
 	if store.db == nil {
 		return modelPriceBook{}, errors.New("usage database is closed")
 	}
-	result := modelPriceBook{}
-	err = store.db.Update(func(transaction *bolt.Tx) error {
-		current, err := priceBookFromTransaction(transaction)
-		if err != nil {
-			return err
+	transaction, err := store.db.Begin()
+	if err != nil {
+		return modelPriceBook{}, err
+	}
+	current, err := priceBookFromSQLiteTransaction(transaction)
+	if err == nil && current.Revision != request.Revision {
+		err = errPriceRevisionConflict
+	}
+	if err != nil {
+		_ = transaction.Rollback()
+		return modelPriceBook{}, err
+	}
+	for model, price := range normalizedPrices {
+		if previous, exists := current.Prices[model]; exists && previous.Source == priceSourceModelsDev && sameBillablePrice(previous, price) {
+			price.Source = previous.Source
+			price.CatalogProvider = previous.CatalogProvider
+			price.CatalogModel = previous.CatalogModel
+			price.UpdatedAt = previous.UpdatedAt
+		} else {
+			price.Source = priceSourceManual
+			price.CatalogProvider = ""
+			price.CatalogModel = ""
+			price.UpdatedAt = now.UTC()
 		}
-		if current.Revision != request.Revision {
-			return errPriceRevisionConflict
-		}
-		for model, price := range normalizedPrices {
-			if previous, exists := current.Prices[model]; exists && previous.Source == priceSourceModelsDev && sameBillablePrice(previous, price) {
-				price.Source = previous.Source
-				price.CatalogProvider = previous.CatalogProvider
-				price.CatalogModel = previous.CatalogModel
-				price.UpdatedAt = previous.UpdatedAt
-			} else {
-				price.Source = priceSourceManual
-				price.CatalogProvider = ""
-				price.CatalogModel = ""
-				price.UpdatedAt = now.UTC()
-			}
-			normalizedPrices[model] = price
-		}
-		result = modelPriceBook{SchemaVersion: usageSchemaVersion, Revision: current.Revision + 1, Prices: normalizedPrices, SyncSettings: normalizedSettings, LastSync: current.LastSync}
-		return putJSON(transaction.Bucket(usageMetaBucket), usagePricesKey, result)
-	})
+		normalizedPrices[model] = price
+	}
+	result := modelPriceBook{SchemaVersion: usageSchemaVersion, Revision: current.Revision + 1, Prices: normalizedPrices, SyncSettings: normalizedSettings, LastSync: current.LastSync}
+	value, err := json.Marshal(result)
+	if err == nil {
+		_, err = transaction.Exec(`UPDATE store_state SET prices_json = ? WHERE id = 1`, value)
+	}
+	if err == nil {
+		err = transaction.Commit()
+	} else {
+		_ = transaction.Rollback()
+	}
 	return result, err
 }
 
@@ -408,58 +543,74 @@ func (store *usageStore) ApplyPriceSync(prices map[string]modelPrice, settings p
 	if store.db == nil {
 		return modelPriceBook{}, errors.New("usage database is closed")
 	}
-	result := modelPriceBook{}
-	err = store.db.Update(func(transaction *bolt.Tx) error {
-		current, err := priceBookFromTransaction(transaction)
-		if err != nil {
-			return err
+	transaction, err := store.db.Begin()
+	if err != nil {
+		return modelPriceBook{}, err
+	}
+	current, err := priceBookFromSQLiteTransaction(transaction)
+	if err == nil && current.Revision != revision {
+		err = errPriceRevisionConflict
+	}
+	if err != nil {
+		_ = transaction.Rollback()
+		return modelPriceBook{}, err
+	}
+	if current.Prices == nil {
+		current.Prices = map[string]modelPrice{}
+	}
+	current.Prices, err = normalizeModelPrices(current.Prices, now)
+	if err != nil {
+		_ = transaction.Rollback()
+		return modelPriceBook{}, err
+	}
+	existingByKey := make(map[string]string, len(current.Prices))
+	for model := range current.Prices {
+		existingByKey[routeKey(model)] = model
+	}
+	for model, price := range normalizedPrices {
+		existingModel, exists := existingByKey[routeKey(model)]
+		if exists && current.Prices[existingModel].Source == priceSourceManual {
+			metadata.SkippedManual++
+			continue
 		}
-		if current.Revision != revision {
-			return errPriceRevisionConflict
-		}
-		if current.Prices == nil {
-			current.Prices = map[string]modelPrice{}
-		}
-		current.Prices, err = normalizeModelPrices(current.Prices, now)
-		if err != nil {
-			return err
-		}
-		existingByKey := make(map[string]string, len(current.Prices))
-		for model := range current.Prices {
+		if exists {
+			metadata.Updated++
+			current.Prices[existingModel] = price
+		} else {
+			metadata.Created++
 			existingByKey[routeKey(model)] = model
+			current.Prices[model] = price
 		}
-		for model, price := range normalizedPrices {
-			existingModel, exists := existingByKey[routeKey(model)]
-			if exists && current.Prices[existingModel].Source == priceSourceManual {
-				metadata.SkippedManual++
-				continue
-			}
-			if exists {
-				metadata.Updated++
-				current.Prices[existingModel] = price
-			} else {
-				metadata.Created++
-				existingByKey[routeKey(model)] = model
-				current.Prices[model] = price
-			}
-		}
-		current.Prices, err = normalizeModelPrices(current.Prices, now)
-		if err != nil {
-			return err
-		}
-		current.SchemaVersion = usageSchemaVersion
-		current.Revision++
-		current.SyncSettings = settings
-		current.LastSync = &metadata
-		result = current
-		return putJSON(transaction.Bucket(usageMetaBucket), usagePricesKey, current)
-	})
+	}
+	current.Prices, err = normalizeModelPrices(current.Prices, now)
+	if err != nil {
+		_ = transaction.Rollback()
+		return modelPriceBook{}, err
+	}
+	current.SchemaVersion = usageSchemaVersion
+	current.Revision++
+	current.SyncSettings = settings
+	current.LastSync = &metadata
+	result := current
+	value, err := json.Marshal(current)
+	if err == nil {
+		_, err = transaction.Exec(`UPDATE store_state SET prices_json = ? WHERE id = 1`, value)
+	}
+	if err == nil {
+		err = transaction.Commit()
+	} else {
+		_ = transaction.Rollback()
+	}
 	return result, err
 }
 
-func priceBookFromTransaction(transaction *bolt.Tx) (modelPriceBook, error) {
+func priceBookFromSQLiteTransaction(transaction *sql.Tx) (modelPriceBook, error) {
 	book := emptyModelPriceBook()
-	if raw := transaction.Bucket(usageMetaBucket).Get(usagePricesKey); len(raw) > 0 {
+	var raw []byte
+	if err := transaction.QueryRow(`SELECT prices_json FROM store_state WHERE id = 1`).Scan(&raw); err != nil {
+		return modelPriceBook{}, err
+	}
+	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &book); err != nil {
 			return modelPriceBook{}, err
 		}
@@ -477,12 +628,11 @@ func (store *usageStore) QueryPreferences() (dashboardPreferences, error) {
 	if store.db == nil {
 		return dashboardPreferences{}, errors.New("usage database is closed")
 	}
-	err := store.db.View(func(transaction *bolt.Tx) error {
-		if raw := transaction.Bucket(usageMetaBucket).Get(usagePreferencesKey); len(raw) > 0 {
-			return json.Unmarshal(raw, &preferences)
-		}
-		return nil
-	})
+	var raw []byte
+	err := store.db.QueryRow(`SELECT preferences_json FROM store_state WHERE id = 1`).Scan(&raw)
+	if err == nil && len(raw) > 0 {
+		err = json.Unmarshal(raw, &preferences)
+	}
 	return preferences, err
 }
 
@@ -496,18 +646,11 @@ func (store *usageStore) SavePreferences(input dashboardPreferences) (dashboardP
 	if store.db == nil {
 		return dashboardPreferences{}, errors.New("usage database is closed")
 	}
-	err = store.db.Update(func(transaction *bolt.Tx) error {
-		return putJSON(transaction.Bucket(usageMetaBucket), usagePreferencesKey, preferences)
-	})
-	return preferences, err
-}
-
-func putJSON(bucket *bolt.Bucket, key []byte, value any) error {
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return err
+	value, err := json.Marshal(preferences)
+	if err == nil {
+		_, err = store.db.Exec(`UPDATE store_state SET preferences_json = ? WHERE id = 1`, value)
 	}
-	return bucket.Put(key, raw)
+	return preferences, err
 }
 
 func (store *usageStore) RetainedSince(now time.Time) time.Time {
@@ -547,133 +690,4 @@ func (store *usageStore) Close() error {
 		return nil
 	}
 	return database.Close()
-}
-
-func storedRecordFromUsage(record pluginapi.UsageRecord, attribution attributionResult) storedUsageRecord {
-	requestedAt := record.RequestedAt.UTC()
-	if requestedAt.IsZero() {
-		requestedAt = time.Now().UTC()
-	}
-	detail := record.Detail
-	if detail.TotalTokens == 0 {
-		detail.TotalTokens = synthesizedOfficialUsageTotal(record, detail)
-	}
-	return storedUsageRecord{
-		RequestedAt:         requestedAt,
-		Attribution:         attribution.Kind,
-		RouterModel:         attribution.RouterModel,
-		Provider:            strings.TrimSpace(record.Provider),
-		ExecutorType:        strings.TrimSpace(record.ExecutorType),
-		ProviderModel:       firstNonEmpty(strings.TrimSpace(record.Model), strings.TrimSpace(record.Alias), "unknown"),
-		ProviderAlias:       strings.TrimSpace(record.Alias),
-		Source:              safeStoredUsageSource(record),
-		ReasoningEffort:     strings.TrimSpace(record.ReasoningEffort),
-		ServiceTier:         strings.TrimSpace(record.ServiceTier),
-		MaskedAPIKey:        maskAPIKey(record.APIKey),
-		Generate:            record.Generate,
-		Failed:              record.Failed,
-		StatusCode:          record.Failure.StatusCode,
-		LatencyNS:           durationUint64(record.Latency),
-		TTFTNS:              durationUint64(record.TTFT),
-		InputTokens:         nonnegativeUint64(detail.InputTokens),
-		OutputTokens:        nonnegativeUint64(detail.OutputTokens),
-		ReasoningTokens:     nonnegativeUint64(detail.ReasoningTokens),
-		CachedTokens:        nonnegativeUint64(detail.CachedTokens),
-		CacheReadTokens:     nonnegativeUint64(detail.CacheReadTokens),
-		CacheCreationTokens: nonnegativeUint64(detail.CacheCreationTokens),
-		TotalTokens:         nonnegativeUint64(detail.TotalTokens),
-	}
-}
-
-func synthesizedOfficialUsageTotal(record pluginapi.UsageRecord, detail pluginapi.UsageDetail) int64 {
-	accounting := usagePayloadAccounting{AccountingMode: defaultAccountingMode(record.Provider, record.ExecutorType)}
-	if equalFold(record.Provider, "google") || equalFold(record.Provider, "gemini") || equalFold(record.ExecutorType, "gemini") {
-		accounting.ReasoningMode = reasoningModeSeparate
-	}
-	return synthesizedUsageTotal(detail, accounting)
-}
-
-func safeStoredUsageSource(record pluginapi.UsageRecord) string {
-	source := strings.TrimSpace(record.Source)
-	fallback := firstNonEmpty(strings.TrimSpace(record.Provider), strings.TrimSpace(record.ExecutorType))
-	if source == "" {
-		return fallback
-	}
-	if isAPIKeyAuthType(record.AuthType) || sameNonemptyValue(source, record.APIKey) {
-		return fallback
-	}
-	parsed, err := url.Parse(source)
-	if err == nil && parsed.Hostname() != "" && (parsed.Scheme == "http" || parsed.Scheme == "https") {
-		parsed.User = nil
-		parsed.RawQuery = ""
-		parsed.ForceQuery = false
-		parsed.Fragment = ""
-		return strings.TrimRight(parsed.String(), "/")
-	}
-	if looksLikeCredential(source) {
-		return fallback
-	}
-	return source
-}
-
-func isAPIKeyAuthType(value string) bool {
-	value = strings.NewReplacer("_", "", "-", "", " ", "").Replace(strings.ToLower(strings.TrimSpace(value)))
-	return value == "apikey"
-}
-
-func sameNonemptyValue(left, right string) bool {
-	left = strings.TrimSpace(left)
-	right = strings.TrimSpace(right)
-	return left != "" && right != "" && left == right
-}
-
-func looksLikeCredential(value string) bool {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return false
-	}
-	lower := strings.ToLower(value)
-	for _, prefix := range []string{"bearer ", "basic ", "token ", "apikey ", "api-key ", "api_key ", "sk-", "sk_", "xai-", "gsk_", "aiza", "key-", "sess-"} {
-		if strings.HasPrefix(lower, prefix) {
-			return true
-		}
-	}
-	if len(value) < 8 || strings.ContainsAny(value, " \t\r\n") {
-		return false
-	}
-	letters, digits := 0, 0
-	for _, character := range value {
-		switch {
-		case character >= 'a' && character <= 'z', character >= 'A' && character <= 'Z':
-			letters++
-		case character >= '0' && character <= '9':
-			digits++
-		}
-	}
-	return letters > 0 || digits > 0
-}
-
-func durationUint64(value time.Duration) uint64 {
-	if value <= 0 {
-		return 0
-	}
-	return uint64(value)
-}
-
-func nonnegativeUint64(value int64) uint64 {
-	if value <= 0 {
-		return 0
-	}
-	return uint64(value)
-}
-
-func sortedStrings(values map[string]struct{}) []string {
-	result := make([]string, 0, len(values))
-	for value := range values {
-		if value != "" {
-			result = append(result, value)
-		}
-	}
-	sort.Strings(result)
-	return result
 }
