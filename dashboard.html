@@ -40,6 +40,7 @@
   --chart-backdrop: color-mix(in srgb, var(--surface-soft) 42%, transparent);
   --chart-highlight: color-mix(in srgb, var(--blue) 12%, transparent);
   --shadow: 0 12px 34px rgba(23, 48, 66, .09);
+  --configuration-actions-clearance: 0px;
   font-family: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
 }
 :root[data-host-theme="dark"] {
@@ -329,28 +330,39 @@ input[type="text"], input[type="number"], input[type="password"], select {
 .target-help { display: inline-flex; align-items: center; justify-content: center; width: 19px; height: 19px; margin-left: 5px; padding: 0; color: var(--blue); background: var(--blue-soft); border: 1px solid var(--blue-border); border-radius: 50%; font: 800 12px/1 ui-monospace, monospace; cursor: help; }
 .target-help:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .target-empty { padding: 10px; color: var(--danger); font-size: 12px; background: var(--danger-soft); border: 1px dashed var(--danger-border); border-radius: 7px; }
+#configuration-panel { padding-bottom: var(--configuration-actions-clearance); }
+.configuration-actions-dock {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 15;
+  padding: 12px max(16px, env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  pointer-events: none;
+  will-change: opacity, transform;
+}
+.configuration-actions-dock[hidden] { display: none; }
 .footer-bar {
-  position: sticky;
-  bottom: 12px;
-  z-index: 5;
   display: flex;
   justify-content: space-between;
   gap: 16px;
   align-items: center;
-  margin-top: 24px;
+  width: min(1180px, 100%);
+  margin: 0 auto;
   padding: 13px 15px;
   background: var(--translucent-paper);
   border: 1px solid var(--line-strong);
   border-radius: 10px;
   box-shadow: var(--shadow);
   backdrop-filter: blur(10px);
+  pointer-events: auto;
 }
 .footer-hint { color: var(--muted); font-size: 12px; }
 .footer-actions { display: flex; gap: 8px; }
 .toast {
   position: fixed;
   right: 20px;
-  bottom: 20px;
+  bottom: calc(20px + var(--configuration-actions-clearance));
   z-index: 20;
   max-width: min(430px, calc(100% - 40px));
   padding: 12px 14px;
@@ -516,9 +528,11 @@ dialog::backdrop { background: rgba(10, 18, 25, .46); backdrop-filter: blur(2px)
   .target-row { grid-template-columns: 28px 1fr; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }
   .target-row .icon-button, .target-row .danger-button { grid-row: 2; }
   .target-row .icon-button:first-of-type { grid-column: 2; }
+  .configuration-actions-dock { padding: 10px max(10px, env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left)); }
   .footer-bar { align-items: flex-start; flex-direction: column; }
   .footer-actions { width: 100%; }
   .footer-actions button { flex: 1; }
+  .toast { right: 10px; bottom: calc(10px + var(--configuration-actions-clearance)); max-width: calc(100% - 20px); }
   .usage-toolbar { grid-template-columns: 1fr 1fr; }
   .usage-actions { grid-column: 1 / -1; justify-content: stretch; }
   .usage-actions button { flex: 1; }
@@ -541,6 +555,7 @@ dialog::backdrop { background: rgba(10, 18, 25, .46); backdrop-filter: blur(2px)
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+  .configuration-actions-dock { transform: none !important; }
 }
 </style>
 </head>
@@ -601,11 +616,13 @@ dialog::backdrop { background: rgba(10, 18, 25, .46); backdrop-filter: blur(2px)
       </div>
       <section id="routes" class="routes" aria-live="polite"></section>
 
-      <div class="footer-bar">
-        <span class="footer-hint">Save checks duplicate aliases, recursion, target pools, and cooldowns with the plugin's Go parser.</span>
-        <div class="footer-actions">
-          <button id="reload" class="secondary" type="button">Discard and reload</button>
-          <button id="save" class="primary" type="button">Save changes</button>
+      <div id="configuration-actions" class="configuration-actions-dock" aria-hidden="true" hidden inert>
+        <div id="configuration-actions-bar" class="footer-bar">
+          <span class="footer-hint">Save checks duplicate aliases, recursion, target pools, and cooldowns with the plugin's Go parser.</span>
+          <div class="footer-actions">
+            <button id="reload" class="secondary" type="button">Discard and reload</button>
+            <button id="save" class="primary" type="button">Save changes</button>
+          </div>
         </div>
       </div>
     </section>
@@ -829,7 +846,7 @@ const CPA_STORAGE_SALT='cli-proxy-api-webui::secure-storage';
 const SESSION_KEY='cpa_model_router_key';
 const REJECTED_KEY='cpa_model_router_rejected_key';
 const REJECTED_AT='cpa_model_router_rejected_at';
-const state={enabled:true,priority:'0',routes:[],availableModels:[],catalogLoaded:false,catalogError:'',dirty:false,busy:false};
+const state={enabled:true,priority:'0',routes:[],availableModels:[],catalogLoaded:false,catalogError:'',baselineSnapshot:null,dirty:false,busy:false};
 const usageState={
   active:false,initialized:false,preferencesLoaded:false,loading:false,generation:0,controller:null,timer:0,preferenceTimer:0,preferenceSaveGeneration:0,preferenceSaveInFlight:false,preferenceSaveQueued:false,resizeTimer:0,
   overview:null,groupPage:null,requestPage:null,range:'24h',granularity:'hour',customFrom:'',customTo:'',attribution:'',routerModel:'',providerModel:'',source:'',serviceTier:'',result:'',pricingDialogGeneration:0,pricingWriteInFlight:null,
@@ -866,6 +883,8 @@ const countEl=document.getElementById('route-count');
 const modelStatusEl=document.getElementById('model-status');
 const saveEl=document.getElementById('save');
 const reloadEl=document.getElementById('reload');
+const configurationActionsEl=document.getElementById('configuration-actions');
+const configurationActionsBarEl=document.getElementById('configuration-actions-bar');
 const addRouteEl=document.getElementById('add-route');
 const toastEl=document.getElementById('toast');
 const tabs=Array.from(document.querySelectorAll('[role="tab"]'));
@@ -889,6 +908,10 @@ const resetDialogEl=document.getElementById('reset-dialog');
 const chartTooltipEl=document.getElementById('chart-tooltip');
 let toastTimer=0;
 let metricFitFrame=0;
+let configurationActionsAnimation=null;
+let configurationActionsAnimationTarget=false;
+let configurationActionsResizeObserver=null;
+const reducedMotionQuery=window.matchMedia('(prefers-reduced-motion: reduce)');
 
 function safeLocalStorage(){try{return window.localStorage}catch(_error){return null}}
 function safeSessionStorage(){try{return window.sessionStorage}catch(_error){return null}}
@@ -1074,10 +1097,108 @@ function setAuthNote(message,tone='info'){
   authNoteEl.textContent=message;
   authNoteEl.dataset.tone=tone;
 }
+function canonicalIntegerDraft(value){
+  const raw=String(value===undefined||value===null?'':value);
+  const trimmed=raw.trim();
+  return /^-?\d+$/.test(trimmed)?{value:Number.parseInt(trimmed,10)}:{draft:raw};
+}
+function integerDraftValue(value){
+  const draft=canonicalIntegerDraft(value);
+  return Object.prototype.hasOwnProperty.call(draft,'value')?draft.value:Number.NaN;
+}
+function configurationSnapshot(){
+  return JSON.stringify({
+    enabled:Boolean(state.enabled),
+    priority:canonicalIntegerDraft(state.priority),
+    routes:state.routes.map(route=>({
+      alias:String(route.alias===undefined||route.alias===null?'':route.alias).trim(),
+      strategy:String(route.strategy===undefined||route.strategy===null?'':route.strategy),
+      cooldown_seconds:canonicalIntegerDraft(route.cooldown_seconds),
+      targets:(Array.isArray(route.targets)?route.targets:[]).map(target=>({
+        model:String(target.model===undefined||target.model===null?'':target.model).trim(),
+        weight:canonicalIntegerDraft(target.weight)
+      }))
+    }))
+  });
+}
+function setConfigurationActionsAccessible(value){
+  configurationActionsEl.inert=!value;
+  configurationActionsEl.setAttribute('aria-hidden',String(!value));
+  configurationActionsEl.querySelectorAll('button').forEach(button=>{
+    if(value)button.removeAttribute('tabindex');
+    else button.tabIndex=-1;
+  });
+}
+function updateConfigurationActionsClearance(){
+  const visible=!configurationActionsEl.hidden&&!configurationPanelEl.hidden&&!workspaceEl.hidden;
+  const height=visible?Math.ceil(configurationActionsEl.getBoundingClientRect().height):0;
+  document.documentElement.style.setProperty('--configuration-actions-clearance',height+'px');
+}
+function setConfigurationActionsVisible(value){
+  setConfigurationActionsAccessible(value);
+  if(configurationActionsAnimation&&configurationActionsAnimationTarget===value)return;
+  if(!configurationActionsAnimation&&configurationActionsAnimationTarget===value&&configurationActionsEl.hidden===!value){
+    updateConfigurationActionsClearance();
+    return;
+  }
+  const wasHidden=configurationActionsEl.hidden;
+  const currentStyle=wasHidden?null:getComputedStyle(configurationActionsEl);
+  if(configurationActionsAnimation)configurationActionsAnimation.cancel();
+  configurationActionsAnimation=null;
+  configurationActionsAnimationTarget=value;
+  if(value&&wasHidden)configurationActionsEl.hidden=false;
+  if(typeof configurationActionsEl.animate!=='function'){
+    configurationActionsEl.hidden=!value;
+    updateConfigurationActionsClearance();
+    return;
+  }
+  updateConfigurationActionsClearance();
+  const reducedMotion=reducedMotionQuery.matches;
+  const hiddenTransform=reducedMotion?'none':'translateY(18px)';
+  const visibleTransform=reducedMotion?'none':'translateY(0)';
+  const from=currentStyle
+    ?{opacity:currentStyle.opacity,transform:reducedMotion?'none':currentStyle.transform}
+    :(value?{opacity:0,transform:hiddenTransform}:{opacity:1,transform:visibleTransform});
+  const to=value?{opacity:1,transform:visibleTransform}:{opacity:0,transform:hiddenTransform};
+  const animation=configurationActionsEl.animate([from,to],{
+    duration:value?280:220,
+    easing:value?'cubic-bezier(.2,.8,.2,1)':'cubic-bezier(.4,0,1,1)',
+    fill:'both'
+  });
+  configurationActionsAnimation=animation;
+  animation.finished.then(()=>{
+    if(configurationActionsAnimation!==animation)return;
+    configurationActionsAnimation=null;
+    animation.cancel();
+    if(value===state.dirty){
+      if(!value)configurationActionsEl.hidden=true;
+      updateConfigurationActionsClearance();
+      return;
+    }
+    setConfigurationActionsVisible(state.dirty);
+  }).catch(()=>{});
+}
+function initializeConfigurationActions(){
+  setConfigurationActionsAccessible(false);
+  updateConfigurationActionsClearance();
+  if(!window.ResizeObserver)return;
+  configurationActionsResizeObserver=new ResizeObserver(updateConfigurationActionsClearance);
+  configurationActionsResizeObserver.observe(configurationActionsBarEl);
+}
 function setDirty(value){
   state.dirty=value;
   saveStateEl.dataset.dirty=String(value);
   saveStateEl.textContent=value?'Unsaved changes':'Saved in CPA';
+  setConfigurationActionsVisible(value);
+}
+function refreshDirty(){
+  const value=state.baselineSnapshot!==null&&configurationSnapshot()!==state.baselineSnapshot;
+  setDirty(value);
+  return value;
+}
+function captureConfigurationBaseline(snapshot=configurationSnapshot()){
+  state.baselineSnapshot=snapshot;
+  refreshDirty();
 }
 async function requestCPAJSON(url,key,options={},rejectKey=false){
   const headers=Object.assign({Accept:'application/json'},options.headers||{});
@@ -1113,6 +1234,7 @@ function activateTab(name,moveFocus=false){
   });
   configurationPanelEl.hidden=usage;
   usagePanelEl.hidden=!usage;
+  updateConfigurationActionsClearance();
   usageState.active=usage;
   if(usage)startUsageDashboard();
   else{clearChartActive(false);stopUsagePolling()}
@@ -2143,11 +2265,12 @@ async function loadConfiguration(){
     updateModelStatus();
     renderRoutes();
     workspaceEl.hidden=false;
-    setDirty(false);
+    captureConfigurationBaseline();
     hideFallbackKeyInput();
     setAuthNote('Connected with the CPAMC session.');
     if(state.catalogError)showToast('Configuration loaded, but CPA models are unavailable. '+state.catalogError,'error');
   }catch(error){
+    refreshDirty();
     setAuthNote(error.message,'error');
     showToast(error.message,'error');
   }finally{setBusy(false)}
@@ -2228,7 +2351,7 @@ function renderRoutes(){
   state.routes.forEach((route,index)=>routesEl.appendChild(createRouteCard(route,index)));
 }
 function newRoute(){return{alias:'route-'+(state.routes.length+1),strategy:'priority',cooldown_seconds:'60',targets:[{model:'',weight:'1'}]}}
-function addRoute(){state.routes.push(newRoute());renderRoutes();setDirty(true)}
+function addRoute(){state.routes.push(newRoute());renderRoutes();refreshDirty()}
 function routeIndexFrom(target){
   const card=target.closest('.route-card');
   return card?Number.parseInt(card.dataset.index,10):-1;
@@ -2239,7 +2362,7 @@ function moveRoute(index,delta){
   const moved=state.routes.splice(index,1)[0];
   state.routes.splice(next,0,moved);
   renderRoutes();
-  setDirty(true);
+  refreshDirty();
 }
 function moveTarget(routeIndex,targetIndex,delta){
   const targets=state.routes[routeIndex].targets;
@@ -2248,7 +2371,7 @@ function moveTarget(routeIndex,targetIndex,delta){
   const moved=targets.splice(targetIndex,1)[0];
   targets.splice(next,0,moved);
   renderRoutes();
-  setDirty(true);
+  refreshDirty();
 }
 function updateFromInput(target){
   const index=routeIndexFrom(target);
@@ -2266,7 +2389,7 @@ function updateFromInput(target){
   const card=target.closest('.route-card');
   if(card&&target.dataset.field==='alias')card.querySelector('.preview-alias').textContent=target.value||'unnamed alias';
   if(target.dataset.field==='strategy')renderRoutes();
-  setDirty(true);
+  refreshDirty();
 }
 routesEl.addEventListener('input',event=>updateFromInput(event.target));
 routesEl.addEventListener('change',event=>updateFromInput(event.target));
@@ -2279,20 +2402,20 @@ routesEl.addEventListener('click',event=>{
   if(index<0)return;
   if(action==='up')moveRoute(index,-1);
   if(action==='down')moveRoute(index,1);
-  if(action==='remove'){state.routes.splice(index,1);renderRoutes();setDirty(true)}
-  if(action==='add-target'&&state.catalogLoaded){state.routes[index].targets.push({model:'',weight:'1'});renderRoutes();setDirty(true)}
+  if(action==='remove'){state.routes.splice(index,1);renderRoutes();refreshDirty()}
+  if(action==='add-target'&&state.catalogLoaded){state.routes[index].targets.push({model:'',weight:'1'});renderRoutes();refreshDirty()}
   const row=button.closest('.target-row');
   const targetIndex=row?Number.parseInt(row.dataset.targetIndex,10):-1;
   if(action==='target-up'&&targetIndex>=0)moveTarget(index,targetIndex,-1);
   if(action==='target-down'&&targetIndex>=0)moveTarget(index,targetIndex,1);
-  if(action==='remove-target'&&targetIndex>=0){state.routes[index].targets.splice(targetIndex,1);renderRoutes();setDirty(true)}
+  if(action==='remove-target'&&targetIndex>=0){state.routes[index].targets.splice(targetIndex,1);renderRoutes();refreshDirty()}
 });
 function serializeRoutes(){
   return state.routes.map(route=>({
     alias:route.alias.trim(),
     strategy:route.strategy,
-    cooldown_seconds:Number.parseInt(route.cooldown_seconds,10),
-    targets:route.targets.map(target=>({model:target.model.trim(),weight:Number.parseInt(target.weight,10)}))
+    cooldown_seconds:integerDraftValue(route.cooldown_seconds),
+    targets:route.targets.map(target=>({model:target.model.trim(),weight:integerDraftValue(target.weight)}))
   }));
 }
 function baseModel(value){
@@ -2330,21 +2453,22 @@ function validateClient(routes){
   return errors;
 }
 async function saveConfiguration(){
-  if(state.busy)return;
+  if(state.busy||!state.dirty)return;
   const routes=serializeRoutes();
   const errors=validateClient(routes);
   if(errors.length){showToast(errors[0]+(errors.length>1?' '+(errors.length-1)+' more issue(s).':''),'error');return}
+  const submittedSnapshot=configurationSnapshot();
   setBusy(true);
   saveStateEl.textContent='Validating…';
   try{
     await requestManagementJSON(VALIDATE_API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:state.enabled,routes})});
     saveStateEl.textContent='Saving…';
-    await requestManagementJSON(CONFIG_API,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:state.enabled,priority:Number.parseInt(state.priority,10),routes,'model-routes':null})});
-    setDirty(false);
+    await requestManagementJSON(CONFIG_API,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:state.enabled,priority:integerDraftValue(state.priority),routes,'model-routes':null})});
+    captureConfigurationBaseline(submittedSnapshot);
     showToast('Model routes saved and CPA reload requested.','success');
   }catch(error){
-    saveStateEl.textContent='Save failed';
-    saveStateEl.dataset.dirty='true';
+    refreshDirty();
+    if(state.dirty)saveStateEl.textContent='Save failed';
     showToast(error.message,'error');
   }finally{setBusy(false)}
 }
@@ -2381,12 +2505,13 @@ initializeCustomRange();
 applyUsagePreferences({});
 initializeChartInteractions();
 initializeDashboardResizeObserver();
+initializeConfigurationActions();
 scheduleMetricFit();
 tabs.forEach(tab=>{tab.addEventListener('click',()=>activateTab(tab.id==='usage-tab'?'usage':'configuration'));tab.addEventListener('keydown',handleTabKey)});
 connectEl.addEventListener('click',loadConfiguration);
 keyEl.addEventListener('keydown',event=>{if(event.key==='Enter')loadConfiguration()});
-enabledEl.addEventListener('change',()=>{state.enabled=enabledEl.checked;setDirty(true)});
-priorityEl.addEventListener('input',()=>{state.priority=priorityEl.value;setDirty(true)});
+enabledEl.addEventListener('change',()=>{state.enabled=enabledEl.checked;refreshDirty()});
+priorityEl.addEventListener('input',()=>{state.priority=priorityEl.value;refreshDirty()});
 addRouteEl.addEventListener('click',addRoute);
 reloadEl.addEventListener('click',()=>{if(!state.dirty||window.confirm('Discard unsaved changes and reload from CPA?'))loadConfiguration()});
 saveEl.addEventListener('click',saveConfiguration);
@@ -2455,9 +2580,9 @@ document.getElementById('reset-confirmation').addEventListener('input',event=>{d
 document.getElementById('reset-confirmation').addEventListener('keydown',event=>{if(event.key==='Enter'&&event.target.value==='reset'){event.preventDefault();resetUsage()}});
 document.getElementById('reset-confirm').addEventListener('click',resetUsage);
 document.addEventListener('visibilitychange',()=>{if(!usageState.active)return;if(document.hidden)stopUsagePolling();else refreshUsage(false)});
-window.addEventListener('resize',()=>{window.clearTimeout(usageState.resizeTimer);usageState.resizeTimer=window.setTimeout(scheduleResponsiveDashboardRender,120)});
+window.addEventListener('resize',()=>{updateConfigurationActionsClearance();window.clearTimeout(usageState.resizeTimer);usageState.resizeTimer=window.setTimeout(scheduleResponsiveDashboardRender,120)});
 document.addEventListener('keydown',event=>{
-  if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'&&!workspaceEl.hidden&&!configurationPanelEl.hidden){event.preventDefault();saveConfiguration()}
+  if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'&&!workspaceEl.hidden&&!configurationPanelEl.hidden){event.preventDefault();if(state.dirty)saveConfiguration()}
 });
 if(managementKey())loadConfiguration();
 else showFallbackKeyInput('CPAMC has no saved management key. Enter it for this browser session.');
