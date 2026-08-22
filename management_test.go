@@ -105,6 +105,23 @@ func TestModelRouterManagementDashboardReusesCPAMCSessionAndTheme(t *testing.T) 
 		"id=\"configuration-tab\" class=\"page-tab\" type=\"button\" role=\"tab\" aria-selected=\"true\"",
 		"id=\"usage-tab\" class=\"page-tab\" type=\"button\" role=\"tab\" aria-selected=\"false\"",
 		"id=\"configuration-panel\" class=\"tab-panel\" role=\"tabpanel\"",
+		"id=\"configuration-actions\" class=\"configuration-actions-dock\" aria-hidden=\"true\" hidden inert",
+		"#configuration-panel { padding-bottom: var(--configuration-actions-clearance); }",
+		"bottom: calc(20px + var(--configuration-actions-clearance));",
+		"baselineSnapshot:null",
+		"function configurationSnapshot()",
+		"return /^-?\\d+$/.test(trimmed)?{value:Number.parseInt(trimmed,10)}:{draft:raw}",
+		"function refreshDirty()",
+		"captureConfigurationBaseline();",
+		"captureConfigurationBaseline(submittedSnapshot);",
+		"if(state.busy||!state.dirty)return",
+		"if(state.dirty)saveConfiguration()",
+		"configurationActionsEl.inert=!value",
+		"button.tabIndex=-1",
+		"duration:value?280:220",
+		"const hiddenTransform=reducedMotion?'none':'translateY(18px)'",
+		".configuration-actions-dock { transform: none !important; }",
+		"configurationActionsResizeObserver=new ResizeObserver(updateConfigurationActionsClearance)",
 		"id=\"usage-panel\" class=\"tab-panel usage-panel\" role=\"tabpanel\"",
 		"/v0/management/plugins/model-router/usage",
 		"requestManagementJSON(USAGE_API+'/overview?'",
@@ -181,7 +198,7 @@ func TestModelRouterManagementDashboardReusesCPAMCSessionAndTheme(t *testing.T) 
 			t.Fatalf("dashboard missing async pricing guard %q", required)
 		}
 	}
-	for _, forbidden := range []string{"http://", "https://", "innerHTML", "<input type=\"text\" data-target-field=\"model\""} {
+	for _, forbidden := range []string{"http://", "https://", "innerHTML", "<input type=\"text\" data-target-field=\"model\"", "setDirty(true)"} {
 		if strings.Contains(page, forbidden) {
 			t.Fatalf("dashboard contains forbidden text %q", forbidden)
 		}
