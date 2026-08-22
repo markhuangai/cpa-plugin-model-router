@@ -60,7 +60,7 @@ func (host *fakeModelHost) Emit(_ string, payload []byte) error {
 func (*fakeModelHost) ClosePluginStream(string, string) {}
 
 func TestExecuteWithHostFailsOverAndRewritesAlias(t *testing.T) {
-	plugin := testRouterPlugin(modelRoute{Alias: "smart", Strategy: routeStrategyPriority, CooldownSeconds: 30, Models: []string{"provider-a", "provider-b"}})
+	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "provider-a", "provider-b"))
 	host := &fakeModelHost{}
 	host.execute = func(request pluginapi.HostModelExecutionRequest) (pluginapi.HostModelExecutionResponse, error) {
 		if request.Model == "provider-a(high)" {
@@ -107,7 +107,7 @@ func TestExecuteWithHostFailsOverAndRewritesAlias(t *testing.T) {
 }
 
 func TestExecuteWithHostDoesNotFailOverTerminalError(t *testing.T) {
-	plugin := testRouterPlugin(modelRoute{Alias: "smart", Strategy: routeStrategyPriority, CooldownSeconds: 30, Models: []string{"a", "b"}})
+	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "a", "b"))
 	host := &fakeModelHost{execute: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelExecutionResponse, error) {
 		return pluginapi.HostModelExecutionResponse{StatusCode: 400, Body: []byte(`{"error":"invalid request"}`)}, nil
 	}}
@@ -118,7 +118,7 @@ func TestExecuteWithHostDoesNotFailOverTerminalError(t *testing.T) {
 }
 
 func TestExecuteWithHostReturnsUnavailableAfterCandidatesFail(t *testing.T) {
-	plugin := testRouterPlugin(modelRoute{Alias: "smart", Strategy: routeStrategyPriority, CooldownSeconds: 30, Models: []string{"a", "b"}})
+	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "a", "b"))
 	host := &fakeModelHost{execute: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelExecutionResponse, error) {
 		return pluginapi.HostModelExecutionResponse{}, statusError{status: 503, message: "provider unavailable"}
 	}}
@@ -132,8 +132,31 @@ func TestExecuteWithHostReturnsUnavailableAfterCandidatesFail(t *testing.T) {
 	}
 }
 
+func TestExecuteWithHostAttemptsWeightedTargetOncePerRequest(t *testing.T) {
+	route := modelRoute{
+		Alias:           "weighted",
+		Strategy:        routeStrategyRoundRobin,
+		CooldownSeconds: 30,
+		Targets: []modelTarget{
+			{Model: "a", Weight: 3},
+			{Model: "b", Weight: 1},
+		},
+	}
+	plugin := testRouterPlugin(route)
+	host := &fakeModelHost{execute: func(request pluginapi.HostModelExecutionRequest) (pluginapi.HostModelExecutionResponse, error) {
+		return pluginapi.HostModelExecutionResponse{}, statusError{status: 503, message: request.Model + " unavailable"}
+	}}
+	_, err := plugin.executeWithHost(pluginapi.ExecutorRequest{Model: "weighted"}, host)
+	if statusFromError(err) != 503 || codeFromError(err, "") != "model_route_unavailable" {
+		t.Fatalf("executeWithHost() error = %v", err)
+	}
+	if len(host.executeCalls) != 2 || host.executeCalls[0].Model != "a" || host.executeCalls[1].Model != "b" {
+		t.Fatalf("weighted failover calls = %#v, want a then b once", host.executeCalls)
+	}
+}
+
 func TestCountTokensIsExplicitlyUnsupported(t *testing.T) {
-	plugin := testRouterPlugin(modelRoute{Alias: "smart", Strategy: routeStrategyPriority, CooldownSeconds: 30, Models: []string{"a"}})
+	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "a"))
 	_, err := plugin.CountTokens(t.Context(), pluginapi.ExecutorRequest{Model: "smart"})
 	if statusFromError(err) != 501 || codeFromError(err, "") != "model_route_count_tokens_unsupported" {
 		t.Fatalf("CountTokens() error = %v", err)

@@ -12,6 +12,7 @@ The plugin does not call providers directly. For each selected physical model it
 
 - Expose logical model aliases through CPA's model registry.
 - Route an alias to an ordered priority pool or a round-robin pool.
+- Assign round-robin weights to give models with multiple CPA providers a proportional outer share.
 - Fail over on quota, rate-limit, auth, provider, server, and recognized transport failures.
 - Cool failed targets in memory and skip them on later requests.
 - Preserve a requested thinking suffix unless a target defines its own suffix.
@@ -45,17 +46,22 @@ plugins:
         - alias: auto
           strategy: priority
           cooldown_seconds: 60
-          models:
-            - gpt-5.4-mini
-            - claude-sonnet-4-5
-            - gemini-2.5-pro(8192)
+          targets:
+            - model: gpt-5.4-mini
+              weight: 1
+            - model: claude-sonnet-4-5
+              weight: 1
+            - model: gemini-2.5-pro(8192)
+              weight: 1
 
         - alias: balanced
           strategy: round-robin
           cooldown_seconds: 30
-          models:
-            - provider-a/model
-            - provider-b/model
+          targets:
+            - model: provider-a/model
+              weight: 3
+            - model: provider-b/model
+              weight: 1
 ```
 
 `plugins.enabled` and `plugins.configs.model-router.enabled` must both be true. The library basename must be exactly `model-router` with the host extension: `.so`, `.dylib`, or `.dll`.
@@ -70,6 +76,8 @@ Only two usage-storage settings are supported:
 When `data_path` is omitted, the plugin locates the CPA root from the loaded library, then the CPA executable, then the current working directory. It stores the database at `<CPA root>/plugins/model-router.db`; outside a detected CPA layout it uses `<working directory>/plugins/model-router.db`. The plugins directory must be writable and persistently mounted. Use an explicit absolute `data_path` when the plugin directory is read-only or stored on a disposable container layer.
 
 Version 0.4.0 opens the configured path as SQLite in WAL mode. When that path contains a v0.3.x bbolt database, the first v0.4.0 open performs a one-time, integrity-checked migration and retains the original file as `<data_path>.bbolt-v1.bak`. The migration marker and temporary file make an interrupted copy recoverable; a changed or corrupt source is rejected rather than overwritten. The former omitted-path default at `<CPA root>/data/model-router-usage.db` is not discovered automatically, so set that path explicitly when its history must remain active.
+
+Version 0.4.1 adds weighted ordered targets for round-robin routes. The weight is a manual outer-routing share; CPA still selects the credential behind the chosen model.
 
 Every completed attempt is committed synchronously. Usage history, prices, and dashboard preferences therefore survive a normal CPA restart when the same database file remains mounted and writable. WAL allows an old and a new plugin generation to overlap while CPA hot-loads a compatible update. Retention deletes expired rows; SQLite may retain reusable pages, so high-volume installations should monitor the database file and choose retention based on request rate and available storage.
 
@@ -88,7 +96,7 @@ Only run that rollback while the `model-router` plugin is unloaded. The backup i
 
 ### Configuration UI
 
-The plugin registers a **Model Router** page in CPA's management frontend. Open the Plugins section and select **Model Router**. The centered **Configuration** and **Usage tracking** tabs appear above the route controls; Configuration is selected by default. When CPAMC has a persisted authenticated session, the page reuses its management key and loads configuration automatically. It also follows CPAMC's selected light, white, or dark theme and updates when that selection changes. The Configuration tab provides typed controls for route order, aliases, priority or round-robin strategy, cooldowns, and ordered target pools. Target dropdowns are populated with the model IDs currently returned by CPA's `/v1/models` endpoint.
+The plugin registers a **Model Router** page in CPA's management frontend. Open the Plugins section and select **Model Router**. The centered **Configuration** and **Usage tracking** tabs appear above the route controls; Configuration is selected by default. When CPAMC has a persisted authenticated session, the page reuses its management key and loads configuration automatically. It also follows CPAMC's selected light, white, or dark theme and updates when that selection changes. The Configuration tab provides typed controls for route order, aliases, priority or round-robin strategy, cooldowns, ordered target pools, and round-robin weights. Target dropdowns are populated with the model IDs currently returned by CPA's `/v1/models` endpoint.
 
 Model discovery uses the management session to read CPA's configured client API keys, then keeps the first non-empty key in browser memory only while requesting `/v1/models`. The client key is not rendered or stored. If no client key is configured, the page attempts the model request without authorization for CPA installations without frontend authentication. Existing targets that are absent from the live catalog remain visible as disabled `<model> (unavailable)` choices until they are replaced, so loading the page never changes saved routes. New UI targets must be selected from the live catalog; custom or suffixed targets can still be managed through YAML or the Management API.
 
@@ -119,13 +127,14 @@ See [docs/usage-tracking.md](docs/usage-tracking.md) for the data contract, oper
 | `alias` | yes | Client-visible model name. Matching is case-insensitive. Thinking suffixes are not allowed on aliases. |
 | `strategy` | no | `priority` by default, or `round-robin`. |
 | `cooldown_seconds` | no | Seconds a failed target remains unavailable. Omitted or zero uses 60 seconds. |
-| `models` | yes | Ordered physical model targets. Empty and duplicate targets are rejected. |
+| `targets` | yes | Ordered physical model target objects. Each object has a required `model` and an integer `weight` from 1 through 1000000; omitted weight defaults to 1. Empty and duplicate targets are rejected. |
+| `models` | legacy | Legacy ordered string targets. Each target is normalized to weight 1; do not provide it together with `targets`. |
 
 A route target cannot reference any configured route alias, including through a thinking suffix. This prevents recursive routes.
 
 ### Selection and failover
 
-`priority` selects the first target that is not cooling down. `round-robin` advances the starting target after each selection and skips targets that are cooling down.
+`priority` selects the first target that is not cooling down and ignores weights. `round-robin` advances through consecutive virtual slots according to each target's weight and skips all slots for targets that are cooling down. For example, weights `3:1` produce `A,A,A,B`; CPA then selects the actual credential configured behind each selected model.
 
 The plugin fails over for these numeric statuses:
 
@@ -170,9 +179,11 @@ plugins:
         - alias: auto
           strategy: priority
           cooldown_seconds: 60
-          models:
-            - gpt-5.4-mini
-            - claude-sonnet-4-5
+          targets:
+            - model: gpt-5.4-mini
+              weight: 1
+            - model: claude-sonnet-4-5
+              weight: 1
 ```
 
 For staged migration, the plugin accepts `model-routes` instead of `routes` and `cooldown-seconds` instead of `cooldown_seconds` inside its config. Do not provide both forms of either field; registration fails rather than choosing one silently.
@@ -258,14 +269,14 @@ The database is not encrypted by the plugin. Protect the configured path with fi
 
 ## Publishing And Plugin Store Registration
 
-The release workflow accepts tags such as `v0.4.0` and builds these CPA Plugin Store assets:
+The release workflow accepts tags such as `v0.4.1` and builds these CPA Plugin Store assets:
 
 ```text
-model-router_0.4.0_linux_amd64.zip
-model-router_0.4.0_linux_arm64.zip
-model-router_0.4.0_darwin_amd64.zip
-model-router_0.4.0_darwin_arm64.zip
-model-router_0.4.0_windows_amd64.zip
+model-router_0.4.1_linux_amd64.zip
+model-router_0.4.1_linux_arm64.zip
+model-router_0.4.1_darwin_amd64.zip
+model-router_0.4.1_darwin_arm64.zip
+model-router_0.4.1_windows_amd64.zip
 checksums.txt
 ```
 

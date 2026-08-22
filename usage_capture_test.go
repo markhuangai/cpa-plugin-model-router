@@ -175,7 +175,7 @@ func TestOfficialUsageSuppressesDirectFallback(t *testing.T) {
 }
 
 func TestRoutedFallbackRecordsEachAttemptAndSuppressesLateUsage(t *testing.T) {
-	plugin := testUsageCapturePlugin(t, modelRoute{Alias: "smart", Strategy: routeStrategyPriority, CooldownSeconds: 30, Models: []string{"fail/fail-model", "work/working-model"}})
+	plugin := testUsageCapturePlugin(t, testModelRoute("smart", routeStrategyPriority, 30, "fail/fail-model", "work/working-model"))
 	host := &fakeModelHost{execute: func(request pluginapi.HostModelExecutionRequest) (pluginapi.HostModelExecutionResponse, error) {
 		if request.Model == "fail/fail-model" {
 			return pluginapi.HostModelExecutionResponse{StatusCode: http.StatusTooManyRequests, Body: []byte(`{"error":"rate limit"}`)}, nil

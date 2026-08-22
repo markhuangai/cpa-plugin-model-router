@@ -14,7 +14,7 @@ type routeRuntime struct {
 
 type routeState struct {
 	signature string
-	cursor    int
+	cursor    int64
 	cooldowns map[string]time.Time
 }
 
@@ -76,7 +76,11 @@ func (runtime *routeRuntime) Clone(routes []modelRoute) *routeRuntime {
 }
 
 func (runtime *routeRuntime) Select(route modelRoute) routeSelection {
-	if runtime == nil || len(route.Models) == 0 {
+	return runtime.SelectExcluding(route, nil)
+}
+
+func (runtime *routeRuntime) SelectExcluding(route modelRoute, excluded map[string]struct{}) routeSelection {
+	if runtime == nil || len(route.Targets) == 0 {
 		return routeSelection{}
 	}
 	runtime.mu.Lock()
@@ -86,27 +90,55 @@ func (runtime *routeRuntime) Select(route modelRoute) routeSelection {
 		return routeSelection{}
 	}
 	now := runtime.now()
-	start := 0
-	if route.Strategy == routeStrategyRoundRobin && state.cursor >= 0 && state.cursor < len(route.Models) {
-		start = state.cursor
-	}
 	var earliest time.Time
-	for offset := 0; offset < len(route.Models); offset++ {
-		index := offset
-		if route.Strategy == routeStrategyRoundRobin {
-			index = (start + offset) % len(route.Models)
-		}
-		model := strings.TrimSpace(route.Models[index])
-		until := state.cooldowns[routeKey(model)]
-		if until.IsZero() || !now.Before(until) {
-			delete(state.cooldowns, routeKey(model))
-			if route.Strategy == routeStrategyRoundRobin {
-				state.cursor = (index + 1) % len(route.Models)
+	if route.Strategy != routeStrategyRoundRobin {
+		for _, target := range route.Targets {
+			model := strings.TrimSpace(target.Model)
+			if _, skip := excluded[routeKey(model)]; skip {
+				continue
 			}
-			return routeSelection{model: model}
+			until := state.cooldowns[routeKey(model)]
+			if until.IsZero() || !now.Before(until) {
+				delete(state.cooldowns, routeKey(model))
+				return routeSelection{model: model}
+			}
+			if earliest.IsZero() || until.Before(earliest) {
+				earliest = until
+			}
 		}
-		if earliest.IsZero() || until.Before(earliest) {
-			earliest = until
+	} else {
+		totalWeight := routeTargetWeightTotal(route.Targets)
+		if totalWeight <= 0 {
+			return routeSelection{}
+		}
+		start := state.cursor % totalWeight
+		if start < 0 {
+			start += totalWeight
+		}
+		startIndex, startOffset := weightedTargetAt(route.Targets, start)
+		slot := start
+		for offset := 0; offset < len(route.Targets); offset++ {
+			index := (startIndex + offset) % len(route.Targets)
+			target := route.Targets[index]
+			model := strings.TrimSpace(target.Model)
+			if _, skip := excluded[routeKey(model)]; !skip {
+				until := state.cooldowns[routeKey(model)]
+				if until.IsZero() || !now.Before(until) {
+					delete(state.cooldowns, routeKey(model))
+					state.cursor = (slot + 1) % totalWeight
+					return routeSelection{model: model}
+				}
+				if earliest.IsZero() || until.Before(earliest) {
+					earliest = until
+				}
+			}
+			weight := int64(target.Weight)
+			if offset == 0 {
+				weight -= startOffset
+			}
+			if weight > 0 {
+				slot = (slot + weight) % totalWeight
+			}
 		}
 	}
 	if earliest.IsZero() {
@@ -146,4 +178,31 @@ func (runtime *routeRuntime) stateLocked(route modelRoute) *routeState {
 		runtime.states[key] = state
 	}
 	return state
+}
+
+func routeTargetWeightTotal(targets []modelTarget) int64 {
+	var total int64
+	for _, target := range targets {
+		weight := int64(target.Weight)
+		if weight < 1 || total > (1<<63-1)-weight {
+			return 0
+		}
+		total += weight
+	}
+	return total
+}
+
+func weightedTargetAt(targets []modelTarget, slot int64) (int, int64) {
+	var offset int64
+	for index, target := range targets {
+		weight := int64(target.Weight)
+		if weight < 1 {
+			continue
+		}
+		if slot < offset+weight {
+			return index, slot - offset
+		}
+		offset += weight
+	}
+	return 0, 0
 }

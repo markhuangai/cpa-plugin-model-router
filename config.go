@@ -18,21 +18,34 @@ const (
 	defaultCooldownSeconds  = 60
 	defaultRetentionDays    = 365
 	maxRetentionDays        = 3650
+	defaultTargetWeight     = 1
+	maxTargetWeight         = 1_000_000
 )
+
+type modelTarget struct {
+	Model  string
+	Weight int
+}
 
 type modelRoute struct {
 	Alias           string
 	Strategy        string
 	CooldownSeconds int
-	Models          []string
+	Targets         []modelTarget
+}
+
+type modelTargetYAML struct {
+	Model  string `yaml:"model" json:"model"`
+	Weight *int   `yaml:"weight,omitempty" json:"weight,omitempty"`
 }
 
 type modelRouteYAML struct {
-	Alias                 string   `yaml:"alias" json:"alias"`
-	Strategy              string   `yaml:"strategy,omitempty" json:"strategy,omitempty"`
-	CooldownSeconds       *int     `yaml:"cooldown_seconds,omitempty" json:"cooldown_seconds,omitempty"`
-	LegacyCooldownSeconds *int     `yaml:"cooldown-seconds,omitempty" json:"cooldown-seconds,omitempty"`
-	Models                []string `yaml:"models" json:"models"`
+	Alias                 string             `yaml:"alias" json:"alias"`
+	Strategy              string             `yaml:"strategy,omitempty" json:"strategy,omitempty"`
+	CooldownSeconds       *int               `yaml:"cooldown_seconds,omitempty" json:"cooldown_seconds,omitempty"`
+	LegacyCooldownSeconds *int               `yaml:"cooldown-seconds,omitempty" json:"cooldown-seconds,omitempty"`
+	Models                *[]string          `yaml:"models,omitempty" json:"models,omitempty"`
+	Targets               *[]modelTargetYAML `yaml:"targets,omitempty" json:"targets,omitempty"`
 }
 
 type routerConfig struct {
@@ -108,11 +121,20 @@ func decodeRouterConfig(raw []byte) (routerConfig, error) {
 		} else if item.LegacyCooldownSeconds != nil {
 			cooldown = *item.LegacyCooldownSeconds
 		}
+		if item.Models != nil && item.Targets != nil {
+			return routerConfig{}, fmt.Errorf("routes[%d] %q: must not contain both models and targets", index, strings.TrimSpace(item.Alias))
+		}
+		targets := []modelTarget(nil)
+		if item.Targets != nil {
+			targets = normalizeTargetList(*item.Targets)
+		} else if item.Models != nil {
+			targets = normalizeLegacyTargetList(*item.Models)
+		}
 		route := modelRoute{
 			Alias:           strings.TrimSpace(item.Alias),
 			Strategy:        strings.ToLower(strings.TrimSpace(item.Strategy)),
 			CooldownSeconds: cooldown,
-			Models:          normalizeModelList(item.Models),
+			Targets:         targets,
 		}
 		if route.Strategy == "" {
 			route.Strategy = routeStrategyPriority
@@ -127,10 +149,10 @@ func decodeRouterConfig(raw []byte) (routerConfig, error) {
 		routes = append(routes, route)
 	}
 	for routeIndex, route := range routes {
-		for modelIndex, model := range route.Models {
-			base, _, _ := splitThinkingSuffix(model)
-			if targetIndex, exists := aliases[routeKey(base)]; exists {
-				return routerConfig{}, fmt.Errorf("routes[%d] %q models[%d] %q: target must not reference route alias at index %d", routeIndex, route.Alias, modelIndex, model, targetIndex)
+		for targetIndex, target := range route.Targets {
+			base, _, _ := splitThinkingSuffix(target.Model)
+			if aliasIndex, exists := aliases[routeKey(base)]; exists {
+				return routerConfig{}, fmt.Errorf("routes[%d] %q targets[%d] %q: target must not reference route alias at index %d", routeIndex, route.Alias, targetIndex, target.Model, aliasIndex)
 			}
 		}
 	}
@@ -156,16 +178,23 @@ func validateRoute(route modelRoute, index int, aliases map[string]int) error {
 	if route.CooldownSeconds < 0 {
 		return fmt.Errorf("routes[%d] %q: cooldown_seconds must be >= 0", index, route.Alias)
 	}
-	if len(route.Models) == 0 {
+	if len(route.Targets) == 0 {
 		return fmt.Errorf("routes[%d] %q: at least one model is required", index, route.Alias)
 	}
-	seen := make(map[string]int, len(route.Models))
-	for modelIndex, model := range route.Models {
+	seen := make(map[string]int, len(route.Targets))
+	for targetIndex, target := range route.Targets {
+		model := strings.TrimSpace(target.Model)
+		if model == "" {
+			return fmt.Errorf("routes[%d] %q targets[%d]: model is required", index, route.Alias, targetIndex)
+		}
+		if target.Weight < 1 || target.Weight > maxTargetWeight {
+			return fmt.Errorf("routes[%d] %q targets[%d] %q: weight must be between 1 and %d", index, route.Alias, targetIndex, model, maxTargetWeight)
+		}
 		key := routeKey(model)
 		if previous, duplicate := seen[key]; duplicate {
-			return fmt.Errorf("routes[%d] %q models[%d] %q: duplicate model (also at index %d)", index, route.Alias, modelIndex, model, previous)
+			return fmt.Errorf("routes[%d] %q targets[%d] %q: duplicate model (also at index %d)", index, route.Alias, targetIndex, model, previous)
 		}
-		seen[key] = modelIndex
+		seen[key] = targetIndex
 	}
 	return nil
 }
@@ -176,6 +205,27 @@ func normalizeModelList(models []string) []string {
 		if model = strings.TrimSpace(model); model != "" {
 			out = append(out, model)
 		}
+	}
+	return out
+}
+
+func normalizeLegacyTargetList(models []string) []modelTarget {
+	normalized := normalizeModelList(models)
+	targets := make([]modelTarget, 0, len(normalized))
+	for _, model := range normalized {
+		targets = append(targets, modelTarget{Model: model, Weight: defaultTargetWeight})
+	}
+	return targets
+}
+
+func normalizeTargetList(targets []modelTargetYAML) []modelTarget {
+	out := make([]modelTarget, 0, len(targets))
+	for _, target := range targets {
+		weight := defaultTargetWeight
+		if target.Weight != nil {
+			weight = *target.Weight
+		}
+		out = append(out, modelTarget{Model: strings.TrimSpace(target.Model), Weight: weight})
 	}
 	return out
 }
@@ -191,9 +241,11 @@ func routeSignature(route modelRoute) string {
 	builder.WriteString(route.Strategy)
 	builder.WriteByte('\n')
 	builder.WriteString(strconv.Itoa(route.CooldownSeconds))
-	for _, model := range route.Models {
+	for _, target := range route.Targets {
 		builder.WriteByte('\n')
-		builder.WriteString(strings.TrimSpace(model))
+		builder.WriteString(strings.TrimSpace(target.Model))
+		builder.WriteByte('\n')
+		builder.WriteString(strconv.Itoa(target.Weight))
 	}
 	return builder.String()
 }

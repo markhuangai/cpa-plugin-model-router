@@ -7,8 +7,16 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
+func testModelRoute(alias, strategy string, cooldown int, models ...string) modelRoute {
+	targets := make([]modelTarget, 0, len(models))
+	for _, model := range models {
+		targets = append(targets, modelTarget{Model: model, Weight: defaultTargetWeight})
+	}
+	return modelRoute{Alias: alias, Strategy: strategy, CooldownSeconds: cooldown, Targets: targets}
+}
+
 func TestRouteModelMatchesAliasAndThinkingSuffix(t *testing.T) {
-	plugin := testRouterPlugin(modelRoute{Alias: "smart", Strategy: routeStrategyPriority, CooldownSeconds: 30, Models: []string{"provider-a"}})
+	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "provider-a"))
 	for _, model := range []string{"smart", "SMART", "smart(high)"} {
 		response, err := plugin.RouteModel(context.Background(), pluginapi.ModelRouteRequest{RequestedModel: model})
 		if err != nil {
@@ -26,8 +34,8 @@ func TestRouteModelMatchesAliasAndThinkingSuffix(t *testing.T) {
 
 func TestRegisterModelsAddsLogicalAliases(t *testing.T) {
 	plugin := testRouterPlugin(
-		modelRoute{Alias: "smart", Strategy: routeStrategyPriority, CooldownSeconds: 30, Models: []string{"a"}},
-		modelRoute{Alias: "fast", Strategy: routeStrategyRoundRobin, CooldownSeconds: 30, Models: []string{"b"}},
+		testModelRoute("smart", routeStrategyPriority, 30, "a"),
+		testModelRoute("fast", routeStrategyRoundRobin, 30, "b"),
 	)
 	response, err := plugin.RegisterModels(context.Background(), pluginapi.ModelRegistrationRequest{})
 	if err != nil {

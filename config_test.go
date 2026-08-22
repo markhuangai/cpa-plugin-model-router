@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -17,7 +18,10 @@ func TestDecodeRouterConfigCanonicalAndLegacyKeys(t *testing.T) {
   - alias: smart
     strategy: round-robin
     cooldown_seconds: 15
-    models: [provider-a, provider-b]
+    targets:
+      - model: provider-a
+        weight: 3
+      - model: provider-b
 `,
 		},
 		{
@@ -40,8 +44,15 @@ func TestDecodeRouterConfigCanonicalAndLegacyKeys(t *testing.T) {
 				t.Fatalf("decodeRouterConfig() = %#v", config)
 			}
 			route := config.Routes[0]
-			if route.Alias != "smart" || route.Strategy != routeStrategyRoundRobin || route.CooldownSeconds != 15 {
+			if route.Alias != "smart" || route.Strategy != routeStrategyRoundRobin || route.CooldownSeconds != 15 || len(route.Targets) != 2 {
 				t.Fatalf("route = %#v", route)
+			}
+			wantTargets := []modelTarget{{Model: "provider-a", Weight: 1}, {Model: "provider-b", Weight: 1}}
+			if test.name == "canonical" {
+				wantTargets[0].Weight = 3
+			}
+			if !slices.Equal(route.Targets, wantTargets) {
+				t.Fatalf("targets = %#v", route.Targets)
 			}
 		})
 	}
@@ -164,6 +175,45 @@ surprise: true
     models: [provider-a]
 `,
 			message: "cooldown_seconds must be >= 0",
+		},
+		{
+			name: "both model schemas",
+			raw: `routes:
+  - alias: smart
+    models: [provider-a]
+    targets:
+      - model: provider-b
+`,
+			message: "both models and targets",
+		},
+		{
+			name: "zero weight",
+			raw: `routes:
+  - alias: smart
+    targets:
+      - model: provider-a
+        weight: 0
+`,
+			message: "weight must be between",
+		},
+		{
+			name: "weight too large",
+			raw: `routes:
+  - alias: smart
+    targets:
+      - model: provider-a
+        weight: 1000001
+`,
+			message: "weight must be between",
+		},
+		{
+			name: "empty canonical model",
+			raw: `routes:
+  - alias: smart
+    targets:
+      - model: ""
+`,
+			message: "model is required",
 		},
 	}
 	for _, test := range tests {

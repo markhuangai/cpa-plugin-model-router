@@ -9,7 +9,7 @@ import (
 )
 
 func TestExecuteStreamFailsOverBeforePayload(t *testing.T) {
-	plugin := testRouterPlugin(modelRoute{Alias: "smart", Strategy: routeStrategyPriority, CooldownSeconds: 30, Models: []string{"provider-a", "provider-b"}})
+	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "provider-a", "provider-b"))
 	host := &fakeModelHost{reads: map[string][]pluginapi.HostModelStreamReadResponse{
 		"stream-b": {
 			{Payload: []byte(`data: {"model":"provider-b",`), Done: false},
@@ -35,7 +35,7 @@ func TestExecuteStreamFailsOverBeforePayload(t *testing.T) {
 }
 
 func TestExecuteStreamDoesNotRetryAfterPayload(t *testing.T) {
-	plugin := testRouterPlugin(modelRoute{Alias: "smart", Strategy: routeStrategyPriority, CooldownSeconds: 30, Models: []string{"provider-a", "provider-b"}})
+	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "provider-a", "provider-b"))
 	host := &fakeModelHost{reads: map[string][]pluginapi.HostModelStreamReadResponse{
 		"stream-a": {
 			{Payload: []byte(`data: {"model":"provider-a"}` + "\n\n")},
@@ -48,6 +48,30 @@ func TestExecuteStreamDoesNotRetryAfterPayload(t *testing.T) {
 	err := plugin.executeStreamWithHost(context.Background(), pluginapi.ExecutorRequest{Model: "smart"}, "plugin-stream", host)
 	if statusFromError(err) != 429 || len(host.startCalls) != 1 || len(host.emitted) != 1 {
 		t.Fatalf("error = %v, start calls = %d, emitted = %d", err, len(host.startCalls), len(host.emitted))
+	}
+}
+
+func TestExecuteStreamAttemptsWeightedTargetOncePerRequest(t *testing.T) {
+	route := modelRoute{
+		Alias:           "weighted",
+		Strategy:        routeStrategyRoundRobin,
+		CooldownSeconds: 30,
+		Targets: []modelTarget{
+			{Model: "a", Weight: 3},
+			{Model: "b", Weight: 1},
+		},
+	}
+	plugin := testRouterPlugin(route)
+	host := &fakeModelHost{}
+	host.start = func(request pluginapi.HostModelExecutionRequest) (pluginapi.HostModelStreamResponse, error) {
+		return pluginapi.HostModelStreamResponse{StatusCode: 429}, statusError{status: 429, message: request.Model + " unavailable"}
+	}
+	err := plugin.executeStreamWithHost(context.Background(), pluginapi.ExecutorRequest{Model: "weighted"}, "plugin-stream", host)
+	if statusFromError(err) != 503 || codeFromError(err, "") != "model_route_unavailable" {
+		t.Fatalf("executeStreamWithHost() error = %v", err)
+	}
+	if len(host.startCalls) != 2 || host.startCalls[0].Model != "a" || host.startCalls[1].Model != "b" {
+		t.Fatalf("weighted stream calls = %#v, want a then b once", host.startCalls)
 	}
 }
 

@@ -41,14 +41,16 @@ func (p *modelRouterPlugin) executeStreamWithHost(_ context.Context, request plu
 	requestedModel := strings.TrimSpace(request.Model)
 	bodyInfo := bodyForExecution(request)
 	var lastErr error
-	for attempt := 0; attempt < len(route.Models); attempt++ {
-		selection := p.runtime.Select(route)
+	attempted := make(map[string]struct{}, len(route.Targets))
+	for attempt := 0; attempt < len(route.Targets); attempt++ {
+		selection := p.runtime.SelectExcluding(route, attempted)
 		if selection.allCooling {
 			return cooldownRouteError(route, selection.retryAfter)
 		}
 		if selection.model == "" {
 			break
 		}
+		attempted[routeKey(selection.model)] = struct{}{}
 		target := targetModel(requestedModel, selection.model)
 		capture := newRoutedUsageCapture(request, target, time.Now().UTC())
 		mark := p.attribution.MarkRouted(route.Alias, target, request.Headers, capture)
