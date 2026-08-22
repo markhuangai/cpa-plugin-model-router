@@ -55,27 +55,40 @@ The resolver does not inspect, copy, or migrate the former default at `<CPA root
 
 The plugins directory must be writable and persistently mounted. Use an explicit absolute path elsewhere when production mounts plugin binaries read-only. Process restart persistence requires the next process to open the same file. Container replacement persistence requires that file's parent directory to be mounted outside the disposable container layer.
 
-The database is dedicated to Model Router and uses bbolt with file mode `0600`. A successful record, price edit, or preference edit commits before its API call returns. There is no in-memory write batch to flush during shutdown.
+The database is dedicated to Model Router and uses SQLite WAL with file mode `0600`. A successful record, price edit, or preference edit commits before its API call returns. There is no in-memory write batch to flush during shutdown. WAL permits an old and a new plugin generation to overlap during a hot update without holding a process-lifetime bbolt lock.
 
-The database contains these buckets:
+The SQLite schema contains:
 
 ```text
 model-router.db
-├── meta
-│   ├── schema_version
+├── store_state
+│   ├── storage_schema_version
 │   ├── next_sequence
 │   ├── last_prune_day
-│   ├── prices
-│   └── preferences
+│   ├── prices_json
+│   └── preferences_json
 ├── requests
-└── minutes
+└── minute_aggregates
 ```
 
-`requests` stores request/attempt details. `minutes` stores UTC minute aggregates keyed by attribution, router model, provider model, provider, source, service tier, and result. Overview queries currently read request records so filtering and price changes are reflected consistently; the aggregate bucket is retained for durable minute-level accounting and future query optimization.
+`requests` stores request/attempt details. `minute_aggregates` stores UTC minute aggregates keyed by attribution, router model, provider model, provider, source, service tier, and result. Overview queries currently read request records so filtering and price changes are reflected consistently; the aggregate table is retained for durable minute-level accounting and future query optimization.
 
-Retention pruning runs when the database opens or is reconfigured and then at most once per UTC day during writes. Deleting expired bbolt keys makes pages reusable but does not guarantee a smaller file. Disk planning must account for peak retained request volume, including failed routed attempts.
+Retention pruning runs when the database opens or is reconfigured and then at most once per UTC day during writes. SQLite may retain reusable pages after deletes and WAL checkpoints, so disk planning must account for peak retained request volume, including failed routed attempts.
 
-**Reset usage** deletes and recreates only `requests` and `minutes`. It preserves model pricing and dashboard preferences in `meta`.
+### v0.3 to v0.4 migration
+
+When the configured path is a v0.3 bbolt file, v0.4 creates `<data_path>.migration-v1.json`, copies the source into `<data_path>.sqlite-v1.migrating`, validates row counts, sequence state, metadata, and SHA-256 content digests, then renames the source to `<data_path>.bbolt-v1.bak` before installing the SQLite file. The marker is removed only after the installed database passes `PRAGMA quick_check` and the same parity checks. If CPA or the plugin is interrupted, reopening the same path resumes the recorded phase. A changed source, invalid marker, mismatched digest, or ambiguous artifact set stops with an error and leaves the source/backup available for diagnosis.
+
+The v0.3 to v0.4 update requires one controlled plugin unload/delete/reinstall while CPA remains running so the old bbolt handle is closed. Do not delete the configured data path. After that transition, v0.4.x updates can overlap generations through SQLite WAL. To roll back a failed migration while the plugin is unloaded:
+
+```bash
+cp -- "<data_path>.bbolt-v1.bak" "<data_path>"
+rm -f -- "<data_path>.migration-v1.json" "<data_path>.sqlite-v1.migrating"
+```
+
+The backup is the original bbolt file and must not be overwritten with an unverified copy.
+
+**Reset usage** deletes and recreates only `requests` and `minute_aggregates`. It preserves model pricing and dashboard preferences in `store_state`.
 
 ## Capture and deduplication
 
@@ -185,7 +198,7 @@ AND the document is visible
 AND no newer refresh has replaced the timer
 ```
 
-Leaving the tab or hiding the document stops the timer and aborts the active request. Returning starts one fresh request set. Dashboard preferences are saved to bbolt after a short debounce. Both tables default to 50 rows. Router model, Provider, Source, Service tier, and Result are hidden by default in Usage breakdown; every column checkbox change updates `hidden_group_columns`. Existing saved selections, including an empty hidden list or a saved page size, remain authoritative. Request-detail columns keep their existing defaults.
+Leaving the tab or hiding the document stops the timer and aborts the active request. Returning starts one fresh request set. Dashboard preferences are saved to SQLite after a short debounce. Both tables default to 50 rows. Router model, Provider, Source, Service tier, and Result are hidden by default in Usage breakdown; every column checkbox change updates `hidden_group_columns`. Existing saved selections, including an empty hidden list or a saved page size, remain authoritative. Request-detail columns keep their existing defaults.
 
 The page follows CPAMC light, white, and dark themes, redraws canvas charts after theme changes, supports keyboard tab and chart navigation, exposes visible focus states, fits metric values without ellipses, and collapses controls and charts for mobile widths. Token trends use packet-style columns, cost and efficiency use halo lines, and provider share uses a gapped donut. Hover and keyboard focus share the same active treatment: packet buckets widen and gain a marker, lines gain a guide and enlarged halo markers, and donut segments lift while peers dim. Successful request results use green pills. Saving valid model pricing closes the modal after the persisted price book is applied; validation or request failures leave it open.
 
@@ -217,7 +230,8 @@ abi.go                       schema negotiation and lifecycle dispatch
 attribution.go               correlation markers, ambiguity handling, tombstones
 usage_capture.go             direct/routed fallback parsing and finalization
 usage_types.go               persisted and API data contracts
-usage_store.go               bbolt lifecycle, records, reset, prices, preferences
+usage_store.go               SQLite WAL lifecycle, records, reset, prices, preferences
+usage_migration.go           v0.3 bbolt parity migration and crash recovery
 usage_query.go               filters, aggregation, sorting, pagination
 usage_pricing.go             price validation and cost calculation
 modelsdev.go                 catalog fetch, matching, and synchronization

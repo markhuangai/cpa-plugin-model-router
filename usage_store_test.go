@@ -189,6 +189,40 @@ func TestUsageStorePathSwitchDoesNotMigrate(t *testing.T) {
 	}
 }
 
+func TestUsageStoreRelativePathPersists(t *testing.T) {
+	root := t.TempDir()
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(workingDirectory) })
+
+	store, err := openUsageStore("usage.db", 365)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Record(storedUsageRecord{RequestedAt: time.Now().UTC(), Attribution: attributionDirect, ProviderModel: "relative", TotalTokens: 1}); err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := openUsageStore("usage.db", 365)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	page, err := reopened.Requests(usageFilter{}, "time", "asc", 0, 10)
+	if err != nil || page.Total != 1 || page.Items[0].ProviderModel != "relative" {
+		t.Fatalf("relative path requests = %#v, %v", page, err)
+	}
+}
+
 func TestUsageStoreRestrictsExistingDatabasePermissions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage.db")
 	store, err := openUsageStore(path, 365)
