@@ -321,9 +321,13 @@ input[type="text"], input[type="number"], input[type="password"], select {
 .targets-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 8px; }
 .targets-head strong { margin: 0; }
 .target-list { display: grid; gap: 7px; }
-.target-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; gap: 7px; align-items: center; }
+.target-row { display: grid; grid-template-columns: auto minmax(0, 1fr) 92px auto auto auto; gap: 7px; align-items: center; }
 .target-number { width: 28px; color: var(--muted); text-align: center; font: 700 11px/1 "Cascadia Code", "SFMono-Regular", ui-monospace, monospace; }
 .target-row[data-model-availability="unavailable"] select { background: var(--amber-soft); border-color: var(--amber-border); }
+.target-weight { min-width: 0; }
+.target-weight input { width: 100%; }
+.target-help { display: inline-flex; align-items: center; justify-content: center; width: 19px; height: 19px; margin-left: 5px; padding: 0; color: var(--blue); background: var(--blue-soft); border: 1px solid var(--blue-border); border-radius: 50%; font: 800 12px/1 ui-monospace, monospace; cursor: help; }
+.target-help:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .target-empty { padding: 10px; color: var(--danger); font-size: 12px; background: var(--danger-soft); border: 1px dashed var(--danger-border); border-radius: 7px; }
 .footer-bar {
   position: sticky;
@@ -790,7 +794,7 @@ dialog::backdrop { background: rgba(10, 18, 25, .46); backdrop-filter: blur(2px)
 
       <div class="targets">
         <div class="targets-head">
-          <strong>Ordered model targets</strong>
+          <strong>Ordered model targets <button class="target-help" type="button" data-target-help aria-label="Target weight help: in round-robin mode, weight repeats this model in the outer schedule. CPA still chooses the actual provider credential." title="Round-robin weight repeats this model in the outer schedule. CPA still chooses the actual provider credential.">!</button></strong>
           <button class="secondary" type="button" data-action="add-target">Add target</button>
         </div>
         <div class="target-list"></div>
@@ -803,6 +807,7 @@ dialog::backdrop { background: rgba(10, 18, 25, .46); backdrop-filter: blur(2px)
   <div class="target-row">
     <span class="target-number"></span>
     <select data-target-field="model" aria-label="CPA model target"></select>
+    <label class="target-weight"><span class="sr-only">Round-robin weight</span><input type="number" data-target-field="weight" min="1" max="1000000" step="1" inputmode="numeric" aria-label="Round-robin weight"></label>
     <button class="icon-button" type="button" data-action="target-up" aria-label="Move target up">↑</button>
     <button class="icon-button" type="button" data-action="target-down" aria-label="Move target down">↓</button>
     <button class="danger-button" type="button" data-action="remove-target">Remove</button>
@@ -2098,11 +2103,15 @@ function normalizeRoute(value,index){
   const canonicalCooldown=Number.isInteger(route.cooldown_seconds)?route.cooldown_seconds:null;
   const legacyCooldown=Number.isInteger(route['cooldown-seconds'])?route['cooldown-seconds']:null;
   const cooldown=canonicalCooldown!==null?canonicalCooldown:(legacyCooldown!==null?legacyCooldown:60);
+  const targets=Array.isArray(route.targets)?route.targets.map(target=>{
+    const value=target&&typeof target==='object'?target:{};
+    return{model:String(value.model||''),weight:String(Number.isInteger(value.weight)?value.weight:1)};
+  }):(Array.isArray(route.models)?route.models.map(model=>({model:String(model||''),weight:'1'})):[]);
   return{
     alias:String(route.alias||('route-'+(index+1))),
     strategy:route.strategy==='round-robin'?'round-robin':'priority',
     cooldown_seconds:String(cooldown),
-    models:Array.isArray(route.models)?route.models.map(model=>String(model||'')):[]
+    targets
   };
 }
 async function loadConfiguration(){
@@ -2143,11 +2152,17 @@ async function loadConfiguration(){
     showToast(error.message,'error');
   }finally{setBusy(false)}
 }
-function createTargetRow(model,targetIndex,targetCount){
+function createTargetRow(target,targetIndex,targetCount,weighted){
   const row=document.getElementById('target-template').content.firstElementChild.cloneNode(true);
   row.dataset.targetIndex=String(targetIndex);
   row.querySelector('.target-number').textContent=String(targetIndex+1).padStart(2,'0');
   const select=row.querySelector('[data-target-field="model"]');
+  const model=target.model;
+  const weight=row.querySelector('[data-target-field="weight"]');
+  weight.value=target.weight;
+  weight.setAttribute('aria-label','Round-robin weight for target '+(targetIndex+1));
+  weight.hidden=!weighted;
+  row.querySelector('.target-weight').hidden=!weighted;
   const placeholder=document.createElement('option');
   placeholder.value='';
   placeholder.textContent=state.catalogError?'Models unavailable':'Select a CPA model';
@@ -2190,14 +2205,16 @@ function createRouteCard(route,index){
   addTarget.disabled=!state.catalogLoaded;
   if(!state.catalogLoaded)addTarget.title=state.catalogError||'CPA models are still loading.';
   card.querySelector('.preview-alias').textContent=route.alias||'unnamed alias';
-  card.querySelector('.preview-targets').textContent=route.models.length+(route.models.length===1?' target':' targets');
+  const weighted=route.strategy==='round-robin';
+  card.querySelector('[data-target-help]').hidden=!weighted;
+  card.querySelector('.preview-targets').textContent=route.targets.length+(route.targets.length===1?' target':' targets');
   const targetList=card.querySelector('.target-list');
-  if(route.models.length===0){
+  if(route.targets.length===0){
     const empty=document.createElement('div');
     empty.className='target-empty';
     empty.textContent='A route needs at least one model target.';
     targetList.appendChild(empty);
-  }else route.models.forEach((model,targetIndex)=>targetList.appendChild(createTargetRow(model,targetIndex,route.models.length)));
+  }else route.targets.forEach((target,targetIndex)=>targetList.appendChild(createTargetRow(target,targetIndex,route.targets.length,weighted)));
   return card;
 }
 function renderRoutes(){
@@ -2210,7 +2227,7 @@ function renderRoutes(){
   }
   state.routes.forEach((route,index)=>routesEl.appendChild(createRouteCard(route,index)));
 }
-function newRoute(){return{alias:'route-'+(state.routes.length+1),strategy:'priority',cooldown_seconds:'60',models:['']}}
+function newRoute(){return{alias:'route-'+(state.routes.length+1),strategy:'priority',cooldown_seconds:'60',targets:[{model:'',weight:'1'}]}}
 function addRoute(){state.routes.push(newRoute());renderRoutes();setDirty(true)}
 function routeIndexFrom(target){
   const card=target.closest('.route-card');
@@ -2225,11 +2242,11 @@ function moveRoute(index,delta){
   setDirty(true);
 }
 function moveTarget(routeIndex,targetIndex,delta){
-  const models=state.routes[routeIndex].models;
+  const targets=state.routes[routeIndex].targets;
   const next=targetIndex+delta;
-  if(next<0||next>=models.length)return;
-  const moved=models.splice(targetIndex,1)[0];
-  models.splice(next,0,moved);
+  if(next<0||next>=targets.length)return;
+  const moved=targets.splice(targetIndex,1)[0];
+  targets.splice(next,0,moved);
   renderRoutes();
   setDirty(true);
 }
@@ -2238,16 +2255,17 @@ function updateFromInput(target){
   if(index<0||!state.routes[index])return;
   const route=state.routes[index];
   const targetRow=target.closest('.target-row');
-  if(targetRow&&target.dataset.targetField==='model'){
+  if(targetRow&&target.dataset.targetField){
     const targetIndex=Number.parseInt(targetRow.dataset.targetIndex,10);
-    if(targetIndex>=0)route.models[targetIndex]=target.value;
-    if(state.availableModels.includes(target.value)){
+    if(targetIndex>=0)route.targets[targetIndex][target.dataset.targetField]=target.value;
+    if(target.dataset.targetField==='model'&&state.availableModels.includes(target.value)){
       delete targetRow.dataset.modelAvailability;
       target.removeAttribute('title');
     }
   }else if(target.dataset.field)route[target.dataset.field]=target.value;
   const card=target.closest('.route-card');
   if(card&&target.dataset.field==='alias')card.querySelector('.preview-alias').textContent=target.value||'unnamed alias';
+  if(target.dataset.field==='strategy')renderRoutes();
   setDirty(true);
 }
 routesEl.addEventListener('input',event=>updateFromInput(event.target));
@@ -2262,19 +2280,19 @@ routesEl.addEventListener('click',event=>{
   if(action==='up')moveRoute(index,-1);
   if(action==='down')moveRoute(index,1);
   if(action==='remove'){state.routes.splice(index,1);renderRoutes();setDirty(true)}
-  if(action==='add-target'&&state.catalogLoaded){state.routes[index].models.push('');renderRoutes();setDirty(true)}
+  if(action==='add-target'&&state.catalogLoaded){state.routes[index].targets.push({model:'',weight:'1'});renderRoutes();setDirty(true)}
   const row=button.closest('.target-row');
   const targetIndex=row?Number.parseInt(row.dataset.targetIndex,10):-1;
   if(action==='target-up'&&targetIndex>=0)moveTarget(index,targetIndex,-1);
   if(action==='target-down'&&targetIndex>=0)moveTarget(index,targetIndex,1);
-  if(action==='remove-target'&&targetIndex>=0){state.routes[index].models.splice(targetIndex,1);renderRoutes();setDirty(true)}
+  if(action==='remove-target'&&targetIndex>=0){state.routes[index].targets.splice(targetIndex,1);renderRoutes();setDirty(true)}
 });
 function serializeRoutes(){
   return state.routes.map(route=>({
     alias:route.alias.trim(),
     strategy:route.strategy,
     cooldown_seconds:Number.parseInt(route.cooldown_seconds,10),
-    models:route.models.map(model=>model.trim())
+    targets:route.targets.map(target=>({model:target.model.trim(),weight:Number.parseInt(target.weight,10)}))
   }));
 }
 function baseModel(value){
@@ -2293,17 +2311,19 @@ function validateClient(routes){
     else aliases.set(aliasKey,index+1);
     if(route.strategy!=='priority'&&route.strategy!=='round-robin')errors.push(label+': choose a strategy.');
     if(!Number.isInteger(route.cooldown_seconds)||route.cooldown_seconds<0)errors.push(label+': cooldown must be a non-negative integer.');
-    if(route.models.length===0)errors.push(label+': add at least one target.');
+    if(route.targets.length===0)errors.push(label+': add at least one target.');
     const models=new Map();
-    route.models.forEach((model,targetIndex)=>{
+    route.targets.forEach((target,targetIndex)=>{
+      const model=target.model;
       const modelKey=model.toLowerCase();
       if(!model)errors.push(label+', target '+(targetIndex+1)+': model is required.');
+      else if(!Number.isInteger(target.weight)||target.weight<1||target.weight>1000000)errors.push(label+', target '+(targetIndex+1)+': weight must be an integer from 1 to 1000000.');
       else if(models.has(modelKey))errors.push(label+', target '+(targetIndex+1)+': model duplicates target '+models.get(modelKey)+'.');
       else models.set(modelKey,targetIndex+1);
     });
   });
-  routes.forEach((route,index)=>route.models.forEach((model,targetIndex)=>{
-    const targetAlias=aliases.get(baseModel(model));
+  routes.forEach((route,index)=>route.targets.forEach((target,targetIndex)=>{
+    const targetAlias=aliases.get(baseModel(target.model));
     if(targetAlias)errors.push('Route '+(index+1)+', target '+(targetIndex+1)+': target references route alias '+targetAlias+'.');
   }));
   if(!/^-?\d+$/.test(state.priority.trim()))errors.push('Priority must be an integer.');

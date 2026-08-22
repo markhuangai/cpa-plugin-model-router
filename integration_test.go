@@ -41,6 +41,8 @@ func TestModelRouterWithCLIProxyAPI(t *testing.T) {
 
 	var failedCalls atomic.Int32
 	var workingCalls atomic.Int32
+	var observedModelsMu sync.Mutex
+	var observedModels []string
 	provider := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if !strings.HasSuffix(request.URL.Path, "/chat/completions") {
 			http.NotFound(response, request)
@@ -54,6 +56,9 @@ func TestModelRouterWithCLIProxyAPI(t *testing.T) {
 			http.Error(response, err.Error(), http.StatusBadRequest)
 			return
 		}
+		observedModelsMu.Lock()
+		observedModels = append(observedModels, body.Model)
+		observedModelsMu.Unlock()
 		response.Header().Set("Content-Type", "application/json")
 		if body.Model == "fail-model" {
 			failedCalls.Add(1)
@@ -124,6 +129,14 @@ plugins:
           models:
             - fail/fail-model
             - work/working-model
+        - alias: weighted-router-alias
+          strategy: round-robin
+          cooldown_seconds: 60
+          targets:
+            - model: work/working-model
+              weight: 3
+            - model: other/working-model-2
+              weight: 1
 openai-compatibility:
   - name: fail
     prefix: fail
@@ -139,7 +152,14 @@ openai-compatibility:
       - api-key: work-provider-key
     models:
       - name: working-model
-`, port, filepath.Join(workDir, "auth"), pluginsDir, provider.URL+"/v1", provider.URL+"/v1")
+  - name: other
+    prefix: other
+    base-url: %q
+    api-key-entries:
+      - api-key: other-provider-key
+    models:
+      - name: working-model-2
+`, port, filepath.Join(workDir, "auth"), pluginsDir, provider.URL+"/v1", provider.URL+"/v1", provider.URL+"/v1")
 	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -150,6 +170,9 @@ openai-compatibility:
 	verifyModelRouterManagementUI(t, baseURL, logs)
 	if !waitForSmokeModel(t, baseURL, "smoke-router-alias", 10*time.Second) {
 		t.Fatalf("model route alias smoke-router-alias was not registered\n%s", logs.String())
+	}
+	if !waitForSmokeModel(t, baseURL, "weighted-router-alias", 10*time.Second) {
+		t.Fatalf("weighted model route alias weighted-router-alias was not registered\n%s", logs.String())
 	}
 	if _, err := os.Stat(usagePath); err != nil {
 		t.Fatalf("default usage database was not created at %q: %v", usagePath, err)
@@ -255,6 +278,23 @@ openai-compatibility:
 	if restartedPreferences.RequestPageSize != 25 || !slices.Equal(restartedPreferences.HiddenGroupColumns, preferences.HiddenGroupColumns) {
 		t.Fatalf("preferences were lost across restart: %#v", restartedPreferences)
 	}
+
+	observedModelsMu.Lock()
+	weightedStart := len(observedModels)
+	observedModelsMu.Unlock()
+	for requestIndex := 0; requestIndex < 8; requestIndex++ {
+		response := postSmokeChat(t, baseURL, "weighted-router-alias")
+		if response["model"] != "weighted-router-alias" {
+			t.Fatalf("weighted response model = %v; response = %#v\n%s", response["model"], response, logs.String())
+		}
+	}
+	observedModelsMu.Lock()
+	weightedModels := append([]string(nil), observedModels[weightedStart:]...)
+	observedModelsMu.Unlock()
+	wantWeightedModels := []string{"working-model", "working-model", "working-model", "working-model-2", "working-model", "working-model", "working-model", "working-model-2"}
+	if !slices.Equal(weightedModels, wantWeightedModels) {
+		t.Fatalf("weighted provider sequence = %#v, want %#v", weightedModels, wantWeightedModels)
+	}
 }
 
 func verifyModelRouterManagementUI(t *testing.T, baseURL string, logs *smokeSyncBuffer) {
@@ -312,7 +352,7 @@ func verifyModelRouterManagementUI(t *testing.T, baseURL string, logs *smokeSync
 	if resourceResponse.StatusCode != http.StatusOK || !strings.Contains(string(resourceBody), "<title>Model Router</title>") {
 		t.Fatalf("dashboard status=%s body=%q", resourceResponse.Status, resourceBody)
 	}
-	for _, expected := range []string{"/v0/management/api-keys", "/v1/models", "<select data-target-field=\"model\""} {
+	for _, expected := range []string{"/v0/management/api-keys", "/v1/models", "<select data-target-field=\"model\"", "data-target-field=\"weight\"", "data-target-help"} {
 		if !strings.Contains(string(resourceBody), expected) {
 			t.Fatalf("dashboard missing %q", expected)
 		}
@@ -365,7 +405,7 @@ func verifyModelRouterManagementUI(t *testing.T, baseURL string, logs *smokeSync
 	for _, model := range models.Data {
 		modelIDs[model.ID] = true
 	}
-	for _, expected := range []string{"fail/fail-model", "work/working-model"} {
+	for _, expected := range []string{"fail/fail-model", "work/working-model", "other/working-model-2"} {
 		if !modelIDs[expected] {
 			t.Fatalf("CPA models missing %q: %#v", expected, modelIDs)
 		}

@@ -97,6 +97,8 @@ func TestModelRouterManagementDashboardReusesCPAMCSessionAndTheme(t *testing.T) 
 		"class=\"auth-dock\" aria-labelledby=\"auth-title\" hidden",
 		"if(managementKey())loadConfiguration()",
 		"<select data-target-field=\"model\"",
+		"data-target-field=\"weight\"",
+		"data-target-help",
 		"model+' (unavailable)'",
 		"data-action=\"add-target\"",
 		"role=\"tablist\" aria-label=\"Model Router sections\"",
@@ -203,6 +205,12 @@ func TestModelRouterManagementValidationUsesPluginParser(t *testing.T) {
 			wantText:   `"valid":true`,
 		},
 		{
+			name:       "canonical weighted targets",
+			body:       `{"enabled":true,"routes":[{"alias":"auto","strategy":"round-robin","cooldown_seconds":60,"targets":[{"model":"provider-a/model","weight":3},{"model":"provider-b/model"}]}]}`,
+			wantStatus: http.StatusOK,
+			wantText:   `"valid":true`,
+		},
+		{
 			name:       "recursive target",
 			body:       `{"enabled":true,"routes":[{"alias":"auto","strategy":"priority","cooldown_seconds":60,"models":["auto(high)"]}]}`,
 			wantStatus: http.StatusBadRequest,
@@ -219,6 +227,12 @@ func TestModelRouterManagementValidationUsesPluginParser(t *testing.T) {
 			body:       `{"enabled":true,"routes":[{"alias":"auto","models":["provider/model"],"unknown":true}]}`,
 			wantStatus: http.StatusBadRequest,
 			wantText:   "unknown field",
+		},
+		{
+			name:       "both model schemas",
+			body:       `{"enabled":true,"routes":[{"alias":"auto","models":["provider-a/model"],"targets":[{"model":"provider-b/model"}]}]}`,
+			wantStatus: http.StatusBadRequest,
+			wantText:   "both models and targets",
 		},
 		{
 			name:       "multiple documents",

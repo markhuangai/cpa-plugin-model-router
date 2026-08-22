@@ -1,5 +1,5 @@
 PLUGIN_ID := model-router
-VERSION ?= 0.4.0
+VERSION ?= 0.4.1
 GOOS := $(shell go env GOOS)
 
 ifeq ($(GOOS),windows)

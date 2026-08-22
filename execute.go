@@ -30,14 +30,16 @@ func (p *modelRouterPlugin) executeWithHost(request pluginapi.ExecutorRequest, h
 	requestedModel := strings.TrimSpace(request.Model)
 	bodyInfo := bodyForExecution(request)
 	var lastErr error
-	for attempt := 0; attempt < len(route.Models); attempt++ {
-		selection := p.runtime.Select(route)
+	attempted := make(map[string]struct{}, len(route.Targets))
+	for attempt := 0; attempt < len(route.Targets); attempt++ {
+		selection := p.runtime.SelectExcluding(route, attempted)
 		if selection.allCooling {
 			return pluginapi.ExecutorResponse{}, cooldownRouteError(route, selection.retryAfter)
 		}
 		if selection.model == "" {
 			break
 		}
+		attempted[routeKey(selection.model)] = struct{}{}
 		target := targetModel(requestedModel, selection.model)
 		startedAt := time.Now().UTC()
 		capture := newRoutedUsageCapture(request, target, startedAt)
