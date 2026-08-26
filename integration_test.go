@@ -297,6 +297,153 @@ openai-compatibility:
 	}
 }
 
+func TestModelRouterResponsesSSEFramingWithCLIProxyAPI(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the native host smoke test is currently exercised on Unix hosts")
+	}
+	cpaSource := os.Getenv("CPA_SOURCE")
+	if cpaSource == "" {
+		cpaSource = filepath.Join("..", "CLIProxyAPI")
+	}
+	cpaSource, err := filepath.Abs(cpaSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(cpaSource, "go.mod")); err != nil {
+		t.Fatalf("CPA source not found at %s; set CPA_SOURCE: %v", cpaSource, err)
+	}
+
+	var observedModelMu sync.Mutex
+	observedModel := ""
+	provider := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if !strings.HasSuffix(request.URL.Path, "/responses") {
+			http.NotFound(response, request)
+			return
+		}
+		var body struct {
+			Model  string `json:"model"`
+			Stream bool   `json:"stream"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			http.Error(response, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if !body.Stream {
+			http.Error(response, "expected streaming request", http.StatusBadRequest)
+			return
+		}
+		observedModelMu.Lock()
+		observedModel = body.Model
+		observedModelMu.Unlock()
+
+		response.Header().Set("Content-Type", "text/event-stream")
+		flusher, ok := response.(http.Flusher)
+		if !ok {
+			http.Error(response, "streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+		frames := []struct {
+			event string
+			data  string
+		}{
+			{
+				event: "response.created",
+				data:  fmt.Sprintf(`{"type":"response.created","response":{"id":"resp_1","object":"response","status":"in_progress","model":%q,"output":[]}}`, body.Model),
+			},
+			{
+				event: "response.completed",
+				data:  fmt.Sprintf(`{"type":"response.completed","response":{"id":"resp_1","object":"response","status":"completed","model":%q,"output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`, body.Model),
+			},
+		}
+		for _, frame := range frames {
+			_, _ = fmt.Fprintf(response, "event: %s\n", frame.event)
+			flusher.Flush()
+			_, _ = fmt.Fprintf(response, "data: %s\n\n", frame.data)
+			flusher.Flush()
+		}
+	}))
+	defer provider.Close()
+
+	workDir := t.TempDir()
+	pluginsDir := filepath.Join(workDir, "plugins")
+	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pluginPath := filepath.Join(pluginsDir, "model-router"+sharedLibraryExtension())
+	runSmokeCommand(t, ".", "go", "build", "-buildmode=c-shared", "-o", pluginPath, ".")
+	cpaBinary := filepath.Join(workDir, "cli-proxy-api")
+	runSmokeCommand(t, cpaSource, "go", "build", "-o", cpaBinary, "./cmd/server")
+
+	port := reserveLocalPort(t)
+	configPath := filepath.Join(workDir, "config.yaml")
+	config := fmt.Sprintf(`host: "127.0.0.1"
+port: %d
+auth-dir: %q
+api-keys: ["local-test-key"]
+request-retry: 0
+streaming-bootstrap-retries: 0
+plugins:
+  enabled: true
+  dir: %q
+  configs:
+    model-router:
+      enabled: true
+      priority: 100
+      routes:
+        - alias: responses-router-alias
+          strategy: priority
+          cooldown_seconds: 60
+          models:
+            - responses-physical-model
+codex-api-key:
+  - api-key: "local-provider-key"
+    base-url: %q
+    models:
+      - name: responses-physical-model
+`, port, filepath.Join(workDir, "auth"), pluginsDir, provider.URL)
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+	cpa := startSmokeCPA(t, cpaBinary, configPath, baseURL)
+	if !waitForSmokeModel(t, baseURL, "responses-router-alias", 10*time.Second) {
+		t.Fatalf("responses-router-alias was not registered\n%s", cpa.logs.String())
+	}
+	requestBody := []byte(`{"model":"responses-router-alias","input":"Reply OK","stream":true}`)
+	request, err := http.NewRequest(http.MethodPost, baseURL+"/v1/responses", bytes.NewReader(requestBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer local-test-key")
+	request.Header.Set("Content-Type", "application/json")
+	response, err := (&http.Client{Timeout: 10 * time.Second}).Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("responses stream returned %s: %s\n%s", response.Status, responseBody, cpa.logs.String())
+	}
+	stream := string(responseBody)
+	if !strings.Contains(stream, "event: response.created") || !strings.Contains(stream, "event: response.completed") {
+		t.Fatalf("responses stream lost event frames: %q", stream)
+	}
+	if strings.Count(stream, `"model":"responses-router-alias"`) != 2 || strings.Contains(stream, "responses-physical-model") {
+		t.Fatalf("responses stream model was not rewritten: %q", stream)
+	}
+	observedModelMu.Lock()
+	upstreamModel := observedModel
+	observedModelMu.Unlock()
+	if upstreamModel != "responses-physical-model" {
+		t.Fatalf("provider model = %q, want responses-physical-model", upstreamModel)
+	}
+}
+
 func verifyModelRouterManagementUI(t *testing.T, baseURL string, logs *smokeSyncBuffer) {
 	t.Helper()
 	client := &http.Client{Timeout: 5 * time.Second}

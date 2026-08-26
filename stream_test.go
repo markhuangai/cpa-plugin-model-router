@@ -89,6 +89,58 @@ func TestStreamModelRewriterBuffersSplitSSE(t *testing.T) {
 	}
 }
 
+func TestStreamModelRewriterSeparatesResponsesEventAndDataChunks(t *testing.T) {
+	rewriter := newStreamModelRewriter("responses-router-alias")
+	if first := rewriter.Rewrite([]byte("event: response.created")); first != nil {
+		t.Fatalf("first Rewrite() = %q", first)
+	}
+	second := rewriter.Rewrite([]byte(`data: {"type":"response.created","response":{"model":"physical-model"}}`))
+	payload := string(second)
+	if !strings.HasPrefix(payload, "event: response.created\ndata: ") {
+		t.Fatalf("second Rewrite() did not preserve the SSE line boundary: %q", payload)
+	}
+	if !strings.Contains(payload, `"model":"responses-router-alias"`) || strings.Contains(payload, "physical-model") {
+		t.Fatalf("second Rewrite() did not rewrite response.model: %q", payload)
+	}
+	if tail := rewriter.Finish(); tail != nil {
+		t.Fatalf("Finish() = %q", tail)
+	}
+}
+
+func TestStreamModelRewriterPreservesResponsesEventDataPairs(t *testing.T) {
+	rewriter := newStreamModelRewriter("responses-router-alias")
+	chunks := []string{
+		"event: response.created",
+		`data: {"type":"response.created","response":{"model":"physical-model"}}`,
+		"event: response.output_text.delta",
+		`data: {"type":"response.output_text.delta","delta":"OK"}`,
+		"event: response.completed",
+		`data: {"type":"response.completed","response":{"model":"physical-model"}}`,
+	}
+	var outputs []string
+	for _, chunk := range chunks {
+		if rewritten := rewriter.Rewrite([]byte(chunk)); len(rewritten) > 0 {
+			outputs = append(outputs, string(rewritten))
+		}
+	}
+	if tail := rewriter.Finish(); len(tail) > 0 {
+		outputs = append(outputs, string(tail))
+	}
+	wantEvents := []string{"response.created", "response.output_text.delta", "response.completed"}
+	if len(outputs) != len(wantEvents) {
+		t.Fatalf("rewritten outputs = %#v, want %d event/data pairs", outputs, len(wantEvents))
+	}
+	for index, event := range wantEvents {
+		if !strings.HasPrefix(outputs[index], "event: "+event+"\ndata: ") {
+			t.Fatalf("rewritten pair %d = %q", index, outputs[index])
+		}
+	}
+	combined := strings.Join(outputs, "\n\n")
+	if !strings.Contains(combined, "response.completed") || strings.Count(combined, `"model":"responses-router-alias"`) != 2 || strings.Contains(combined, "physical-model") {
+		t.Fatalf("rewritten stream = %q", combined)
+	}
+}
+
 func TestStreamModelRewriterSeparatesGluedSSEEvents(t *testing.T) {
 	rewriter := newStreamModelRewriter("smart")
 	payload := rewriter.Rewrite([]byte(`data: {"model":"one"}data: {"model":"two"}`))

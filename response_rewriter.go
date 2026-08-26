@@ -40,8 +40,12 @@ func (rewriter *streamModelRewriter) Rewrite(chunk []byte) []byte {
 		return chunk
 	}
 	if len(rewriter.pending) > 0 {
-		combined := make([]byte, 0, len(rewriter.pending)+len(chunk))
+		needsLineBreak := sseChunksNeedLineBreak(rewriter.pending, chunk)
+		combined := make([]byte, 0, len(rewriter.pending)+len(chunk)+1)
 		combined = append(combined, rewriter.pending...)
+		if needsLineBreak {
+			combined = append(combined, '\n')
+		}
 		combined = append(combined, chunk...)
 		chunk = combined
 		rewriter.pending = nil
@@ -119,6 +123,14 @@ func sseDataLine(line []byte) ([]byte, []byte, bool) {
 		return []byte("data:"), data, true
 	}
 	return nil, nil, false
+}
+
+func sseChunksNeedLineBreak(pending, chunk []byte) bool {
+	if len(pending) == 0 || len(chunk) == 0 || !bytes.HasPrefix(chunk, []byte("data:")) {
+		return false
+	}
+	lineStart := bytes.LastIndexByte(pending, '\n') + 1
+	return lineStart < len(pending) && bytes.HasPrefix(pending[lineStart:], []byte("event:"))
 }
 
 func normalizeGluedSSEEvents(chunk []byte) []byte {
