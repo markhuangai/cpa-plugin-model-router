@@ -27,11 +27,7 @@ func (counters *usageCounters) add(record storedUsageRecord) {
 	counters.ReasoningTokens += record.ReasoningTokens
 	counters.CachedTokens += record.CachedTokens
 	counters.CacheReadTokens += record.CacheReadTokens
-	effectiveCacheRead := record.CacheReadTokens
-	if effectiveCacheRead == 0 {
-		effectiveCacheRead = record.CachedTokens
-	}
-	counters.EffectiveCacheReadTokens += effectiveCacheRead
+	counters.EffectiveCacheReadTokens += effectiveCacheReadTokens(record)
 	counters.CacheCreationTokens += record.CacheCreationTokens
 	counters.TotalTokens += record.TotalTokens
 }
@@ -77,11 +73,12 @@ func (record storedUsageRecord) result() string {
 
 type usageRequestDetail struct {
 	storedUsageRecord
-	Result        string         `json:"result"`
-	GenerationNS  uint64         `json:"generation_ns"`
-	TPS           float64        `json:"tps"`
-	CacheHit      bool           `json:"cache_hit"`
-	EstimatedCost *estimatedCost `json:"estimated_cost,omitempty"`
+	Result                   string         `json:"result"`
+	GenerationNS             uint64         `json:"generation_ns"`
+	TPS                      float64        `json:"tps"`
+	EffectiveCacheReadTokens uint64         `json:"effective_cache_read_tokens"`
+	CacheHit                 bool           `json:"cache_hit"`
+	EstimatedCost            *estimatedCost `json:"estimated_cost,omitempty"`
 }
 
 func requestDetail(record storedUsageRecord, resolver modelPriceResolver) usageRequestDetail {
@@ -95,13 +92,24 @@ func requestDetail(record storedUsageRecord, resolver modelPriceResolver) usageR
 	}
 	cost := estimateUsageCost(record, resolver)
 	return usageRequestDetail{
-		storedUsageRecord: record,
-		Result:            record.result(),
-		GenerationNS:      generation,
-		TPS:               tps,
-		CacheHit:          record.CacheReadTokens > 0 || record.CachedTokens > 0,
-		EstimatedCost:     &cost,
+		storedUsageRecord:        record,
+		Result:                   record.result(),
+		GenerationNS:             generation,
+		TPS:                      tps,
+		EffectiveCacheReadTokens: effectiveCacheReadTokens(record),
+		CacheHit:                 effectiveCacheReadTokens(record) > 0,
+		EstimatedCost:            &cost,
 	}
+}
+
+func effectiveCacheReadTokens(record storedUsageRecord) uint64 {
+	if record.CacheReadTokens > 0 {
+		return record.CacheReadTokens
+	}
+	if record.CacheCreationTokens == 0 {
+		return record.CachedTokens
+	}
+	return 0
 }
 
 type usageFilter struct {

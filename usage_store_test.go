@@ -145,6 +145,13 @@ func TestStoredRecordFromUsageSynthesizesMissingTotal(t *testing.T) {
 			}},
 			want: 9,
 		},
+		{
+			name: "openai creation subset",
+			record: pluginapi.UsageRecord{Provider: "openai", Detail: pluginapi.UsageDetail{
+				InputTokens: 5, CacheCreationTokens: 2,
+			}},
+			want: 5,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -153,6 +160,53 @@ func TestStoredRecordFromUsageSynthesizesMissingTotal(t *testing.T) {
 				t.Fatalf("stored total = %d, want %d; record=%#v", stored.TotalTokens, test.want, stored)
 			}
 		})
+	}
+}
+
+func TestHandleUsagePersistsAuthoritativeCPARecord(t *testing.T) {
+	store, err := openUsageStore(filepath.Join(t.TempDir(), "usage.db"), 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC()
+	plugin := &modelRouterPlugin{
+		config:      routerConfig{Enabled: true},
+		store:       store,
+		attribution: newAttributionTracker(func() time.Time { return now }),
+	}
+	plugin.attribution.MarkRouted("smart", "provider/model", mapHeader("Authorization", "Bearer client-secret"))
+	plugin.HandleUsage(t.Context(), pluginapi.UsageRecord{
+		Provider: "openai-compatibility", ExecutorType: "OpenAICompatExecutor", Model: "provider/model", APIKey: "client-secret", RequestedAt: now,
+		Detail: pluginapi.UsageDetail{InputTokens: 10, OutputTokens: 1, CachedTokens: 4, CacheCreationTokens: 4, TotalTokens: 11}, Generate: true,
+	})
+	page, err := store.Requests(usageFilter{From: now.Add(-time.Minute), To: now.Add(time.Minute)}, "time", "asc", 0, 10)
+	if err != nil || page.Total != 1 {
+		t.Fatalf("authoritative usage page = %#v, %v", page, err)
+	}
+	item := page.Items[0]
+	if item.Attribution != attributionRouted || item.RouterModel != "smart" || item.CacheCreationTokens != 4 || item.EffectiveCacheReadTokens != 0 || item.CacheHit {
+		t.Fatalf("authoritative usage item = %#v", item)
+	}
+}
+
+func TestHandleUsageStoresAmbiguousRecordAsUnattributed(t *testing.T) {
+	store, err := openUsageStore(filepath.Join(t.TempDir(), "usage.db"), 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC()
+	tracker := newAttributionTracker(func() time.Time { return now })
+	tracker.MarkRouted("first", "provider/model", mapHeader("X-Api-Key", "client-secret"))
+	tracker.MarkRouted("second", "provider/model", mapHeader("X-Api-Key", "client-secret"))
+	plugin := &modelRouterPlugin{config: routerConfig{Enabled: true}, store: store, attribution: tracker}
+	plugin.HandleUsage(t.Context(), pluginapi.UsageRecord{
+		Provider: "provider", Model: "provider/model", APIKey: "client-secret", Detail: pluginapi.UsageDetail{TotalTokens: 9}, Generate: true,
+	})
+	page, err := store.Requests(usageFilter{From: now.Add(-time.Minute), To: now.Add(time.Minute)}, "time", "asc", 0, 10)
+	if err != nil || page.Total != 1 || page.Items[0].Attribution != attributionUnresolved || len(tracker.markers) != 2 {
+		t.Fatalf("ambiguous usage page = %#v, markers=%#v, err=%v", page, tracker.markers, err)
 	}
 }
 
@@ -342,6 +396,7 @@ func TestUsageAggregatesEffectiveCacheReadAliases(t *testing.T) {
 		{RequestedAt: now, ProviderModel: "cached-only", CachedTokens: 4},
 		{RequestedAt: now.Add(time.Minute), ProviderModel: "cache-read", CacheReadTokens: 6},
 		{RequestedAt: now.Add(2 * time.Minute), ProviderModel: "both", CachedTokens: 8, CacheReadTokens: 3},
+		{RequestedAt: now.Add(3 * time.Minute), ProviderModel: "creation-only", CachedTokens: 9, CacheCreationTokens: 9},
 	} {
 		if err := store.Record(record); err != nil {
 			t.Fatal(err)
@@ -356,7 +411,7 @@ func TestUsageAggregatesEffectiveCacheReadAliases(t *testing.T) {
 		t.Fatalf("effective cache aliases = summary=%#v series=%#v", overview.Summary, overview.Series)
 	}
 	groups, err := store.Groups(filter, "provider_model", "total_tokens", "desc", 0, 10)
-	if err != nil || len(groups.Items) != 3 {
+	if err != nil || len(groups.Items) != 4 {
 		t.Fatalf("effective cache groups = %#v, %v", groups, err)
 	}
 	for _, item := range groups.Items {
@@ -368,10 +423,16 @@ func TestUsageAggregatesEffectiveCacheReadAliases(t *testing.T) {
 			want = 6
 		case "both":
 			want = 3
+		case "creation-only":
+			want = 0
 		}
 		if item.EffectiveCacheReadTokens != want {
 			t.Fatalf("group %q effective cache = %d, want %d", item.ProviderModel, item.EffectiveCacheReadTokens, want)
 		}
+	}
+	requests, err := store.Requests(filter, "time", "asc", 0, 10)
+	if err != nil || len(requests.Items) != 4 || requests.Items[3].EffectiveCacheReadTokens != 0 || requests.Items[3].CacheHit {
+		t.Fatalf("request effective cache aliases = %#v, %v", requests.Items, err)
 	}
 }
 

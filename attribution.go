@@ -19,7 +19,6 @@ const (
 
 	attributionWindow    = 5 * time.Second
 	attributionRetention = 24 * time.Hour
-	fallbackRetention    = 30 * time.Second
 	attributionPruneRate = time.Second
 	maxAttributionMarks  = 50_000
 )
@@ -27,11 +26,6 @@ const (
 type attributionResult struct {
 	Kind        string
 	RouterModel string
-	Suppress    bool
-}
-
-type attributionMark struct {
-	id uint64
 }
 
 type attributionMarker struct {
@@ -43,9 +37,6 @@ type attributionMarker struct {
 	startedAt     time.Time
 	credential    [sha256.Size]byte
 	hasCredential bool
-	fallback      bool
-	fallbackAt    time.Time
-	capture       directUsageCapture
 }
 
 type attributionTracker struct {
@@ -69,32 +60,28 @@ func newAttributionTracker(now func() time.Time) *attributionTracker {
 	return tracker
 }
 
-func (tracker *attributionTracker) MarkDirect(request pluginapi.ModelRouteRequest) attributionMark {
+func (tracker *attributionTracker) MarkDirect(request pluginapi.ModelRouteRequest) {
 	if tracker == nil {
-		return attributionMark{}
+		return
 	}
-	return tracker.add(true, "", request.RequestedModel, request.Headers, "", directUsageCapture{})
+	tracker.add(true, "", request.RequestedModel, request.Headers, "")
 }
 
-func (tracker *attributionTracker) MarkRouted(routerModel, providerModel string, headers http.Header, captures ...directUsageCapture) attributionMark {
+func (tracker *attributionTracker) MarkRouted(routerModel, providerModel string, headers http.Header) {
 	if tracker == nil {
-		return attributionMark{}
+		return
 	}
-	var capture directUsageCapture
-	if len(captures) > 0 {
-		capture = captures[0]
-	}
-	return tracker.add(false, routerModel, providerModel, headers, "", capture)
+	tracker.add(false, routerModel, providerModel, headers, "")
 }
 
-func (tracker *attributionTracker) MarkDirectRequest(request pluginapi.RequestInterceptRequest, capture directUsageCapture) attributionMark {
+func (tracker *attributionTracker) MarkDirectRequest(request pluginapi.RequestInterceptRequest) {
 	if tracker == nil {
-		return attributionMark{}
+		return
 	}
-	return tracker.add(true, "", firstNonEmpty(request.Model, request.RequestedModel), request.Headers, request.RequestID, capture)
+	tracker.add(true, "", firstNonEmpty(request.Model, request.RequestedModel), request.Headers, request.RequestID)
 }
 
-func (tracker *attributionTracker) add(direct bool, routerModel, providerModel string, headers http.Header, requestID string, capture directUsageCapture) attributionMark {
+func (tracker *attributionTracker) add(direct bool, routerModel, providerModel string, headers http.Header, requestID string) {
 	credential := clientCredential(headers)
 	fingerprint, hasCredential := tracker.fingerprint(credential)
 	marker := attributionMarker{
@@ -105,7 +92,6 @@ func (tracker *attributionTracker) add(direct bool, routerModel, providerModel s
 		startedAt:     tracker.now().UTC(),
 		credential:    fingerprint,
 		hasCredential: hasCredential,
-		capture:       capture,
 	}
 	tracker.mu.Lock()
 	tracker.pruneLocked(marker.startedAt)
@@ -117,7 +103,6 @@ func (tracker *attributionTracker) add(direct bool, routerModel, providerModel s
 		tracker.markers = tracker.markers[:maxAttributionMarks]
 	}
 	tracker.mu.Unlock()
-	return attributionMark{id: marker.id}
 }
 
 func (tracker *attributionTracker) Match(record pluginapi.UsageRecord) attributionResult {
@@ -143,31 +128,9 @@ func (tracker *attributionTracker) Match(record pluginapi.UsageRecord) attributi
 		return attributionResult{Kind: attributionUnresolved}
 	}
 	if !hasRequestedAt {
-		// A timestamp-less record cannot distinguish an active marker from a fallback tombstone.
-		fallbackIndexes := make([]int, 0, len(indexes))
-		for _, candidate := range indexes {
-			if tracker.markers[candidate].fallback {
-				fallbackIndexes = append(fallbackIndexes, candidate)
-			}
-		}
-		if len(fallbackIndexes) > 0 {
-			index := tracker.closestIndexLocked(fallbackIndexes, requestedAt)
-			closest := tracker.equallyCloseIndexesLocked(fallbackIndexes, requestedAt, index)
-			if tracker.conflictingIndexesLocked(closest) {
-				tracker.removeIndexesLocked(closest)
-				return attributionResult{Kind: attributionUnresolved}
-			}
-			tracker.removeIndexesLocked([]int{index})
-			return attributionResult{Suppress: true}
-		}
-		activeIndexes := make([]int, 0, len(indexes))
-		for _, candidate := range indexes {
-			if !tracker.markers[candidate].fallback {
-				activeIndexes = append(activeIndexes, candidate)
-			}
-		}
-		if len(activeIndexes) > 1 {
-			return attributionResult{Kind: attributionUnresolved, Suppress: true}
+		// A timestamp-less record cannot safely choose among concurrent markers.
+		if len(indexes) > 1 {
+			return attributionResult{Kind: attributionUnresolved}
 		}
 	}
 	index := tracker.closestIndexLocked(indexes, requestedAt)
@@ -178,9 +141,6 @@ func (tracker *attributionTracker) Match(record pluginapi.UsageRecord) attributi
 	}
 	marker := tracker.markers[index]
 	tracker.removeIndexesLocked([]int{index})
-	if marker.fallback {
-		return attributionResult{Suppress: true}
-	}
 	if marker.direct {
 		return attributionResult{Kind: attributionDirect}
 	}
@@ -257,77 +217,11 @@ func (tracker *attributionTracker) updateDirectRequest(request pluginapi.Request
 	defer tracker.mu.Unlock()
 	for index := len(tracker.markers) - 1; index >= 0; index-- {
 		marker := &tracker.markers[index]
-		if marker.direct && !marker.fallback && marker.requestID == request.RequestID {
+		if marker.direct && marker.requestID == request.RequestID {
 			marker.providerModel = firstNonEmpty(strings.TrimSpace(request.Model), marker.providerModel)
-			marker.capture.updateRequest(request)
 			return
 		}
 	}
-}
-
-func (tracker *attributionTracker) observeDirectResponse(request pluginapi.ResponseInterceptRequest) {
-	if tracker == nil || strings.TrimSpace(request.RequestID) == "" {
-		return
-	}
-	tracker.mu.Lock()
-	defer tracker.mu.Unlock()
-	if marker := tracker.directMarkerLocked(request.RequestID); marker != nil && !marker.fallback {
-		marker.capture.observeResponse(request, tracker.now().UTC())
-	}
-}
-
-func (tracker *attributionTracker) observeDirectStream(request pluginapi.StreamChunkInterceptRequest) {
-	if tracker == nil || strings.TrimSpace(request.RequestID) == "" {
-		return
-	}
-	tracker.mu.Lock()
-	defer tracker.mu.Unlock()
-	if marker := tracker.directMarkerLocked(request.RequestID); marker != nil && !marker.fallback {
-		marker.capture.observeStream(request, tracker.now().UTC())
-	}
-}
-
-func (tracker *attributionTracker) claim(mark attributionMark) (attributionMarker, bool) {
-	if tracker == nil || mark.id == 0 {
-		return attributionMarker{}, false
-	}
-	tracker.mu.Lock()
-	defer tracker.mu.Unlock()
-	for index := range tracker.markers {
-		marker := &tracker.markers[index]
-		if marker.id == mark.id && !marker.fallback {
-			marker.fallback = true
-			marker.fallbackAt = tracker.now().UTC()
-			return *marker, true
-		}
-	}
-	return attributionMarker{}, false
-}
-
-func (tracker *attributionTracker) completeDirect(completion pluginapi.RequestCompletion) (attributionMarker, bool) {
-	if tracker == nil || strings.TrimSpace(completion.RequestID) == "" {
-		return attributionMarker{}, false
-	}
-	tracker.mu.Lock()
-	defer tracker.mu.Unlock()
-	marker := tracker.directMarkerLocked(completion.RequestID)
-	if marker == nil || marker.fallback {
-		return attributionMarker{}, false
-	}
-	marker.capture.complete(completion)
-	marker.fallback = true
-	marker.fallbackAt = tracker.now().UTC()
-	return *marker, true
-}
-
-func (tracker *attributionTracker) directMarkerLocked(requestID string) *attributionMarker {
-	for index := len(tracker.markers) - 1; index >= 0; index-- {
-		marker := &tracker.markers[index]
-		if marker.direct && marker.requestID == requestID {
-			return marker
-		}
-	}
-	return nil
 }
 
 func (tracker *attributionTracker) matchingIndexesLocked(requestedAt time.Time, fingerprint [sha256.Size]byte, hasCredential bool, models []string, stripSuffix, enforceWindow bool) []int {
@@ -371,14 +265,9 @@ func (tracker *attributionTracker) pruneLocked(now time.Time) {
 	}
 	tracker.lastPrune = now
 	activeCutoff := now.Add(-attributionRetention)
-	fallbackCutoff := now.Add(-fallbackRetention)
 	kept := tracker.markers[:0]
 	for _, marker := range tracker.markers {
-		expired := marker.startedAt.Before(activeCutoff)
-		if marker.fallback {
-			expired = marker.fallbackAt.IsZero() || marker.fallbackAt.Before(fallbackCutoff)
-		}
-		if !expired {
+		if !marker.startedAt.Before(activeCutoff) {
 			kept = append(kept, marker)
 		}
 	}

@@ -59,11 +59,7 @@ func (store *usageStore) Overview(filter usageFilter, granularity string) (usage
 			mode = defaultAccountingMode(record.Provider, record.ExecutorType)
 		}
 		if mode == accountingModeInputIncludesCache {
-			cacheRead := record.CacheReadTokens
-			if cacheRead == 0 {
-				cacheRead = record.CachedTokens
-			}
-			point.CacheReadIncludedTokens += cacheRead
+			point.CacheReadIncludedTokens += effectiveCacheReadTokens(record)
 		}
 		if reasoningIncludedInOutput(record) {
 			point.ReasoningIncludedTokens += record.ReasoningTokens

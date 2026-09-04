@@ -41,6 +41,7 @@ func TestModelRouterWithCLIProxyAPI(t *testing.T) {
 
 	var failedCalls atomic.Int32
 	var workingCalls atomic.Int32
+	var creationCalls atomic.Int32
 	var observedModelsMu sync.Mutex
 	var observedModels []string
 	provider := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -73,6 +74,15 @@ func TestModelRouterWithCLIProxyAPI(t *testing.T) {
 			_, _ = io.WriteString(response, "data: [DONE]\n\n")
 			return
 		}
+		usage := map[string]any{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+		if strings.HasSuffix(body.Model, "working-model") && creationCalls.CompareAndSwap(0, 1) {
+			usage = map[string]any{
+				"prompt_tokens":         3,
+				"completion_tokens":     1,
+				"total_tokens":          4,
+				"prompt_tokens_details": map[string]int{"cache_creation_tokens": 2},
+			}
+		}
 		_ = json.NewEncoder(response).Encode(map[string]any{
 			"id":      "model-router-smoke",
 			"object":  "chat.completion",
@@ -86,7 +96,7 @@ func TestModelRouterWithCLIProxyAPI(t *testing.T) {
 				},
 				"finish_reason": "stop",
 			}},
-			"usage": map[string]int{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+			"usage": usage,
 		})
 	}))
 	defer provider.Close()
@@ -211,14 +221,19 @@ openai-compatibility:
 	if failedCalls.Load() != 1 || workingCalls.Load() != 5 {
 		t.Fatalf("provider calls after direct and streaming requests: failed=%d working=%d, want failed=1 working=5\n%s", failedCalls.Load(), workingCalls.Load(), logs.String())
 	}
+	if creationCalls.Load() != 1 {
+		t.Fatalf("cache-creation fixture was not served; calls=%d models=%v", creationCalls.Load(), observedModels)
+	}
 
 	page := waitForSmokeUsage(t, baseURL, usageStart, 6, 10*time.Second)
 	routedModel := ""
 	foundDirect := false
 	routedSuccesses, routedFailures, directSuccesses := 0, 0, 0
 	totalTokens := uint64(0)
+	cacheCreationTokens := uint64(0)
 	for _, item := range page.Items {
 		totalTokens += item.TotalTokens
+		cacheCreationTokens += item.CacheCreationTokens
 		switch item.Attribution {
 		case attributionRouted:
 			if item.RouterModel == "smoke-router-alias" && item.ProviderModel != "" {
@@ -241,8 +256,8 @@ openai-compatibility:
 	if routedModel == "" || !foundDirect {
 		t.Fatalf("usage records do not distinguish routed and direct calls: %#v\n%s", page.Items, logs.String())
 	}
-	if page.Total != 6 || routedSuccesses != 3 || routedFailures != 1 || directSuccesses != 2 || totalTokens != 12 {
-		t.Fatalf("usage records were missing or duplicated: total=%d routed_success=%d routed_failure=%d direct_success=%d tokens=%d items=%#v\n%s", page.Total, routedSuccesses, routedFailures, directSuccesses, totalTokens, page.Items, logs.String())
+	if page.Total != 6 || routedSuccesses != 3 || routedFailures != 1 || directSuccesses != 2 || totalTokens != 14 || cacheCreationTokens != 2 {
+		t.Fatalf("usage records were missing, duplicated, or lost cache creation: total=%d routed_success=%d routed_failure=%d direct_success=%d tokens=%d cache_creation=%d items=%#v\n%s", page.Total, routedSuccesses, routedFailures, directSuccesses, totalTokens, cacheCreationTokens, page.Items, logs.String())
 	}
 
 	savedPrices := putSmokeManagementJSON[saveModelPricesRequest, modelPriceBook](t, baseURL, modelRouterUsageBasePath+"/prices", saveModelPricesRequest{

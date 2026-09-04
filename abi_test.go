@@ -32,7 +32,7 @@ func TestABIRegistrationRoutingAndCountTokens(t *testing.T) {
 	if err := json.Unmarshal(registrationEnvelope.Result, &registration); err != nil {
 		t.Fatalf("decode registration result: %v", err)
 	}
-	if !registrationEnvelope.OK || registration.SchemaVersion != registrationSchemaVersion || registration.Metadata.Name != pluginName || registration.Metadata.Version != "0.4.2" || !registration.Capabilities.ModelRegistrar || !registration.Capabilities.ModelRouter || !registration.Capabilities.Executor || !registration.Capabilities.RequestInterceptor || !registration.Capabilities.RequestLifecycle || !registration.Capabilities.ResponseInterceptor || !registration.Capabilities.StreamInterceptor || !registration.Capabilities.UsagePlugin || !registration.Capabilities.ManagementAPI {
+	if !registrationEnvelope.OK || registration.SchemaVersion != registrationSchemaVersion || registration.Metadata.Name != pluginName || registration.Metadata.Version != "0.4.2" || !registration.Capabilities.ModelRegistrar || !registration.Capabilities.ModelRouter || !registration.Capabilities.Executor || !registration.Capabilities.RequestInterceptor || registration.Capabilities.RequestLifecycle || registration.Capabilities.ResponseInterceptor || registration.Capabilities.StreamInterceptor || !registration.Capabilities.UsagePlugin || !registration.Capabilities.ManagementAPI {
 		t.Fatalf("registration = %#v", registration)
 	}
 
@@ -57,7 +57,7 @@ func TestABIRegistrationRoutingAndCountTokens(t *testing.T) {
 	}
 
 	usageRequest, err := json.Marshal(pluginapi.UsageRecord{
-		Provider: "openai", Model: "provider-a", RequestedAt: time.Now().UTC(), Detail: pluginapi.UsageDetail{InputTokens: 2, OutputTokens: 1, TotalTokens: 3},
+		Provider: "openai", Model: "provider-a", RequestedAt: time.Now().UTC(), Detail: pluginapi.UsageDetail{InputTokens: 10, OutputTokens: 1, CacheCreationTokens: 2, TotalTokens: 11},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +69,7 @@ func TestABIRegistrationRoutingAndCountTokens(t *testing.T) {
 	activePlugin := modelRouterABIState.plugin
 	modelRouterABIState.Unlock()
 	page, err := activePlugin.store.Requests(usageFilter{From: time.Now().UTC().Add(-time.Hour), To: time.Now().UTC().Add(time.Hour)}, "time", "desc", 0, 10)
-	if err != nil || page.Total != 1 || page.Items[0].TotalTokens != 3 {
+	if err != nil || page.Total != 1 || page.Items[0].TotalTokens != 11 || page.Items[0].CacheCreationTokens != 2 || page.Items[0].EffectiveCacheReadTokens != 0 {
 		t.Fatalf("usage records = %#v, %v", page, err)
 	}
 
