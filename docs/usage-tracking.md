@@ -10,8 +10,8 @@ Usage tracking covers both kinds of CPA traffic:
 
 | Attribution | `router_model` | `provider_model` | Stored row |
 | --- | --- | --- | --- |
-| Routed | Client-visible Model Router alias | Physical CPA target | One row per attempted target, including failures before failover |
-| Direct | Empty | Physical CPA model | One row per direct request |
+| Routed | Client-visible Model Router alias | Physical CPA target | One row per delivered CPA usage record for an attempted target, including failures before failover |
+| Direct | Empty | Physical CPA model | One row per delivered CPA usage record for a direct request |
 | Unattributed official record | Empty | Model from CPA's usage record | One row when a safe correlation cannot be made |
 
 Router and provider identities must remain separate throughout storage, filtering, aggregation, pricing, and display. A routed response can be rewritten to the alias for the client without changing the stored physical provider model.
@@ -90,37 +90,26 @@ The backup is the original bbolt file and must not be overwritten with an unveri
 
 **Reset usage** deletes and recreates only `requests` and `minute_aggregates`. It preserves model pricing and dashboard preferences in `store_state`.
 
-## Capture and deduplication
+## CPA usage delivery and attribution
 
-CPA's `usage_plugin` record is the preferred source because it contains normalized provider metadata. Some CPA versions enqueue `usage.handle` with a request context that is canceled as soon as the response finishes. Model Router therefore maintains a fallback path:
+CPA's `usage_plugin` callback is the sole usage source. CPA normalizes provider metadata, timing, failures, totals, cache reads, cache creation, and reasoning before delivering `usage.handle`; Model Router does not parse response bodies or stream chunks for usage and does not persist a fallback record.
 
 ```text
 request starts
     |
-    +-- routed alias --> mark alias + physical attempt --> host.model.* response/stream
-    |                                                |
-    |                                                +--> parse fallback usage
+    +-- routed alias --> mark alias + physical attempt --> host.model.*
     |
-    +-- direct model --> request interceptor --> response/stream interceptor
-                                                     |
-                                                     +--> request.complete finalizes
+    +-- direct model --> request interceptor --> host request
 
-official usage arrives in time --------> consume marker and store official record
-fallback stores first -----------------> retain tombstone and suppress late official record
+CPA usage.handle callback --> correlate marker and store one request row
+                         +--> unmatched or ambiguous: store as unattributed
 ```
 
-Correlation uses request time, provider model, and an in-memory keyed fingerprint of the client credential when available. The fingerprint secret is random for the process and is never persisted. Ambiguous markers with conflicting router identities are not guessed; an unassignable timestamp-less callback is suppressed so each attempt's fallback remains the sole record, while other unmatched records are stored as unattributed.
+Correlation uses request time, provider model, and an in-memory keyed fingerprint of the client credential when available. The fingerprint secret is random for the process and is never persisted. A uniquely matched marker is consumed. Conflicting candidates and timestamp-less callbacks with multiple active candidates are not guessed; the delivered record is retained as `unattributed`. Markers expire after 24 hours and are capped at 50,000 entries.
 
-Fallback parsing supports the usage shapes used by:
+CPA v7.2.143 or newer is required. That release detaches asynchronous native usage delivery from request cancellation while preserving context values. CPA v7.2.142 and older can cancel `usage.handle` before Model Router receives it; the plugin does not recreate missing records from response bodies.
 
-- OpenAI Chat Completions;
-- OpenAI Responses;
-- Claude messages;
-- Gemini `usageMetadata`;
-- interactions payloads;
-- JSON and Server-Sent Events, including usage split across chunks.
-
-Streaming capture records time to first payload and merges cumulative usage by taking the greatest observed counter. Routed stream retry behavior is unchanged: an attempt can fail over only before any upstream payload is emitted.
+Routed stream retry behavior is unchanged: an attempt can fail over only before any upstream payload is emitted. CPA remains responsible for stream timing and usage totals.
 
 ## Stored data and privacy boundary
 
@@ -161,8 +150,8 @@ A model can also define ordered context thresholds, service-tier-specific schedu
 
 | Mode | Meaning |
 | --- | --- |
-| `input_includes_cache` | Cache-read tokens are already part of input and are subtracted before applying the normal input rate |
-| `input_excludes_cache` | Input and cache-read tokens are billed independently |
+| `input_includes_cache` | Cache-read and cache-creation tokens are already part of input and are subtracted before applying the normal input rate |
+| `input_excludes_cache` | Input, cache-read, and cache-creation tokens are billed independently |
 | empty | Provider-default calculation |
 
 The price book has a monotonically increasing revision. Save and sync requests must name the revision they loaded; a stale revision returns `409` instead of overwriting another edit.
@@ -226,9 +215,8 @@ Overview, group, and request queries accept RFC3339 `from` and `to` plus optiona
 config.go                    storage configuration and validation
 plugin_path*.go              default database path discovery
 main.go                      plugin capabilities and usage callbacks
-abi.go                       schema negotiation and lifecycle dispatch
-attribution.go               correlation markers, ambiguity handling, tombstones
-usage_capture.go             direct/routed fallback parsing and finalization
+abi.go                       schema negotiation and usage dispatch
+attribution.go               correlation markers and ambiguity handling
 usage_types.go               persisted and API data contracts
 usage_store.go               SQLite WAL lifecycle, records, reset, prices, preferences
 usage_migration.go           v0.3 bbolt parity migration and crash recovery
@@ -248,13 +236,15 @@ Before publishing changes to this feature, run:
 make check
 make build
 CPA_SOURCE=../CLIProxyAPI \
-  go test -tags=integration ./... -run TestModelRouterWithCLIProxyAPI -count=1
+  go test -tags=integration ./... -count=1
 ```
+
+Public CI runs this suite against the exact CPA v7.2.143 commit so the minimum supported delivery contract remains covered.
 
 Then install the built library in a disposable CPA instance and verify:
 
 1. Configuration is the default tab and keyboard tab navigation works.
-2. Routed and direct streaming and non-streaming calls appear once.
+2. Routed and direct streaming and non-streaming requests remain distinct, and every delivered CPA usage record appears once.
 3. A failed routed target appears separately from the successful retry.
 4. Refresh keeps old values and scroll positions visible while requests are pending.
 5. Every chart tooltip and highlight works with pointer and keyboard input, including after zoom, resize, refresh, and theme changes.

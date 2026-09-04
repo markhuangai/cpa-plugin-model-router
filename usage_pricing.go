@@ -371,10 +371,7 @@ func estimateUsageCost(record storedUsageRecord, resolver modelPriceResolver) es
 	if !ok {
 		return estimatedCost{}
 	}
-	cacheRead := record.CacheReadTokens
-	if cacheRead == 0 {
-		cacheRead = record.CachedTokens
-	}
+	cacheRead := effectiveCacheReadTokens(record)
 	cacheCreation := record.CacheCreationTokens
 	mode := price.AccountingMode
 	if mode == "" {
@@ -385,12 +382,7 @@ func estimateUsageCost(record storedUsageRecord, resolver modelPriceResolver) es
 	}
 	billableInput, contextTokens := record.InputTokens, record.InputTokens
 	if mode == accountingModeInputIncludesCache {
-		if billableInput > cacheRead {
-			billableInput -= cacheRead
-		} else {
-			billableInput = 0
-		}
-		contextTokens = saturatingAdd(record.InputTokens, cacheCreation)
+		billableInput = saturatingSub(record.InputTokens, saturatingAdd(cacheRead, cacheCreation))
 	} else {
 		contextTokens = saturatingAdd(record.InputTokens, saturatingAdd(cacheRead, cacheCreation))
 	}
@@ -429,10 +421,8 @@ func estimateUsageCost(record storedUsageRecord, resolver modelPriceResolver) es
 }
 
 func defaultAccountingMode(provider, executor string) string {
-	if equalFold(provider, "anthropic") || equalFold(executor, "claude") {
-		return accountingModeInputExcludesCache
-	}
-	return accountingModeInputIncludesCache
+	mode, _ := usageAccountingModes(provider, executor)
+	return mode
 }
 
 func reasoningIncludedInOutput(record storedUsageRecord) bool {
@@ -442,8 +432,27 @@ func reasoningIncludedInOutput(record storedUsageRecord) bool {
 	case reasoningModeSeparate:
 		return false
 	default:
-		return !equalFold(record.Provider, "google") && !equalFold(record.Provider, "gemini") && !equalFold(record.ExecutorType, "gemini")
+		_, mode := usageAccountingModes(record.Provider, record.ExecutorType)
+		return mode != reasoningModeSeparate
 	}
+}
+
+func usageAccountingModes(provider, executor string) (string, string) {
+	normalizedProvider := strings.ToLower(strings.TrimSpace(provider))
+	normalizedExecutor := strings.ToLower(strings.TrimSpace(executor))
+	value := strings.TrimSpace(normalizedProvider + " " + normalizedExecutor)
+	if normalizedExecutor == "openaicompatexecutor" || normalizedProvider == "openai-compatibility" || strings.HasPrefix(normalizedProvider, "openai-compatible-") {
+		return accountingModeInputIncludesCache, reasoningModeIncluded
+	}
+	if strings.Contains(value, "claude") || strings.Contains(value, "anthropic") {
+		return accountingModeInputExcludesCache, reasoningModeIncluded
+	}
+	for _, marker := range []string{"google", "gemini", "aistudio", "antigravity", "vertex", "interaction"} {
+		if strings.Contains(value, marker) {
+			return accountingModeInputIncludesCache, reasoningModeSeparate
+		}
+	}
+	return accountingModeInputIncludesCache, reasoningModeIncluded
 }
 
 func tokenCostUSD(tokens uint64, perMillion float64) float64 {
@@ -455,4 +464,11 @@ func saturatingAdd(left, right uint64) uint64 {
 		return math.MaxUint64
 	}
 	return left + right
+}
+
+func saturatingSub(value, amount uint64) uint64 {
+	if amount >= value {
+		return 0
+	}
+	return value - amount
 }

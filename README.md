@@ -26,7 +26,7 @@ The plugin does not call providers directly. For each selected physical model it
 
 ## Compatibility
 
-The module is built against `github.com/router-for-me/CLIProxyAPI/v7` v7.2.123. It negotiates RPC schema v2 with older compatible hosts and schema v3 when offered; schema v3 avoids resending the full request body with every streaming response chunk. The CPA host must support native plugins, `model_router`, `executor`, `model_registrar`, request lifecycle and response interceptors, `usage_plugin`, and the `host.model.*` callback methods. The configuration and usage page also requires CPA's `management_api` capability and plugin resource menus.
+The module is built against `github.com/router-for-me/CLIProxyAPI/v7` v7.2.143 and requires CPA v7.2.143 or newer. That release preserves asynchronous native `usage_plugin` callbacks after request completion; older hosts can silently omit usage records. The plugin negotiates RPC schema v2 with older compatible hosts and schema v3 when offered; schema v3 avoids resending the full request body with every streaming response chunk. The CPA host must support native plugins, `model_router`, `executor`, `model_registrar`, request interception, `usage_plugin`, and the `host.model.*` callback methods. The configuration and usage page also requires CPA's `management_api` capability and plugin resource menus.
 
 Build the plugin for the same operating system and architecture as CPA. A Go `c-shared` library is not portable across OS or CPU targets.
 
@@ -79,7 +79,7 @@ Version 0.4.0 opens the configured path as SQLite in WAL mode. When that path co
 
 Version 0.4.2 keeps configuration actions out of the way until the draft differs from the loaded CPA configuration. Version 0.4.1 added weighted ordered targets for round-robin routes; the weight is a manual outer-routing share, and CPA still selects the credential behind the chosen model.
 
-Every completed attempt is committed synchronously. Usage history, prices, and dashboard preferences therefore survive a normal CPA restart when the same database file remains mounted and writable. WAL allows an old and a new plugin generation to overlap while CPA hot-loads a compatible update. Retention deletes expired rows; SQLite may retain reusable pages, so high-volume installations should monitor the database file and choose retention based on request rate and available storage.
+Every usage record received by the plugin is committed synchronously. On supported CPA versions, asynchronous native usage delivery survives request completion. Usage history, prices, and dashboard preferences therefore survive a normal CPA restart when the same database file remains mounted and writable. WAL allows an old and a new plugin generation to overlap while CPA hot-loads a compatible update. Retention deletes expired rows; SQLite may retain reusable pages, so high-volume installations should monitor the database file and choose retention based on request rate and available storage.
 
 ### Updating from v0.3.x
 
@@ -112,13 +112,13 @@ The dashboard HTML is a public plugin resource so CPA can embed it in the fronte
 
 ### Usage tracking
 
-Usage tracking records one row for every physical routed attempt, including failed attempts before failover, and one row for direct provider requests. A routed row keeps the client-visible router alias in `router_model` and the physical CPA target in `provider_model`; direct rows have no router alias. This separation is used consistently in filters, summaries, grouped results, and request details.
+Usage tracking stores one row for each CPA usage record delivered for a physical routed attempt, including failed attempts before failover, and for each delivered direct-provider record. A routed row keeps the client-visible router alias in `router_model` and the physical CPA target in `provider_model`; direct rows have no router alias. This separation is used consistently in filters, summaries, grouped results, and request details.
 
 The dashboard provides preset or custom time ranges, minute/hour/day trends, router/provider/source/tier/result filters, USD cost estimates, configurable columns, server-side sorting and pagination, and model pricing with optional models.dev synchronization. Both usage tables start at 50 rows, and Router model joins Provider, Source, Service tier, and Result in the hidden Usage breakdown defaults; existing saved column and page-size preferences remain authoritative. Token trends use packet columns, cost and efficiency use halo lines, and provider share uses a gapped donut. Every chart has stronger pointer and keyboard hover/focus states while preserving the existing tooltips and filter actions. Manual prices take precedence over synchronized catalog prices, and the pricing dialog closes after a successful save. Pricing units are USD per one million tokens; context tiers, service tiers, and cache accounting modes are supported.
 
 Refreshes keep the previous dashboard visible while three fenced requests load in parallel. Starting a newer refresh aborts the older one, and only the newest generation may update the page. Automatic refresh runs every 15 seconds only while Usage tracking is selected and the document is visible. Reset deletes request history and aggregates but preserves prices and dashboard preferences.
 
-The plugin prefers CPA's official usage record when it arrives in time. Because some CPA versions enqueue that record with a request context that is canceled at response completion, the plugin also captures usage from non-streaming responses, streaming chunks, and request-completion callbacks. A short-lived attribution marker suppresses a late official record after fallback storage, preventing double-counting.
+The plugin persists CPA's normalized `usage_plugin` record as its sole usage source. CPA supplies token counters, cache-read and cache-creation counters, timing, provider metadata, and failure state; the plugin only correlates the record to a routed or direct marker, persists it, and applies its local pricing and aggregation. CPA v7.2.142 and older can lose these callbacks and are not supported; the plugin does not recreate missing records from response bodies.
 
 See [docs/usage-tracking.md](docs/usage-tracking.md) for the data contract, operational guidance, API routes, and implementation map.
 
@@ -208,23 +208,24 @@ make check
 make build
 ```
 
-`make build` writes the host-platform library to `dist/model-router.<ext>`. The default suite covers strict config parsing, priority and round-robin state, reconfiguration, failure classification, header sanitization, model rewriting, non-stream failover, stream boundaries, usage parsing and attribution, persistence, pricing, management endpoints, the management page, and native RPC registration.
+`make build` writes the host-platform library to `dist/model-router.<ext>`. The default suite covers strict config parsing, priority and round-robin state, reconfiguration, failure classification, header sanitization, model rewriting, non-stream failover, stream boundaries, CPA usage attribution, persistence, pricing, management endpoints, the management page, and native RPC registration.
 
 Run the opt-in black-box test against a local CPA source checkout:
 
 ```bash
 CPA_SOURCE=../CLIProxyAPI \
-  go test -tags=integration -run TestModelRouterWithCLIProxyAPI -count=1 -v
+  go test -tags=integration ./... -count=1 -v
 ```
 
-The black-box test builds CPA and the native plugin in a temporary directory, starts two logical providers on a local mock OpenAI-compatible server, loads the library through CPA, and verifies all of the following without real provider credentials:
+The black-box test builds CPA and the native plugin in a temporary directory, starts two logical providers on a local mock OpenAI-compatible server, loads the library through CPA, and verifies all of the following without real provider credentials. Public CI runs it against the minimum supported CPA v7.2.143 commit:
 
 - the logical alias appears in `/v1/models`;
 - the Model Router menu and parser-backed validation endpoint are available;
 - a `429` from the first target fails over to the second target;
 - the client sees the requested alias in the response;
 - the failed target remains on cooldown for the next request;
-- routed and direct streaming and non-streaming usage remain distinct and are not duplicated;
+- routed and direct streaming and non-streaming requests remain distinct, and every usage callback delivered by CPA is persisted once;
+- cache-creation counters delivered by CPA remain nonzero in the stored request and cost breakdown when the provider reports them;
 - usage history, model prices, and dashboard preferences survive a CPA restart.
 
 The test currently runs on Linux and macOS.
@@ -257,8 +258,8 @@ curl -fsS http://127.0.0.1:8317/v0/management/plugins \
 
 - Routed token-count requests return HTTP `501` with code `model_route_count_tokens_unsupported`. The current host callback contract exposes model execution but not routed token counting. Returning an explicit error avoids reporting a false zero.
 - Host execution errors do not expose the upstream `Retry-After` header to the plugin. Cooldowns therefore use `cooldown_seconds`, even when a provider asks for a longer delay.
-- Nested host execution has no explicit requested-router metadata field. The plugin correlates official usage to a short-lived in-memory marker and falls back to response parsing when CPA does not deliver the official record.
-- Status-less errors lose some structured failure information at the ABI boundary. The fallback classifier is conservative and may stop on an unfamiliar transient error until that error is added explicitly.
+- Nested host execution has no explicit requested-router metadata field. The plugin correlates CPA usage records to a short-lived in-memory marker; a record that cannot be correlated is stored as `unattributed`.
+- Status-less errors lose some structured failure information at the ABI boundary. The failure classifier is conservative and may stop on an unfamiliar transient error until that error is added explicitly.
 - Cooldown and round-robin state is process-local. It survives config reconfiguration when a route is unchanged, but not a CPA process restart.
 
 ## Security Notes

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"net/url"
 	"sort"
 	"strings"
@@ -18,12 +19,15 @@ func storedRecordFromUsage(record pluginapi.UsageRecord, attribution attribution
 	if detail.TotalTokens == 0 {
 		detail.TotalTokens = synthesizedOfficialUsageTotal(record, detail)
 	}
+	accountingMode, reasoningMode := usageAccountingModes(record.Provider, record.ExecutorType)
 	return storedUsageRecord{
 		RequestedAt:         requestedAt,
 		Attribution:         attribution.Kind,
 		RouterModel:         attribution.RouterModel,
 		Provider:            strings.TrimSpace(record.Provider),
 		ExecutorType:        strings.TrimSpace(record.ExecutorType),
+		AccountingMode:      accountingMode,
+		ReasoningMode:       reasoningMode,
 		ProviderModel:       firstNonEmpty(strings.TrimSpace(record.Model), strings.TrimSpace(record.Alias), "unknown"),
 		ProviderAlias:       strings.TrimSpace(record.Alias),
 		Source:              safeStoredUsageSource(record),
@@ -46,11 +50,29 @@ func storedRecordFromUsage(record pluginapi.UsageRecord, attribution attribution
 }
 
 func synthesizedOfficialUsageTotal(record pluginapi.UsageRecord, detail pluginapi.UsageDetail) int64 {
-	accounting := usagePayloadAccounting{AccountingMode: defaultAccountingMode(record.Provider, record.ExecutorType)}
-	if equalFold(record.Provider, "google") || equalFold(record.Provider, "gemini") || equalFold(record.ExecutorType, "gemini") {
-		accounting.ReasoningMode = reasoningModeSeparate
+	accountingMode, reasoningMode := usageAccountingModes(record.Provider, record.ExecutorType)
+	values := []int64{detail.InputTokens, detail.OutputTokens}
+	if accountingMode == accountingModeInputExcludesCache {
+		values = append(values, detail.CacheReadTokens, detail.CacheCreationTokens)
 	}
-	return synthesizedUsageTotal(detail, accounting)
+	if reasoningMode == reasoningModeSeparate {
+		values = append(values, detail.ReasoningTokens)
+	}
+	return saturatingTokenSum(values...)
+}
+
+func saturatingTokenSum(values ...int64) int64 {
+	var total int64
+	for _, value := range values {
+		if value <= 0 {
+			continue
+		}
+		if total > math.MaxInt64-value {
+			return math.MaxInt64
+		}
+		total += value
+	}
+	return total
 }
 
 func safeStoredUsageSource(record pluginapi.UsageRecord) string {

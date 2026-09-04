@@ -10,10 +10,17 @@ permissions:
 
 jobs:
   test:
-    runs-on: docker-runner
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
+      - name: Check out minimum supported CPA v7.2.143
+        uses: actions/checkout@v7
+        with:
+          repository: router-for-me/CLIProxyAPI
+          ref: 4b5f1eab25fca4b3815369a826e958e7c070a69e
+          path: .cpa-source
           persist-credentials: false
       - uses: actions/setup-go@v7
         with:
@@ -26,6 +33,8 @@ jobs:
       - run: go test ./...
       - run: go test -race ./...
       - run: go vet ./...
+      - name: Test minimum supported CPA integration
+        run: CPA_SOURCE="$GITHUB_WORKSPACE/.cpa-source" go test -tags=integration ./... -count=1
       - name: Build native plugin
         run: |
           mkdir -p dist

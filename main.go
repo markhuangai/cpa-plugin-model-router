@@ -24,14 +24,11 @@ type modelRouterPlugin struct {
 }
 
 var (
-	_ pluginapi.ModelRouter            = (*modelRouterPlugin)(nil)
-	_ pluginapi.ModelRegistrar         = (*modelRouterPlugin)(nil)
-	_ pluginapi.ProviderExecutor       = (*modelRouterPlugin)(nil)
-	_ pluginapi.RequestInterceptor     = (*modelRouterPlugin)(nil)
-	_ pluginapi.RequestLifecyclePlugin = (*modelRouterPlugin)(nil)
-	_ pluginapi.ResponseInterceptor    = (*modelRouterPlugin)(nil)
-	_ pluginapi.StreamChunkInterceptor = (*modelRouterPlugin)(nil)
-	_ pluginapi.UsagePlugin            = (*modelRouterPlugin)(nil)
+	_ pluginapi.ModelRouter        = (*modelRouterPlugin)(nil)
+	_ pluginapi.ModelRegistrar     = (*modelRouterPlugin)(nil)
+	_ pluginapi.ProviderExecutor   = (*modelRouterPlugin)(nil)
+	_ pluginapi.RequestInterceptor = (*modelRouterPlugin)(nil)
+	_ pluginapi.UsagePlugin        = (*modelRouterPlugin)(nil)
 )
 
 func newModelRouterPlugin(configYAML []byte, previous *modelRouterPlugin) (*modelRouterPlugin, pluginapi.Metadata, error) {
@@ -100,12 +97,12 @@ func (p *modelRouterPlugin) HttpRequest(_ context.Context, _ pluginapi.ExecutorH
 }
 
 func (p *modelRouterPlugin) HandleUsage(_ context.Context, record pluginapi.UsageRecord) {
-	if p == nil || !p.config.Enabled || p.store == nil || p.attribution == nil {
+	if p == nil || !p.config.Enabled || p.store == nil {
 		return
 	}
-	attribution := p.attribution.Match(record)
-	if attribution.Suppress {
-		return
+	attribution := attributionResult{Kind: attributionUnresolved}
+	if p.attribution != nil {
+		attribution = p.attribution.Match(record)
 	}
 	_ = p.store.Record(storedRecordFromUsage(record, attribution))
 }
@@ -117,8 +114,7 @@ func (p *modelRouterPlugin) InterceptRequestBeforeAuth(_ context.Context, reques
 	if _, routed := p.matchingRoute(request.RequestedModel); routed {
 		return pluginapi.RequestInterceptResponse{}, nil
 	}
-	now := p.attribution.now().UTC()
-	p.attribution.MarkDirectRequest(request, newDirectUsageCapture(request, now))
+	p.attribution.MarkDirectRequest(request)
 	return pluginapi.RequestInterceptResponse{}, nil
 }
 
@@ -127,31 +123,6 @@ func (p *modelRouterPlugin) InterceptRequestAfterAuth(_ context.Context, request
 		p.attribution.updateDirectRequest(request)
 	}
 	return pluginapi.RequestInterceptResponse{}, nil
-}
-
-func (p *modelRouterPlugin) InterceptResponse(_ context.Context, request pluginapi.ResponseInterceptRequest) (pluginapi.ResponseInterceptResponse, error) {
-	if p != nil && p.config.Enabled && p.attribution != nil {
-		p.attribution.observeDirectResponse(request)
-	}
-	return pluginapi.ResponseInterceptResponse{}, nil
-}
-
-func (p *modelRouterPlugin) InterceptStreamChunk(_ context.Context, request pluginapi.StreamChunkInterceptRequest) (pluginapi.StreamChunkInterceptResponse, error) {
-	if p != nil && p.config.Enabled && p.attribution != nil {
-		p.attribution.observeDirectStream(request)
-	}
-	return pluginapi.StreamChunkInterceptResponse{}, nil
-}
-
-func (p *modelRouterPlugin) HandleRequestComplete(_ context.Context, completion pluginapi.RequestCompletion) error {
-	if p == nil || !p.config.Enabled || p.store == nil || p.attribution == nil {
-		return nil
-	}
-	marker, claimed := p.attribution.completeDirect(completion)
-	if claimed {
-		_ = p.store.Record(marker.capture.storedRecord(marker))
-	}
-	return nil
 }
 
 func main() {}

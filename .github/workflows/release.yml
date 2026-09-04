@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   test:
-    runs-on: docker-runner
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
@@ -38,7 +38,7 @@ jobs:
   build:
     name: cross-build release assets
     needs: test
-    runs-on: rootless-docker
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: read
@@ -86,7 +86,7 @@ jobs:
   publish:
     name: publish release
     needs: build
-    runs-on: docker-runner
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     env:

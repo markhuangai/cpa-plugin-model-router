@@ -268,29 +268,6 @@ func handleModelRouterABIMethod(ctx context.Context, method string, request []by
 			response, err = plugin.InterceptRequestAfterAuth(ctx, rpcRequest)
 		}
 		return okEnvelopeWithError(response, err)
-	case pluginabi.MethodRequestComplete:
-		var completion pluginapi.RequestCompletion
-		if err := json.Unmarshal(request, &completion); err != nil {
-			return nil, fmt.Errorf("decode request.complete request: %w", err)
-		}
-		if err := plugin.HandleRequestComplete(ctx, completion); err != nil {
-			return nil, err
-		}
-		return okEnvelope(map[string]any{})
-	case pluginabi.MethodResponseInterceptAfter:
-		var rpcRequest pluginapi.ResponseInterceptRequest
-		if err := json.Unmarshal(request, &rpcRequest); err != nil {
-			return nil, fmt.Errorf("decode response.intercept_after request: %w", err)
-		}
-		response, err := plugin.InterceptResponse(ctx, rpcRequest)
-		return okEnvelopeWithError(response, err)
-	case pluginabi.MethodResponseInterceptStreamChunk:
-		var rpcRequest pluginapi.StreamChunkInterceptRequest
-		if err := json.Unmarshal(request, &rpcRequest); err != nil {
-			return nil, fmt.Errorf("decode response.intercept_stream_chunk request: %w", err)
-		}
-		response, err := plugin.InterceptStreamChunk(ctx, rpcRequest)
-		return okEnvelopeWithError(response, err)
 	case pluginabi.MethodUsageHandle:
 		var record pluginapi.UsageRecord
 		if err := json.Unmarshal(request, &record); err != nil {
@@ -338,9 +315,9 @@ func registerModelRouter(raw []byte) ([]byte, error) {
 			ModelRouter:           true,
 			Executor:              true,
 			RequestInterceptor:    true,
-			RequestLifecycle:      true,
-			ResponseInterceptor:   true,
-			StreamInterceptor:     true,
+			RequestLifecycle:      false,
+			ResponseInterceptor:   false,
+			StreamInterceptor:     false,
 			UsagePlugin:           true,
 			ManagementAPI:         true,
 			ExecutorModelScope:    pluginapi.ExecutorModelScopeStatic,
