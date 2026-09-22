@@ -22,6 +22,31 @@ func handleUsageManagement(plugin *modelRouterPlugin, path string, request plugi
 		return modelRouterJSONResponse(http.StatusServiceUnavailable, map[string]string{"error": "usage_storage_unavailable", "message": "usage storage is not initialized"})
 	}
 	switch path {
+	case modelRouterUsageBasePath + "/dashboard":
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return usageMethodNotAllowed(http.MethodGet)
+		}
+		filter, err := parseUsageFilter(request.Query)
+		if err != nil {
+			return usageBadRequest(err)
+		}
+		granularity, err := validateQueryChoice(request.Query.Get("granularity"), "hour", []string{"minute", "hour", "day"})
+		if err != nil {
+			return usageBadRequest(fmt.Errorf("granularity: %w", err))
+		}
+		groups, err := parseUsageGroupOptions(request.Query, "group_")
+		if err != nil {
+			return usageBadRequest(err)
+		}
+		requests, err := parseUsagePageOptions(request.Query, "request_", "time", requestSortFields)
+		if err != nil {
+			return usageBadRequest(err)
+		}
+		result, err := plugin.store.Dashboard(filter, granularity, groups, requests)
+		if err != nil {
+			return usageStorageError(err)
+		}
+		return modelRouterJSONResponse(http.StatusOK, result)
 	case modelRouterUsageBasePath + "/overview":
 		if !strings.EqualFold(request.Method, http.MethodGet) {
 			return usageMethodNotAllowed(http.MethodGet)
@@ -47,23 +72,11 @@ func handleUsageManagement(plugin *modelRouterPlugin, path string, request plugi
 		if err != nil {
 			return usageBadRequest(err)
 		}
-		dimension, err := validateQueryChoice(request.Query.Get("dimension"), "provider_model", groupDimensions)
-		if err != nil {
-			return usageBadRequest(fmt.Errorf("dimension: %w", err))
-		}
-		sortField, err := validateQueryChoice(request.Query.Get("sort"), "total_tokens", groupSortFields)
-		if err != nil {
-			return usageBadRequest(fmt.Errorf("sort: %w", err))
-		}
-		order, err := validateQueryChoice(request.Query.Get("order"), "desc", []string{"asc", "desc"})
-		if err != nil {
-			return usageBadRequest(fmt.Errorf("order: %w", err))
-		}
-		offset, limit, err := parsePagination(request.Query.Get("offset"), request.Query.Get("limit"))
+		options, err := parseUsageGroupOptions(request.Query, "")
 		if err != nil {
 			return usageBadRequest(err)
 		}
-		page, err := plugin.store.Groups(filter, dimension, sortField, order, offset, limit)
+		page, err := plugin.store.Groups(filter, options.Dimension, options.Sort, options.Order, options.Offset, options.Limit)
 		if err != nil {
 			return usageStorageError(err)
 		}
@@ -76,19 +89,11 @@ func handleUsageManagement(plugin *modelRouterPlugin, path string, request plugi
 		if err != nil {
 			return usageBadRequest(err)
 		}
-		sortField, err := validateQueryChoice(request.Query.Get("sort"), "time", requestSortFields)
-		if err != nil {
-			return usageBadRequest(fmt.Errorf("sort: %w", err))
-		}
-		order, err := validateQueryChoice(request.Query.Get("order"), "desc", []string{"asc", "desc"})
-		if err != nil {
-			return usageBadRequest(fmt.Errorf("order: %w", err))
-		}
-		offset, limit, err := parsePagination(request.Query.Get("offset"), request.Query.Get("limit"))
+		options, err := parseUsagePageOptions(request.Query, "", "time", requestSortFields)
 		if err != nil {
 			return usageBadRequest(err)
 		}
-		page, err := plugin.store.Requests(filter, sortField, order, offset, limit)
+		page, err := plugin.store.Requests(filter, options.Sort, options.Order, options.Offset, options.Limit)
 		if err != nil {
 			return usageStorageError(err)
 		}
@@ -104,6 +109,32 @@ func handleUsageManagement(plugin *modelRouterPlugin, path string, request plugi
 	default:
 		return modelRouterJSONResponse(http.StatusNotFound, map[string]string{"error": "not_found", "message": "usage management resource not found"})
 	}
+}
+
+func parseUsagePageOptions(query map[string][]string, prefix, defaultSort string, fields []string) (usagePageOptions, error) {
+	var options usagePageOptions
+	var err error
+	options.Sort, err = validateQueryChoice(firstQuery(query, prefix+"sort"), defaultSort, fields)
+	if err != nil {
+		return options, fmt.Errorf("%ssort: %w", prefix, err)
+	}
+	options.Order, err = validateQueryChoice(firstQuery(query, prefix+"order"), "desc", []string{"asc", "desc"})
+	if err != nil {
+		return options, fmt.Errorf("%sorder: %w", prefix, err)
+	}
+	options.Offset, options.Limit, err = parsePagination(firstQuery(query, prefix+"offset"), firstQuery(query, prefix+"limit"))
+	return options, err
+}
+
+func parseUsageGroupOptions(query map[string][]string, prefix string) (usageGroupOptions, error) {
+	var options usageGroupOptions
+	var err error
+	options.Dimension, err = validateQueryChoice(firstQuery(query, prefix+"dimension"), "provider_model", groupDimensions)
+	if err != nil {
+		return options, fmt.Errorf("%sdimension: %w", prefix, err)
+	}
+	options.usagePageOptions, err = parseUsagePageOptions(query, prefix, "total_tokens", groupSortFields)
+	return options, err
 }
 
 func handleUsagePrices(plugin *modelRouterPlugin, request pluginapi.ManagementRequest) pluginapi.ManagementResponse {

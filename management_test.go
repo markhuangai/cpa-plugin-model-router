@@ -36,6 +36,7 @@ func TestModelRouterABIAdvertisesConfigurationResource(t *testing.T) {
 	}
 	wantedRoutes := map[string]bool{
 		http.MethodPost + " /plugins/model-router/validate":          false,
+		http.MethodGet + " /plugins/model-router/usage/dashboard":    false,
 		http.MethodGet + " /plugins/model-router/usage/overview":     false,
 		http.MethodGet + " /plugins/model-router/usage/groups":       false,
 		http.MethodGet + " /plugins/model-router/usage/requests":     false,
@@ -124,6 +125,7 @@ func TestModelRouterManagementDashboardReusesCPAMCSessionAndTheme(t *testing.T) 
 		"configurationActionsResizeObserver=new ResizeObserver(updateConfigurationActionsClearance)",
 		"id=\"usage-panel\" class=\"tab-panel usage-panel\" role=\"tabpanel\"",
 		"/v0/management/plugins/model-router/usage",
+		"requestManagementJSON(USAGE_API+'/dashboard?'",
 		"requestManagementJSON(USAGE_API+'/overview?'",
 		"requestManagementJSON(USAGE_API+'/groups?'",
 		"requestManagementJSON(USAGE_API+'/requests?'",

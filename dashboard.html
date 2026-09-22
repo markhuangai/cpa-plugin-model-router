@@ -848,7 +848,7 @@ const REJECTED_KEY='cpa_model_router_rejected_key';
 const REJECTED_AT='cpa_model_router_rejected_at';
 const state={enabled:true,priority:'0',routes:[],availableModels:[],catalogLoaded:false,catalogError:'',baselineSnapshot:null,dirty:false,busy:false};
 const usageState={
-  active:false,initialized:false,preferencesLoaded:false,loading:false,generation:0,controller:null,timer:0,preferenceTimer:0,preferenceSaveGeneration:0,preferenceSaveInFlight:false,preferenceSaveQueued:false,resizeTimer:0,
+  active:false,initialized:false,preferencesLoaded:false,loading:false,generation:0,controller:null,timer:0,filterTimer:0,displayedRange:null,displayedFilterKey:'',pendingFullRefresh:false,preferenceTimer:0,preferenceSaveGeneration:0,preferenceSaveInFlight:false,preferenceSaveQueued:false,resizeTimer:0,
   overview:null,groupPage:null,requestPage:null,range:'24h',granularity:'hour',customFrom:'',customTo:'',attribution:'',routerModel:'',providerModel:'',source:'',serviceTier:'',result:'',pricingDialogGeneration:0,pricingWriteInFlight:null,
   group:{dimension:'provider_model',sort:'total_tokens',order:'desc',offset:0,limit:50},
   request:{sort:'time',order:'desc',offset:0,limit:50},
@@ -1251,6 +1251,8 @@ function handleTabKey(event){
   activateTab(tabs[next].id==='usage-tab'?'usage':'configuration',true);
 }
 function stopUsagePolling(){
+  window.clearTimeout(usageState.filterTimer);
+  usageState.filterTimer=0;
   window.clearTimeout(usageState.timer);
   usageState.timer=0;
   usageState.generation++;
@@ -1324,49 +1326,68 @@ function usageBaseQuery(range){
   }
   return params;
 }
-async function refreshUsage(resetOffsets=false){
+function usageFilterKey(){
+  return JSON.stringify([usageState.range,usageState.customFrom,usageState.customTo,usageState.attribution,usageState.routerModel,usageState.providerModel,usageState.source,usageState.serviceTier,usageState.result]);
+}
+function appendUsageTableQuery(params,kind,prefix=''){
+  const table=usageState[kind];
+  if(kind==='group')params.set(prefix+'dimension',table.dimension);
+  for(const key of ['sort','order','offset','limit'])params.set(prefix+key,String(table[key]));
+}
+async function refreshUsage(resetOffsets=false,scope='all'){
   if(!usageState.active||document.hidden)return;
+  window.clearTimeout(usageState.timer);usageState.timer=0;
+  window.clearTimeout(usageState.filterTimer);usageState.filterTimer=0;
   if(resetOffsets){usageState.group.offset=0;usageState.request.offset=0}
+  const filterKey=usageFilterKey();
+  if(!usageState.displayedRange||usageState.pendingFullRefresh||usageState.loading||filterKey!==usageState.displayedFilterKey)scope='all';
   let range;
-  try{range=resolvedUsageRange()}catch(error){setUsageStatus(error.message,'error');return}
+  try{range=scope==='all'?resolvedUsageRange():usageState.displayedRange}catch(error){stopUsagePolling();setUsageStatus(error.message,'error');return}
   if(usageState.controller)usageState.controller.abort();
   const controller=new AbortController();
   const generation=++usageState.generation;
   usageState.controller=controller;
   usageState.loading=true;
+  if(scope==='all')usageState.pendingFullRefresh=true;
   usagePanelEl.setAttribute('aria-busy','true');
   usageRefreshEl.disabled=true;
   setUsageStatus(usageState.overview?'Refreshing usage; current data remains visible.':'Loading usage data…','loading');
   const common=usageBaseQuery(range);
-  const groupQuery=new URLSearchParams(common);
-  groupQuery.set('dimension',usageState.group.dimension);
-  groupQuery.set('sort',usageState.group.sort);
-  groupQuery.set('order',usageState.group.order);
-  groupQuery.set('offset',String(usageState.group.offset));
-  groupQuery.set('limit',String(usageState.group.limit));
-  const requestQuery=new URLSearchParams(common);
-  requestQuery.set('sort',usageState.request.sort);
-  requestQuery.set('order',usageState.request.order);
-  requestQuery.set('offset',String(usageState.request.offset));
-  requestQuery.set('limit',String(usageState.request.limit));
   try{
     const options={signal:controller.signal,cache:'no-store'};
-    const [overview,groups,requests]=await Promise.all([
-      requestManagementJSON(USAGE_API+'/overview?'+common.toString(),options),
-      requestManagementJSON(USAGE_API+'/groups?'+groupQuery.toString(),options),
-      requestManagementJSON(USAGE_API+'/requests?'+requestQuery.toString(),options)
-    ]);
+    let result;
+    if(scope==='all'){
+      appendUsageTableQuery(common,'group','group_');appendUsageTableQuery(common,'request','request_');
+      result=await requestManagementJSON(USAGE_API+'/dashboard?'+common.toString(),options);
+    }else if(scope==='overview'){
+      result=await requestManagementJSON(USAGE_API+'/overview?'+common.toString(),options);
+    }else if(scope==='group'){
+      appendUsageTableQuery(common,'group');
+      result=await requestManagementJSON(USAGE_API+'/groups?'+common.toString(),options);
+    }else{
+      appendUsageTableQuery(common,'request');
+      result=await requestManagementJSON(USAGE_API+'/requests?'+common.toString(),options);
+    }
     if(generation!==usageState.generation||!usageState.active||document.hidden)return;
-    usageState.overview=overview;
-    usageState.groupPage=groups;
-    usageState.requestPage=requests;
-    renderUsageDashboard();
-    const updated=new Date(overview.generated_at);
+    if(scope==='all'){
+      usageState.overview=result.overview;usageState.groupPage=result.groups;usageState.requestPage=result.requests;
+      usageState.displayedRange=range;usageState.displayedFilterKey=filterKey;usageState.pendingFullRefresh=false;
+      renderUsageDashboard();
+    }else if(scope==='overview'){
+      usageState.overview=result;renderUsageSummary();renderUsageFilterOptions();renderUsageCharts();
+    }else if(scope==='group'){
+      usageState.groupPage=result;renderGroupTable();
+    }else{
+      usageState.requestPage=result;renderRequestTable();
+    }
+    const updated=new Date(result.generated_at);
     const updatedText=Number.isNaN(updated.getTime())?'now':updated.toLocaleTimeString();
-    setUsageStatus(range.label+' · updated '+updatedText+(overview.storage_error?' · storage warning: '+overview.storage_error:''),overview.storage_error?'error':'info');
+    const storageError=usageState.overview&&usageState.overview.storage_error;
+    setUsageStatus(range.label+' · updated '+updatedText+(storageError?' · storage warning: '+storageError:''),storageError?'error':'info');
     usageLiveEl.hidden=false;
   }catch(error){
     if(error.name!=='AbortError'&&generation===usageState.generation){
+      usageState.pendingFullRefresh=true;
       setUsageStatus('Refresh failed: '+error.message+'. Existing data is unchanged.','error');
     }
   }finally{
@@ -1707,10 +1728,13 @@ function prepareChart(id){
   return{canvas,context,width,height,left:52,right:18,top:14,bottom:34,plotWidth:width-70,plotHeight:height-48};
 }
 function visibleChartPoints(kind){
-  const points=(usageState.overview&&usageState.overview.series||[]).slice();
+  const points=usageState.overview&&usageState.overview.series||[];
   const zoom=Math.max(1,Number(usageState.zoom[kind]||1));
   const count=Math.max(2,Math.ceil(points.length/zoom));
-  return points.slice(Math.max(0,points.length-count));
+  return count>=points.length?points:points.slice(points.length-count);
+}
+function chartMaximum(points,value,floor){
+  return points.reduce((maximum,point)=>Math.max(maximum,value(point)),floor);
 }
 function chartBucketTitle(value){
   const date=new Date(value);
@@ -1884,10 +1908,10 @@ function renderTokenChart(){
     {key:'output',label:'Output',field:'output_tokens',color:'--chart-output'},
     {key:'cache_read',label:'Cache read',field:'effective_cache_read_tokens',color:'--chart-cache'},
     {key:'reasoning',label:'Reasoning',field:'reasoning_tokens',color:'--chart-reasoning'}
-  ].filter(item=>!usageState.hiddenTokenSeries.has(item.key));
+  ].filter(item=>!usageState.hiddenTokenSeries.has(item.key)).map(item=>({...item,resolvedColor:chartColor(item.color)}));
   if(!points.length){clearChartInteraction('token-chart');drawEmptyChart(chart,'No token usage in this range.');return}
   if(!definitions.length){clearChartInteraction('token-chart');drawEmptyChart(chart,'All token series are hidden.');return}
-  const total=point=>definitions.reduce((sum,item)=>sum+tokenChartValue(point,item,definitions),0),max=Math.max(1,...points.map(total));
+  const total=point=>definitions.reduce((sum,item)=>sum+tokenChartValue(point,item,definitions),0),max=chartMaximum(points,total,1);
   const slot=chart.plotWidth/points.length,barWidth=Math.max(4,Math.min(30,slot*.62)),items=points.map((point,index)=>({point,anchor:{x:chart.left+slot*(index+.5),y:chart.top+10}})),active=remapChartActive('token-chart',items);
   drawGrid(chart,max);
   if(active>=0){chart.context.save();chart.context.globalAlpha=.9;chart.context.fillStyle=chartColor('--chart-highlight');fillRoundedRect(chart.context,chart.left+slot*active+1,chart.top+1,Math.max(0,slot-2),chart.plotHeight-2,8);chart.context.restore()}
@@ -1896,7 +1920,7 @@ function renderTokenChart(){
     let bottom=chart.top+chart.plotHeight;
     definitions.forEach(item=>{
       const value=tokenChartValue(point,item,definitions),height=value/max*chart.plotHeight;
-      if(height>0){const context=chart.context,gap=Math.min(2,height*.16),segmentHeight=Math.max(1,height-gap);context.save();context.fillStyle=chartColor(item.color);context.globalAlpha=activeBucket?.98:.9;if(activeBucket){context.shadowColor=chartColor(item.color);context.shadowBlur=10}fillRoundedRect(context,barX,bottom-height+gap/2,currentBarWidth,segmentHeight,Math.min(5,currentBarWidth/3,segmentHeight/2));context.restore()}
+      if(height>0){const context=chart.context,gap=Math.min(2,height*.16),segmentHeight=Math.max(1,height-gap);context.save();context.fillStyle=item.resolvedColor;context.globalAlpha=activeBucket?.98:.9;if(activeBucket){context.shadowColor=item.resolvedColor;context.shadowBlur=10}fillRoundedRect(context,barX,bottom-height+gap/2,currentBarWidth,segmentHeight,Math.min(5,currentBarWidth/3,segmentHeight/2));context.restore()}
       bottom-=height;
     });
     if(activeBucket&&total(point)>0){const height=total(point)/max*chart.plotHeight,context=chart.context;context.save();context.strokeStyle=chartColor('--blue');context.lineWidth=1.5;context.shadowColor=chartColor('--blue');context.shadowBlur=8;strokeRoundedRect(context,barX-3,chart.top+chart.plotHeight-height-3,currentBarWidth+6,height+6,6);context.shadowBlur=0;context.fillStyle=chartColor('--blue');context.beginPath();context.arc(barX+currentBarWidth/2,chart.top+chart.plotHeight-height-8,3.5,0,Math.PI*2);context.fill();context.restore()}
@@ -1928,7 +1952,7 @@ function lineHitIndex(chart,count,x,y){
 function renderCostChart(){
   const chart=prepareChart('cost-chart'),points=visibleChartPoints('cost');
   if(!points.length){clearChartInteraction('cost-chart');drawEmptyChart(chart,'No cost data in this range.');return}
-  const value=point=>Number(point.cost_usd||0),max=Math.max(.000001,...points.map(value)),items=points.map((point,index)=>({point,anchor:{x:linePointX(chart,points.length,index),y:chart.top+chart.plotHeight-value(point)/max*chart.plotHeight}})),active=remapChartActive('cost-chart',items);
+  const value=point=>Number(point.cost_usd||0),max=chartMaximum(points,value,.000001),items=points.map((point,index)=>({point,anchor:{x:linePointX(chart,points.length,index),y:chart.top+chart.plotHeight-value(point)/max*chart.plotHeight}})),active=remapChartActive('cost-chart',items);
   drawGrid(chart,max,item=>formatUSD(item));drawLine(chart,points,value,chartColor('--chart-cost'),max,active);drawXLabels(chart,points,false);
   if(active>=0){const x=linePointX(chart,points.length,active),y=chart.top+chart.plotHeight-value(points[active])/max*chart.plotHeight;drawActiveLineGuide(chart,x,[{y,color:chartColor('--chart-cost')}])}
   setChartInteraction('cost-chart',{canvas:chart.canvas,width:chart.width,height:chart.height,items,hitTest:(x,y)=>lineHitIndex(chart,points.length,x,y),describe:item=>({title:chartBucketTitle(item.point.time),rows:[{label:'Estimated cost',value:formatUSD(item.point.cost_usd),color:'--chart-cost'},{label:'Requests',value:formatNumber(item.point.requests)}]})});
@@ -1937,7 +1961,7 @@ function renderEfficiencyChart(){
   const chart=prepareChart('efficiency-chart'),points=visibleChartPoints('efficiency');
   if(!points.length){clearChartInteraction('efficiency-chart');drawEmptyChart(chart,'No timing data in this range.');return}
   const latency=point=>Number(point.average_latency_ns||0)/1e6,ttft=point=>Number(point.average_ttft_ns||0)/1e6,tps=point=>Number(point.average_tps||0);
-  const timingMax=Math.max(1,...points.map(point=>Math.max(latency(point),ttft(point)))),tpsMax=Math.max(1,...points.map(tps)),scaledTPS=point=>tps(point)*timingMax/tpsMax;
+  const timingMax=chartMaximum(points,point=>Math.max(latency(point),ttft(point)),1),tpsMax=chartMaximum(points,tps,1),scaledTPS=point=>tps(point)*timingMax/tpsMax;
   const items=points.map((point,index)=>({point,anchor:{x:linePointX(chart,points.length,index),y:chart.top+10}})),active=remapChartActive('efficiency-chart',items);
   drawGrid(chart,timingMax,value=>value>=1000?(value/1000).toFixed(1)+'s':Math.round(value)+'ms',ratio=>(tpsMax*ratio).toFixed(0));
   drawLine(chart,points,latency,chartColor('--chart-input'),timingMax,active);drawLine(chart,points,ttft,chartColor('--chart-cache'),timingMax,active);drawLine(chart,points,scaledTPS,chartColor('--chart-output'),timingMax,active);drawXLabels(chart,points,false);
@@ -2472,14 +2496,21 @@ async function saveConfiguration(){
     showToast(error.message,'error');
   }finally{setBusy(false)}
 }
-function usageControlChanged(){clearChartActive(false);usageState.group.offset=0;usageState.request.offset=0;refreshUsage(false)}
+function usageControlChanged(){
+  clearChartActive(false);usageState.group.offset=0;usageState.request.offset=0;
+  usageState.pendingFullRefresh=true;usageState.generation++;
+  if(usageState.controller)usageState.controller.abort();
+  window.clearTimeout(usageState.timer);usageState.timer=0;
+  window.clearTimeout(usageState.filterTimer);
+  usageState.filterTimer=window.setTimeout(()=>{usageState.filterTimer=0;refreshUsage(false)},250);
+}
 function sortUsageTable(event){
   const button=event.target.closest('[data-table-kind][data-sort-field]');
   if(!button)return;
   const kind=button.dataset.tableKind,table=usageState[kind],field=button.dataset.sortField,definitions=kind==='group'?groupColumns:requestColumns,column=definitions.find(item=>item.sort===field);
   if(table.sort===field)table.order=table.order==='asc'?'desc':'asc';
   else{table.sort=field;table.order=column&&column.text?'asc':'desc'}
-  table.offset=0;scheduleUsagePreferencesSave();refreshUsage(false);
+  table.offset=0;scheduleUsagePreferencesSave();refreshUsage(false,kind);
 }
 function changeColumnVisibility(event){
   const input=event.target.closest('[data-column-kind][data-column-key]');
@@ -2520,7 +2551,7 @@ usageRangeEl.addEventListener('change',()=>{
   if(usageState.range==='custom')initializeCustomRange();
   scheduleUsagePreferencesSave();usageControlChanged();
 });
-usageGranularityEl.addEventListener('change',()=>{usageState.granularity=usageGranularityEl.value;scheduleUsagePreferencesSave();usageControlChanged()});
+usageGranularityEl.addEventListener('change',()=>{usageState.granularity=usageGranularityEl.value;scheduleUsagePreferencesSave();clearChartActive(false);refreshUsage(false,'overview')});
 usageRouterModelEl.addEventListener('change',()=>{
   const value=usageRouterModelEl.value;
   usageState.routerModel=value.startsWith(ROUTER_FILTER_MODEL_PREFIX)?value.slice(ROUTER_FILTER_MODEL_PREFIX.length):'';
@@ -2534,13 +2565,13 @@ usageResultEl.addEventListener('change',()=>{usageState.result=usageResultEl.val
 usageFromEl.addEventListener('change',()=>{usageState.customFrom=usageFromEl.value;if(usageState.range==='custom'){scheduleUsagePreferencesSave();usageControlChanged()}});
 usageToEl.addEventListener('change',()=>{usageState.customTo=usageToEl.value;if(usageState.range==='custom'){scheduleUsagePreferencesSave();usageControlChanged()}});
 usageRefreshEl.addEventListener('click',()=>refreshUsage(false));
-document.getElementById('group-dimension').addEventListener('change',event=>{usageState.group.dimension=event.target.value;usageState.group.offset=0;scheduleUsagePreferencesSave();refreshUsage(false)});
-document.getElementById('group-page-size').addEventListener('change',event=>{usageState.group.limit=Number(event.target.value);usageState.group.offset=0;scheduleUsagePreferencesSave();refreshUsage(false)});
-document.getElementById('request-page-size').addEventListener('change',event=>{usageState.request.limit=Number(event.target.value);usageState.request.offset=0;scheduleUsagePreferencesSave();refreshUsage(false)});
-document.getElementById('group-prev').addEventListener('click',()=>{usageState.group.offset=Math.max(0,usageState.group.offset-usageState.group.limit);refreshUsage(false)});
-document.getElementById('group-next').addEventListener('click',()=>{usageState.group.offset+=usageState.group.limit;refreshUsage(false)});
-document.getElementById('request-prev').addEventListener('click',()=>{usageState.request.offset=Math.max(0,usageState.request.offset-usageState.request.limit);refreshUsage(false)});
-document.getElementById('request-next').addEventListener('click',()=>{usageState.request.offset+=usageState.request.limit;refreshUsage(false)});
+document.getElementById('group-dimension').addEventListener('change',event=>{usageState.group.dimension=event.target.value;usageState.group.offset=0;scheduleUsagePreferencesSave();refreshUsage(false,'group')});
+document.getElementById('group-page-size').addEventListener('change',event=>{usageState.group.limit=Number(event.target.value);usageState.group.offset=0;scheduleUsagePreferencesSave();refreshUsage(false,'group')});
+document.getElementById('request-page-size').addEventListener('change',event=>{usageState.request.limit=Number(event.target.value);usageState.request.offset=0;scheduleUsagePreferencesSave();refreshUsage(false,'request')});
+document.getElementById('group-prev').addEventListener('click',()=>{usageState.group.offset=Math.max(0,usageState.group.offset-usageState.group.limit);refreshUsage(false,'group')});
+document.getElementById('group-next').addEventListener('click',()=>{usageState.group.offset+=usageState.group.limit;refreshUsage(false,'group')});
+document.getElementById('request-prev').addEventListener('click',()=>{usageState.request.offset=Math.max(0,usageState.request.offset-usageState.request.limit);refreshUsage(false,'request')});
+document.getElementById('request-next').addEventListener('click',()=>{usageState.request.offset+=usageState.request.limit;refreshUsage(false,'request')});
 document.getElementById('group-headers').addEventListener('click',sortUsageTable);
 document.getElementById('request-headers').addEventListener('click',sortUsageTable);
 document.getElementById('group-column-options').addEventListener('change',changeColumnVisibility);

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -381,13 +383,40 @@ func pruneSQLiteTransaction(transaction *sql.Tx, retentionDays int, now time.Tim
 	return err
 }
 
-func (store *usageStore) records(filter usageFilter) ([]storedUsageRecord, error) {
+func (store *usageStore) readSnapshot(read func(*sql.Conn, int) error) (err error) {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 	if store.db == nil {
-		return nil, errors.New("usage database is closed")
+		return errors.New("usage database is closed")
 	}
-	query := `SELECT requested_at_ns, payload FROM requests`
+	ctx := context.Background()
+	connection, err := store.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer connection.Close()
+	// BeginTx ignores ReadOnly in this driver and would use the writer's BEGIN IMMEDIATE.
+	if _, err = connection.ExecContext(ctx, "BEGIN DEFERRED"); err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if _, rollbackErr := connection.ExecContext(ctx, "ROLLBACK"); rollbackErr != nil {
+				err = errors.Join(err, rollbackErr)
+				_ = connection.Raw(func(any) error { return driver.ErrBadConn })
+			}
+		}
+	}()
+	if err = read(connection, store.retentionDays); err != nil {
+		return err
+	}
+	_, err = connection.ExecContext(ctx, "COMMIT")
+	committed = err == nil
+	return err
+}
+
+func usageTimeWhere(filter usageFilter) (string, []any) {
 	args := make([]any, 0, 2)
 	conditions := make([]string, 0, 2)
 	if !filter.From.IsZero() {
@@ -399,35 +428,33 @@ func (store *usageStore) records(filter usageFilter) ([]storedUsageRecord, error
 		args = append(args, filter.To.UTC().UnixNano())
 	}
 	if len(conditions) > 0 {
-		query += " WHERE " + strings.Join(conditions, " AND ")
+		return " WHERE " + strings.Join(conditions, " AND "), args
 	}
-	query += " ORDER BY requested_at_ns, sequence"
-	rows, err := store.db.Query(query, args...)
+	return "", args
+}
+
+func scanUsageRecords(connection *sql.Conn, filter usageFilter, visit func(storedUsageRecord)) error {
+	where, args := usageTimeWhere(filter)
+	rows, err := connection.QueryContext(context.Background(), `SELECT payload FROM requests`+where+` ORDER BY requested_at_ns, sequence`, args...)
 	if err != nil {
-		store.recordError(err)
-		return nil, err
+		return err
 	}
 	defer rows.Close()
-	records := make([]storedUsageRecord, 0)
+	var value sql.RawBytes
+	var record storedUsageRecord
 	for rows.Next() {
-		var timestamp int64
-		var value []byte
-		if err := rows.Scan(&timestamp, &value); err != nil {
-			return nil, err
+		if err := rows.Scan(&value); err != nil {
+			return err
 		}
-		var record storedUsageRecord
+		record = storedUsageRecord{}
 		if err := json.Unmarshal(value, &record); err != nil {
-			return nil, fmt.Errorf("decode usage record: %w", err)
+			return fmt.Errorf("decode usage record: %w", err)
 		}
 		if filter.matches(record) {
-			records = append(records, record)
+			visit(record)
 		}
 	}
-	if err := rows.Err(); err != nil {
-		store.recordError(err)
-		return nil, err
-	}
-	return records, nil
+	return rows.Err()
 }
 
 func (store *usageStore) ResetUsage() error {
@@ -467,16 +494,7 @@ func (store *usageStore) QueryPriceBook() (modelPriceBook, error) {
 	if store.db == nil {
 		return modelPriceBook{}, errors.New("usage database is closed")
 	}
-	book := emptyModelPriceBook()
-	var raw []byte
-	err := store.db.QueryRow(`SELECT prices_json FROM store_state WHERE id = 1`).Scan(&raw)
-	if err == nil && len(raw) > 0 {
-		err = json.Unmarshal(raw, &book)
-	}
-	if book.Prices == nil {
-		book.Prices = map[string]modelPrice{}
-	}
-	return book, err
+	return priceBookFromSQLite(store.db)
 }
 
 func (store *usageStore) SavePriceBook(request saveModelPricesRequest, now time.Time) (modelPriceBook, error) {
@@ -497,7 +515,7 @@ func (store *usageStore) SavePriceBook(request saveModelPricesRequest, now time.
 	if err != nil {
 		return modelPriceBook{}, err
 	}
-	current, err := priceBookFromSQLiteTransaction(transaction)
+	current, err := priceBookFromSQLite(transaction)
 	if err == nil && current.Revision != request.Revision {
 		err = errPriceRevisionConflict
 	}
@@ -547,7 +565,7 @@ func (store *usageStore) ApplyPriceSync(prices map[string]modelPrice, settings p
 	if err != nil {
 		return modelPriceBook{}, err
 	}
-	current, err := priceBookFromSQLiteTransaction(transaction)
+	current, err := priceBookFromSQLite(transaction)
 	if err == nil && current.Revision != revision {
 		err = errPriceRevisionConflict
 	}
@@ -604,10 +622,12 @@ func (store *usageStore) ApplyPriceSync(prices map[string]modelPrice, settings p
 	return result, err
 }
 
-func priceBookFromSQLiteTransaction(transaction *sql.Tx) (modelPriceBook, error) {
+func priceBookFromSQLite(reader interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}) (modelPriceBook, error) {
 	book := emptyModelPriceBook()
 	var raw []byte
-	if err := transaction.QueryRow(`SELECT prices_json FROM store_state WHERE id = 1`).Scan(&raw); err != nil {
+	if err := reader.QueryRowContext(context.Background(), `SELECT prices_json FROM store_state WHERE id = 1`).Scan(&raw); err != nil {
 		return modelPriceBook{}, err
 	}
 	if len(raw) > 0 {

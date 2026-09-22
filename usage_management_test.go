@@ -65,6 +65,70 @@ func TestUsageManagementOverviewRequestsPricesPreferencesAndReset(t *testing.T) 
 	}
 }
 
+func TestUsageManagementDashboardQueryOptions(t *testing.T) {
+	store, filter := usageQueryFixture(t)
+	plugin := &modelRouterPlugin{store: store}
+	query := url.Values{
+		"from": {filter.From.Format(time.RFC3339Nano)}, "to": {filter.To.Format(time.RFC3339Nano)}, "granularity": {"minute"},
+		"source": {"GATEWAY"}, "group_dimension": {"router_model"}, "group_sort": {"key"}, "group_order": {"asc"}, "group_offset": {"1"}, "group_limit": {"3"},
+		"request_sort": {"cost"}, "request_order": {"asc"}, "request_offset": {"2"}, "request_limit": {"4"},
+	}
+	response := handleModelRouterManagement(plugin, pluginapi.ManagementRequest{Method: http.MethodGet, Path: modelRouterUsageBasePath + "/dashboard", Query: query})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard returned %d: %s", response.StatusCode, response.Body)
+	}
+	var dashboard usageDashboard
+	if err := json.Unmarshal(response.Body, &dashboard); err != nil {
+		t.Fatal(err)
+	}
+	if dashboard.Overview.Summary.Requests != 48 || dashboard.Requests.Total != 48 || len(dashboard.Requests.Items) != 4 || dashboard.Requests.Offset != 2 || dashboard.Requests.Limit != 4 || dashboard.Groups.Dimension != "router_model" || dashboard.Groups.Offset != 1 || dashboard.Groups.Limit != 3 {
+		t.Fatalf("query options were not applied: %#v", dashboard)
+	}
+	filter.Source = "GATEWAY"
+	want, err := store.referenceUsageRequests(filter, "cost", "asc", 2, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, item := range dashboard.Requests.Items {
+		if item.Sequence != want.Items[index].Sequence {
+			t.Fatal("request ordering did not use the prefixed options")
+		}
+	}
+	if dashboard.GeneratedAt != dashboard.Overview.GeneratedAt || dashboard.GeneratedAt != dashboard.Groups.GeneratedAt || dashboard.GeneratedAt != dashboard.Requests.GeneratedAt || dashboard.PriceBookRevision != dashboard.Requests.PriceBookRevision {
+		t.Fatal("dashboard response has inconsistent snapshot metadata")
+	}
+	if _, err := store.SavePriceBook(saveModelPricesRequest{Revision: dashboard.PriceBookRevision, Prices: map[string]modelPrice{"model-a": {tokenRates: tokenRates{Input: 10}}}}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	response = handleModelRouterManagement(plugin, pluginapi.ManagementRequest{Method: http.MethodGet, Path: modelRouterUsageBasePath + "/dashboard", Query: query})
+	if err := json.Unmarshal(response.Body, &dashboard); err != nil {
+		t.Fatal(err)
+	}
+	if dashboard.PriceBookRevision != 2 || dashboard.Requests.PriceBookRevision != 2 || dashboard.Overview.Costs.UnpricedRequests == 0 {
+		t.Fatal("new price revision was not applied to the whole dashboard")
+	}
+}
+
+func TestUsageManagementDashboardRejectsInvalidOptions(t *testing.T) {
+	store, _ := usageQueryFixture(t)
+	plugin := &modelRouterPlugin{store: store}
+	for _, test := range []struct{ key, value string }{
+		{"granularity", "week"}, {"from", "invalid"}, {"group_dimension", "api_key"}, {"group_sort", "time"}, {"group_order", "sideways"}, {"group_offset", "-1"}, {"group_limit", "501"},
+		{"request_sort", "requests"}, {"request_order", "sideways"}, {"request_offset", "-1"}, {"request_limit", "0"},
+	} {
+		t.Run(test.key, func(t *testing.T) {
+			response := handleModelRouterManagement(plugin, pluginapi.ManagementRequest{Method: http.MethodGet, Path: modelRouterUsageBasePath + "/dashboard", Query: url.Values{test.key: {test.value}}})
+			if response.StatusCode != http.StatusBadRequest {
+				t.Fatalf("invalid option returned %d: %s", response.StatusCode, response.Body)
+			}
+		})
+	}
+	response := handleModelRouterManagement(plugin, pluginapi.ManagementRequest{Method: http.MethodPost, Path: modelRouterUsageBasePath + "/dashboard"})
+	if response.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("unsupported method returned %d", response.StatusCode)
+	}
+}
+
 func TestUsageManagementNamespacesRouterAliasesAndAttribution(t *testing.T) {
 	store, err := openUsageStore(filepath.Join(t.TempDir(), "usage.db"), 365)
 	if err != nil {

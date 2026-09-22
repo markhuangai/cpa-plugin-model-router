@@ -226,6 +226,25 @@ openai-compatibility:
 	}
 
 	page := waitForSmokeUsage(t, baseURL, usageStart, 6, 10*time.Second)
+	var dashboard usageDashboard
+	dashboardPath := modelRouterUsageBasePath + "/dashboard?" + url.Values{
+		"from": {usageStart.Format(time.RFC3339Nano)}, "to": {time.Now().UTC().Format(time.RFC3339Nano)},
+		"granularity": {"minute"}, "group_dimension": {"router_model"}, "request_limit": {"2"},
+	}.Encode()
+	if err := requestSmokeManagementJSON(baseURL, dashboardPath, &dashboard); err != nil {
+		t.Fatal(err)
+	}
+	if dashboard.Overview.Summary.Requests != 6 || dashboard.Requests.Total != 6 || len(dashboard.Requests.Items) != 2 || dashboard.Groups.Dimension != "router_model" || dashboard.GeneratedAt != dashboard.Requests.GeneratedAt {
+		t.Fatalf("combined usage snapshot = %#v", dashboard)
+	}
+	unauthenticated, err := http.Get(baseURL + dashboardPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = unauthenticated.Body.Close()
+	if unauthenticated.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated dashboard status = %d", unauthenticated.StatusCode)
+	}
 	routedModel := ""
 	foundDirect := false
 	routedSuccesses, routedFailures, directSuccesses := 0, 0, 0
