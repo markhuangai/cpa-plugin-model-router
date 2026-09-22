@@ -2,11 +2,37 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
+
+// StartStream may report the upstream status alongside the error. A 400 carried
+// that way must move the request to the next target rather than be treated as an
+// ambiguous failure.
+func TestExecuteStreamFailsOverWhenStartReturnsStatusWithError(t *testing.T) {
+	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "provider-a", "provider-b"))
+	host := &fakeModelHost{reads: map[string][]pluginapi.HostModelStreamReadResponse{
+		"stream-b": {
+			{Payload: []byte(`data: {"model":"provider-b"}` + "\n\n"), Done: true},
+		},
+	}}
+	host.start = func(request pluginapi.HostModelExecutionRequest) (pluginapi.HostModelStreamResponse, error) {
+		if request.Model == "provider-a" {
+			return pluginapi.HostModelStreamResponse{StatusCode: 400}, errors.New(`{"error":{"message":"reasoning settings conflict","code":"convert_request_failed"}}`)
+		}
+		return pluginapi.HostModelStreamResponse{StatusCode: 200, StreamID: "stream-b"}, nil
+	}
+	err := plugin.executeStreamWithHost(context.Background(), pluginapi.ExecutorRequest{Model: "smart", SourceFormat: "openai"}, "plugin-stream", host)
+	if err != nil {
+		t.Fatalf("executeStreamWithHost() error = %v", err)
+	}
+	if len(host.startCalls) != 2 {
+		t.Fatalf("a 400 reported with the error must fail over, start calls = %d", len(host.startCalls))
+	}
+}
 
 func TestExecuteStreamFailsOverBeforePayload(t *testing.T) {
 	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "provider-a", "provider-b"))

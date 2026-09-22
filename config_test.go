@@ -225,3 +225,84 @@ surprise: true
 		})
 	}
 }
+
+func TestRouterConfigFallbackPolicyDefaultsWhenEmpty(t *testing.T) {
+	policy := routerConfig{}.fallbackPolicy()
+	for _, status := range defaultFallbackOnStatus {
+		if !policy.shouldFallback(status) {
+			t.Fatalf("default policy must fall back on %d", status)
+		}
+	}
+}
+
+func TestDecodeRouterConfigFallback(t *testing.T) {
+	raw := []byte(`
+fallback:
+  fallback_on_status: [400, 429]
+  no_fallback_on_status: []
+  stream_fallback_before_first_chunk_only: true
+routes:
+  - alias: demo
+    targets:
+      - model: target-a
+`)
+	cfg, err := decodeRouterConfig(raw)
+	if err != nil {
+		t.Fatalf("decodeRouterConfig() error = %v", err)
+	}
+	policy := cfg.fallbackPolicy()
+	if !policy.shouldFallback(400) || !policy.shouldFallback(429) {
+		t.Fatal("configured statuses must fall back")
+	}
+	if policy.shouldFallback(404) {
+		t.Fatal("404 is not in the configured list and must not fall back")
+	}
+	if !policy.shouldFallback(503) {
+		t.Fatal("503 must still fall back through the 5xx rule")
+	}
+}
+
+func TestDecodeRouterConfigRejectsInvalidFallback(t *testing.T) {
+	cases := map[string]string{
+		"overlap": `
+fallback:
+  fallback_on_status: [429]
+  no_fallback_on_status: [429]
+routes:
+  - alias: demo
+    targets:
+      - model: target-a
+`,
+		"out of range": `
+fallback:
+  fallback_on_status: [99]
+routes:
+  - alias: demo
+    targets:
+      - model: target-a
+`,
+		"stream splice": `
+fallback:
+  stream_fallback_before_first_chunk_only: false
+routes:
+  - alias: demo
+    targets:
+      - model: target-a
+`,
+		"unknown key": `
+fallback:
+  fallback_on_500: true
+routes:
+  - alias: demo
+    targets:
+      - model: target-a
+`,
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := decodeRouterConfig([]byte(raw)); err == nil {
+				t.Fatalf("decodeRouterConfig() accepted invalid fallback config for %q", name)
+			}
+		})
+	}
+}

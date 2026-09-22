@@ -73,6 +73,7 @@ func newModelRouterPlugin(configYAML []byte, previous *modelRouterPlugin) (*mode
 			{Name: "routes", Type: pluginapi.ConfigFieldTypeArray, Description: "Logical model aliases backed by priority or weighted round-robin target pools."},
 			{Name: "data_path", Type: pluginapi.ConfigFieldTypeString, Description: "SQLite usage database path; defaults to model-router.db in the discovered CPA plugins directory."},
 			{Name: "retention_days", Type: pluginapi.ConfigFieldTypeInteger, Description: "Number of UTC days of usage aggregates and request details to retain (1-3650)."},
+			{Name: "fallback", Type: pluginapi.ConfigFieldTypeObject, Description: "Status codes that move a routed request to the next target: fallback_on_status, no_fallback_on_status, stream_fallback_before_first_chunk_only."},
 		},
 	}
 	return plugin, metadata, nil

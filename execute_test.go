@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -106,13 +107,27 @@ func TestExecuteWithHostFailsOverAndRewritesAlias(t *testing.T) {
 	}
 }
 
-func TestExecuteWithHostDoesNotFailOverTerminalError(t *testing.T) {
+func TestExecuteWithHostFailsOverOnBadRequest(t *testing.T) {
 	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "a", "b"))
 	host := &fakeModelHost{execute: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelExecutionResponse, error) {
 		return pluginapi.HostModelExecutionResponse{StatusCode: 400, Body: []byte(`{"error":"invalid request"}`)}, nil
 	}}
 	_, err := plugin.executeWithHost(pluginapi.ExecutorRequest{Model: "smart"}, host)
-	if statusFromError(err) != 400 || len(host.executeCalls) != 1 {
+	if len(host.executeCalls) != 2 {
+		t.Fatalf("a 400 must be retried against the next target, calls = %d", len(host.executeCalls))
+	}
+	if statusFromError(err) != 503 || codeFromError(err, "") != "model_route_unavailable" {
+		t.Fatalf("executeWithHost() error = %v", err)
+	}
+}
+
+func TestExecuteWithHostDoesNotFailOverTerminalError(t *testing.T) {
+	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "a", "b"))
+	host := &fakeModelHost{execute: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelExecutionResponse, error) {
+		return pluginapi.HostModelExecutionResponse{}, context.Canceled
+	}}
+	_, err := plugin.executeWithHost(pluginapi.ExecutorRequest{Model: "smart"}, host)
+	if !errors.Is(err, context.Canceled) || len(host.executeCalls) != 1 {
 		t.Fatalf("executeWithHost() error = %v, calls = %d", err, len(host.executeCalls))
 	}
 }

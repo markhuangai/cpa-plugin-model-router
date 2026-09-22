@@ -29,6 +29,7 @@ func (p *modelRouterPlugin) executeWithHost(request pluginapi.ExecutorRequest, h
 	}
 	requestedModel := strings.TrimSpace(request.Model)
 	bodyInfo := bodyForExecution(request)
+	policy := p.config.fallbackPolicy()
 	var lastErr error
 	attempted := make(map[string]struct{}, len(route.Targets))
 	for attempt := 0; attempt < len(route.Targets); attempt++ {
@@ -64,7 +65,7 @@ func (p *modelRouterPlugin) executeWithHost(request pluginapi.ExecutorRequest, h
 		if err == nil {
 			err = statusError{status: status, message: hostStatusMessage(target, status, response.Body)}
 		}
-		if !eligibleRouteFailure(err) {
+		if !eligibleRouteFailure(err, policy) {
 			return pluginapi.ExecutorResponse{}, err
 		}
 		lastErr = err

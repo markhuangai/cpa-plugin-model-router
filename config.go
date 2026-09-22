@@ -22,6 +22,14 @@ const (
 	maxTargetWeight         = 1_000_000
 )
 
+// defaultFallbackOnStatus is the status set used when fallback_on_status is not
+// configured: client errors that may be specific to a single target's upstream
+// (400, 409, 422), target availability and quota errors (401, 402, 403, 404,
+// 408, 429), and server-side faults (500, 502, 503, 504).
+var defaultFallbackOnStatus = []int{
+	400, 401, 402, 403, 404, 408, 409, 422, 429, 500, 502, 503, 504,
+}
+
 type modelTarget struct {
 	Model  string
 	Weight int
@@ -49,20 +57,39 @@ type modelRouteYAML struct {
 }
 
 type routerConfig struct {
-	Enabled       bool
-	DataPath      string
-	RetentionDays int
-	Routes        []modelRoute
+	Enabled            bool
+	DataPath           string
+	RetentionDays      int
+	Routes             []modelRoute
+	FallbackOnStatus   []int
+	NoFallbackOnStatus []int
+}
+
+// fallbackPolicy resolves the configured status lists into lookup sets. When
+// fallback_on_status is empty, the built-in defaultFallbackOnStatus is used.
+func (c routerConfig) fallbackPolicy() fallbackPolicy {
+	onStatus := c.FallbackOnStatus
+	if len(onStatus) == 0 {
+		onStatus = defaultFallbackOnStatus
+	}
+	return newFallbackPolicy(onStatus, c.NoFallbackOnStatus)
+}
+
+type fallbackConfigYAML struct {
+	FallbackOnStatus                   *[]int `yaml:"fallback_on_status,omitempty"`
+	NoFallbackOnStatus                 *[]int `yaml:"no_fallback_on_status,omitempty"`
+	StreamFallbackBeforeFirstChunkOnly *bool  `yaml:"stream_fallback_before_first_chunk_only,omitempty"`
 }
 
 type routerConfigYAML struct {
-	Enabled       *bool             `yaml:"enabled,omitempty"`
-	Priority      int               `yaml:"priority,omitempty"`
-	Store         yaml.Node         `yaml:"store,omitempty"`
-	DataPath      string            `yaml:"data_path,omitempty"`
-	RetentionDays *int              `yaml:"retention_days,omitempty"`
-	Routes        *[]modelRouteYAML `yaml:"routes,omitempty"`
-	LegacyRoutes  *[]modelRouteYAML `yaml:"model-routes,omitempty"`
+	Enabled       *bool               `yaml:"enabled,omitempty"`
+	Priority      int                 `yaml:"priority,omitempty"`
+	Store         yaml.Node           `yaml:"store,omitempty"`
+	DataPath      string              `yaml:"data_path,omitempty"`
+	RetentionDays *int                `yaml:"retention_days,omitempty"`
+	Routes        *[]modelRouteYAML   `yaml:"routes,omitempty"`
+	LegacyRoutes  *[]modelRouteYAML   `yaml:"model-routes,omitempty"`
+	Fallback      *fallbackConfigYAML `yaml:"fallback,omitempty"`
 }
 
 func decodeRouterConfig(raw []byte) (routerConfig, error) {
@@ -156,10 +183,52 @@ func decodeRouterConfig(raw []byte) (routerConfig, error) {
 			}
 		}
 	}
+	fallbackOnStatus := append([]int(nil), defaultFallbackOnStatus...)
+	var noFallbackOnStatus []int
+	if wire.Fallback != nil {
+		if wire.Fallback.StreamFallbackBeforeFirstChunkOnly != nil && !*wire.Fallback.StreamFallbackBeforeFirstChunkOnly {
+			return routerConfig{}, errors.New("fallback.stream_fallback_before_first_chunk_only must be true: a stream that already emitted a payload cannot be spliced onto another target")
+		}
+		if wire.Fallback.FallbackOnStatus != nil {
+			fallbackOnStatus = append([]int(nil), (*wire.Fallback.FallbackOnStatus)...)
+		}
+		if wire.Fallback.NoFallbackOnStatus != nil {
+			noFallbackOnStatus = append([]int(nil), (*wire.Fallback.NoFallbackOnStatus)...)
+		}
+	}
+	if err := validateFallbackStatuses(fallbackOnStatus, noFallbackOnStatus); err != nil {
+		return routerConfig{}, err
+	}
 	if !enabled {
 		routes = nil
 	}
-	return routerConfig{Enabled: enabled, DataPath: absoluteDataPath, RetentionDays: retentionDays, Routes: routes}, nil
+	return routerConfig{
+		Enabled:            enabled,
+		DataPath:           absoluteDataPath,
+		RetentionDays:      retentionDays,
+		Routes:             routes,
+		FallbackOnStatus:   fallbackOnStatus,
+		NoFallbackOnStatus: noFallbackOnStatus,
+	}, nil
+}
+
+func validateFallbackStatuses(fallbackOnStatus, noFallbackOnStatus []int) error {
+	listed := make(map[int]struct{}, len(fallbackOnStatus))
+	for _, status := range fallbackOnStatus {
+		if status < 100 || status > 599 {
+			return fmt.Errorf("fallback_on_status contains invalid HTTP status %d (must be 100-599)", status)
+		}
+		listed[status] = struct{}{}
+	}
+	for _, status := range noFallbackOnStatus {
+		if status < 100 || status > 599 {
+			return fmt.Errorf("no_fallback_on_status contains invalid HTTP status %d (must be 100-599)", status)
+		}
+		if _, duplicate := listed[status]; duplicate {
+			return fmt.Errorf("HTTP status %d appears in both fallback_on_status and no_fallback_on_status", status)
+		}
+	}
+	return nil
 }
 
 func validateRoute(route modelRoute, index int, aliases map[string]int) error {
