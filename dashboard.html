@@ -2340,15 +2340,84 @@ function createRouteCard(route,index){
   }else route.targets.forEach((target,targetIndex)=>targetList.appendChild(createTargetRow(target,targetIndex,route.targets.length,weighted)));
   return card;
 }
+function routeCardsInOrder(){return Array.from(routesEl.children).filter(child=>child.classList&&child.classList.contains('route-card'))}
+function targetRowsInOrder(card){return card?Array.from(card.querySelectorAll('.target-row')):[]}
+// Reordering swaps the live nodes instead of rebuilding the table. replaceChildren()
+// removes the control that triggered the reorder, and a browser drops focus and resets
+// the page scroll when the focused element is removed.
+function swapNodes(nodes,index,next){
+  const node=nodes[index],reference=nodes[next];
+  if(!node||!reference)return false;
+  if(next>index)reference.after(node);else reference.before(node);
+  return true;
+}
+function renumberRouteCards(){
+  const cards=routeCardsInOrder();
+  cards.forEach((card,index)=>{
+    card.dataset.index=String(index);
+    card.querySelector('.ordinal').textContent=String(index+1).padStart(2,'0');
+    card.querySelector('[data-action="up"]').disabled=index===0;
+    card.querySelector('[data-action="down"]').disabled=index===cards.length-1;
+    const rows=targetRowsInOrder(card);
+    rows.forEach((row,rowIndex)=>{
+      row.dataset.targetIndex=String(rowIndex);
+      row.querySelector('.target-number').textContent=String(rowIndex+1).padStart(2,'0');
+      row.querySelector('[data-action="target-up"]').disabled=rowIndex===0;
+      row.querySelector('[data-action="target-down"]').disabled=rowIndex===rows.length-1;
+      const weight=row.querySelector('[data-target-field="weight"]');
+      if(weight)weight.setAttribute('aria-label','Round-robin weight for target '+(rowIndex+1));
+    });
+  });
+}
+function describeRouteControl(element){
+  if(!element||typeof element.closest!=='function'||!routesEl.contains(element))return null;
+  const button=element.closest('button[data-action]');
+  if(!button)return null;
+  const card=button.closest('.route-card');
+  const row=button.closest('.target-row');
+  return{action:button.dataset.action,routeIndex:card?Number.parseInt(card.dataset.index,10):-1,targetIndex:row?Number.parseInt(row.dataset.targetIndex,10):-1};
+}
+function restoreRouteFocus(descriptor){
+  // Destructive controls are skipped: the row they belonged to no longer exists, and
+  // focusing a different Remove button would let the next Enter key delete that row.
+  if(!descriptor||descriptor.action.startsWith('remove'))return;
+  const card=descriptor.routeIndex>=0?routesEl.querySelector('.route-card[data-index="'+descriptor.routeIndex+'"]'):null;
+  if(!card)return;
+  let scope=card;
+  if(descriptor.targetIndex>=0){
+    const row=targetRowsInOrder(card).find(candidate=>candidate.dataset.targetIndex===String(descriptor.targetIndex));
+    if(row)scope=row;
+  }
+  const button=scope.querySelector('button[data-action="'+descriptor.action+'"]');
+  if(button&&!button.disabled)button.focus({preventScroll:true});
+}
+function keepRouteControlFocus(node,action){
+  if(!node||!action)return;
+  // Re-inserting a node blurs it, so focus is restored explicitly. When the arrow that
+  // triggered the move is disabled at either end of the list, focus moves to the arrow
+  // still enabled in the same row. Remove buttons are never focused.
+  const candidates=Array.from(node.querySelectorAll('button[data-action]')).filter(button=>!button.disabled&&!button.dataset.action.startsWith('remove'));
+  const target=candidates.find(button=>button.dataset.action===action)||candidates[0];
+  if(target)target.focus({preventScroll:true});
+}
 function renderRoutes(){
+  // Rows are still rebuilt when a route or target is added or removed, so the scroll
+  // offset and the focused control are restored around the rebuild.
+  const preserve=!configurationPanelEl.hidden;
+  const scrollX=window.scrollX,scrollY=window.scrollY;
+  const focus=preserve?describeRouteControl(document.activeElement):null;
   routesEl.replaceChildren();
   countEl.textContent=state.routes.length+' '+(state.routes.length===1?'route':'routes');
   updateModelStatus();
   if(state.routes.length===0){
     routesEl.appendChild(document.getElementById('empty-template').content.cloneNode(true));
-    return;
+  }else{
+    state.routes.forEach((route,index)=>routesEl.appendChild(createRouteCard(route,index)));
   }
-  state.routes.forEach((route,index)=>routesEl.appendChild(createRouteCard(route,index)));
+  if(preserve){
+    restoreRouteFocus(focus);
+    window.scrollTo(scrollX,scrollY);
+  }
 }
 function newRoute(){return{alias:'route-'+(state.routes.length+1),strategy:'priority',cooldown_seconds:'60',targets:[{model:'',weight:'1'}]}}
 function addRoute(){state.routes.push(newRoute());renderRoutes();refreshDirty()}
@@ -2356,21 +2425,28 @@ function routeIndexFrom(target){
   const card=target.closest('.route-card');
   return card?Number.parseInt(card.dataset.index,10):-1;
 }
-function moveRoute(index,delta){
+function moveRoute(index,delta,action){
   const next=index+delta;
   if(next<0||next>=state.routes.length)return;
   const moved=state.routes.splice(index,1)[0];
   state.routes.splice(next,0,moved);
-  renderRoutes();
+  const cards=routeCardsInOrder(),card=cards[index];
+  if(swapNodes(cards,index,next)){renumberRouteCards();keepRouteControlFocus(card,action)}
+  else renderRoutes();
   refreshDirty();
 }
-function moveTarget(routeIndex,targetIndex,delta){
-  const targets=state.routes[routeIndex].targets;
+function moveTarget(routeIndex,targetIndex,delta,action){
+  const route=state.routes[routeIndex];
+  if(!route)return;
+  const targets=route.targets;
   const next=targetIndex+delta;
   if(next<0||next>=targets.length)return;
   const moved=targets.splice(targetIndex,1)[0];
   targets.splice(next,0,moved);
-  renderRoutes();
+  const card=routesEl.querySelector('.route-card[data-index="'+routeIndex+'"]');
+  const rows=targetRowsInOrder(card),row=rows[targetIndex];
+  if(swapNodes(rows,targetIndex,next)){renumberRouteCards();keepRouteControlFocus(row,action)}
+  else renderRoutes();
   refreshDirty();
 }
 function updateFromInput(target){
@@ -2400,14 +2476,14 @@ routesEl.addEventListener('click',event=>{
   if(action==='add-route'){addRoute();return}
   const index=routeIndexFrom(button);
   if(index<0)return;
-  if(action==='up')moveRoute(index,-1);
-  if(action==='down')moveRoute(index,1);
+  if(action==='up')moveRoute(index,-1,action);
+  if(action==='down')moveRoute(index,1,action);
   if(action==='remove'){state.routes.splice(index,1);renderRoutes();refreshDirty()}
   if(action==='add-target'&&state.catalogLoaded){state.routes[index].targets.push({model:'',weight:'1'});renderRoutes();refreshDirty()}
   const row=button.closest('.target-row');
   const targetIndex=row?Number.parseInt(row.dataset.targetIndex,10):-1;
-  if(action==='target-up'&&targetIndex>=0)moveTarget(index,targetIndex,-1);
-  if(action==='target-down'&&targetIndex>=0)moveTarget(index,targetIndex,1);
+  if(action==='target-up'&&targetIndex>=0)moveTarget(index,targetIndex,-1,action);
+  if(action==='target-down'&&targetIndex>=0)moveTarget(index,targetIndex,1,action);
   if(action==='remove-target'&&targetIndex>=0){state.routes[index].targets.splice(targetIndex,1);renderRoutes();refreshDirty()}
 });
 function serializeRoutes(){
