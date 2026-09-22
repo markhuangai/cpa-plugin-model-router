@@ -82,6 +82,10 @@ type usageRequestDetail struct {
 }
 
 func requestDetail(record storedUsageRecord, resolver modelPriceResolver) usageRequestDetail {
+	return requestDetailWithCost(record, estimateUsageCost(record, resolver))
+}
+
+func requestDetailWithCost(record storedUsageRecord, cost estimatedCost) usageRequestDetail {
 	generation := record.LatencyNS
 	if record.TTFTNS > 0 && record.LatencyNS >= record.TTFTNS {
 		generation = record.LatencyNS - record.TTFTNS
@@ -90,7 +94,6 @@ func requestDetail(record storedUsageRecord, resolver modelPriceResolver) usageR
 	if generation > 0 {
 		tps = float64(record.OutputTokens) / (float64(generation) / float64(time.Second))
 	}
-	cost := estimateUsageCost(record, resolver)
 	return usageRequestDetail{
 		storedUsageRecord:        record,
 		Result:                   record.result(),
@@ -243,6 +246,15 @@ type usageRequestPage struct {
 	Offset            int                  `json:"offset"`
 	Limit             int                  `json:"limit"`
 	Items             []usageRequestDetail `json:"items"`
+}
+
+type usageDashboard struct {
+	SchemaVersion     uint32           `json:"schema_version"`
+	GeneratedAt       time.Time        `json:"generated_at"`
+	PriceBookRevision uint64           `json:"price_book_revision"`
+	Overview          usageOverview    `json:"overview"`
+	Groups            usageGroupPage   `json:"groups"`
+	Requests          usageRequestPage `json:"requests"`
 }
 
 func equalFold(left, right string) bool {

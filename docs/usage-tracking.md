@@ -177,7 +177,9 @@ The token chart keeps cache-read and separately reported reasoning segments mutu
 
 All four charts expose a viewport-clamped tooltip on pointer hover or keyboard focus. Arrow keys and Home/End move between buckets or provider segments; Escape dismisses the active readout. Token tooltips show visible token series, the visible total, request count, and estimated cost. Cost and efficiency tooltips show the values represented by their lines. Provider-share tooltips show requests, share, tokens, and cost. Clicking an exact provider segment or legend entry, or pressing Enter/Space on a focused segment, toggles the existing provider-model filter. The aggregate Other segment is inspectable but not filterable.
 
-The browser loads overview, groups, and request details in parallel. Existing metrics, charts, and rows stay mounted during a refresh. Each refresh owns an `AbortController` and generation number; only the newest active generation can render. Table scroll positions are restored after row replacement.
+The browser loads overview, groups, and request details through one dashboard query. All three use one SQLite read snapshot and one price-book revision. The query streams matching records into summaries and groups instead of retaining the full history in memory. Unfiltered, time-sorted request pages use the existing timestamp/sequence index; other request sorts retain only the pagination prefix needed to select the requested page. Dimensional filters still scan their selected time window. These paths apply to every range and granularity.
+
+Range and filter changes are debounced for 250 ms. Changing granularity refreshes only overview; sorting, grouping, and pagination refresh only the affected table. Partial refreshes reuse the displayed time interval. When another change overlaps unfinished work, the latest state receives a complete refresh. Existing metrics, charts, and rows stay mounted during a refresh. Each refresh owns an `AbortController` and generation number; only the newest active generation can render. Browser cancellation does not cancel native query execution. Table scroll positions are restored after row replacement.
 
 Polling runs every 15 seconds only when:
 
@@ -197,6 +199,7 @@ All endpoints require CPA Management API authentication.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| `GET` | `/v0/management/plugins/model-router/usage/dashboard` | Overview and both tables from one read snapshot |
 | `GET` | `/v0/management/plugins/model-router/usage/overview` | Summary, series, filter values, and storage status |
 | `GET` | `/v0/management/plugins/model-router/usage/groups` | Sorted and paginated grouped usage |
 | `GET` | `/v0/management/plugins/model-router/usage/requests` | Sorted and paginated request details |
@@ -208,6 +211,8 @@ All endpoints require CPA Management API authentication.
 | `POST` | `/v0/management/plugins/model-router/usage/reset` | Delete usage after receiving `{"confirm":"reset"}` |
 
 Overview, group, and request queries accept RFC3339 `from` and `to` plus optional `attribution`, `router_model`, `provider_model`, `source`, `service_tier`, and `result` filters. `router_model` always matches a literal route alias. Use `attribution=direct`, `attribution=unattributed`, or `attribution=routed` to filter by request origin; this keeps aliases named `direct` or `unattributed` distinct from the synthetic traffic classes. Group and request endpoints also accept `sort`, `order`, `offset`, and `limit`; the maximum page size is 500.
+
+The dashboard endpoint accepts the same filters and `granularity`, plus `group_dimension`, `group_sort`, `group_order`, `group_offset`, `group_limit`, `request_sort`, `request_order`, `request_offset`, and `request_limit`. Defaults and limits match the individual endpoints. It returns `overview`, `groups`, and `requests`, with a shared `generated_at`, `schema_version`, and `price_book_revision` on the outer response. Existing endpoints retain their response formats.
 
 ## Implementation map
 
@@ -241,6 +246,16 @@ CPA_SOURCE=../CLIProxyAPI \
 
 Public CI runs this suite against the exact CPA v7.2.143 commit so the minimum supported delivery contract remains covered.
 
+For repeatable query performance comparisons, point the optional benchmark at a representative SQLite database:
+
+```bash
+CPA_USAGE_BENCH_DB=/path/to/usage-copy.db \
+  go test -run '^$' -bench '^BenchmarkUsageQueries$' \
+  -benchmem -benchtime=1x -count=5 -timeout=45m
+```
+
+The benchmark opens the supplied database in read-only mode without initialization, migration, pruning, or reset. It fixes ranges relative to the newest stored request and compares the original bulk-query algorithm with the streaming implementation. Its cases cover short, weekly, monthly, custom, and full-retained ranges; all granularities and filters; combined and empty searches; every group dimension and request sort; and pagination. Output includes response serialization, elapsed time, and allocations. Record five-run medians, browser rendering time, and end-to-end time separately; local database results do not establish production performance under unknown container limits.
+
 Then install the built library in a disposable CPA instance and verify:
 
 1. Configuration is the default tab and keyboard tab navigation works.
@@ -254,6 +269,8 @@ Then install the built library in a disposable CPA instance and verify:
 9. Usage, prices, and preferences remain after process restart and container recreation with the writable plugins directory mounted.
 10. Light, white, and dark themes redraw charts without console errors.
 11. Reset removes history but preserves prices and preferences.
+12. Settled filter changes issue one dashboard query; granularity and table controls issue only their affected endpoint and preserve the displayed interval.
+13. Rapid overlapping control changes render only the latest complete state; long minute-level series retain all buckets and support chart navigation without argument-limit errors.
 
 ## Origin
 
