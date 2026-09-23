@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "scripts": {
+    "test:e2e": "node --test tests/e2e/dashboard.test.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.63.0"
+  }
+}

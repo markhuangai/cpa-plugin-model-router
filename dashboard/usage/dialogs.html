@@ -1,0 +1,25 @@
+<dialog id="pricing-dialog" aria-labelledby="pricing-title">
+  <div class="dialog-shell">
+    <div class="dialog-head"><div><h2 id="pricing-title">Model pricing</h2><p>USD per million tokens. Manual prices take precedence over synchronized catalog values.</p></div><button id="pricing-close" class="icon-button" type="button" aria-label="Close model pricing">×</button></div>
+    <div class="dialog-body">
+      <div class="pricing-toolbar"><label class="sr-only" for="pricing-model-name">Provider model name</label><input id="pricing-model-name" type="text" placeholder="provider/model-name" autocomplete="off"><button id="pricing-add" class="secondary" type="button">Add model</button><button id="pricing-sync" class="secondary" type="button">Sync models.dev</button></div>
+      <div class="pricing-sync-settings">
+        <label>Provider priority<textarea id="pricing-provider-priority" spellcheck="false" placeholder="openai, google, anthropic"></textarea></label>
+        <label>Ignored model suffixes<textarea id="pricing-ignored-suffixes" spellcheck="false" placeholder="-thinking, (high)"></textarea></label>
+        <label class="wide">Model mappings as JSON<textarea id="pricing-mappings" spellcheck="false" placeholder='[{"source":"alias","target":"catalog-model"}]'></textarea></label>
+      </div>
+      <p id="pricing-status" class="pricing-status">Load the price book to edit rates.</p>
+      <div id="pricing-list" class="price-list"></div>
+      <p id="pricing-error" class="dialog-error" role="alert"></p>
+    </div>
+    <div class="dialog-actions"><button id="pricing-cancel" class="secondary" type="button">Cancel</button><button id="pricing-save" class="primary" type="button">Save pricing</button></div>
+  </div>
+</dialog>
+
+<dialog id="reset-dialog" class="reset-dialog" aria-labelledby="reset-title">
+  <div class="dialog-shell">
+    <div class="dialog-head"><div><h2 id="reset-title">Reset usage history</h2><p>Prices and dashboard preferences will remain saved.</p></div></div>
+    <div class="dialog-body"><p class="reset-copy">This permanently removes tracked request details and aggregates. Type <code>reset</code> to continue.</p><label class="usage-control" for="reset-confirmation">Confirmation</label><input id="reset-confirmation" type="text" autocomplete="off" placeholder="reset"><p id="reset-error" class="dialog-error" role="alert"></p></div>
+    <div class="dialog-actions"><button id="reset-cancel" class="secondary" type="button">Cancel</button><button id="reset-confirm" class="danger-button" type="button" disabled>Reset usage</button></div>
+  </div>
+</dialog>
