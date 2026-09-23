@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -106,13 +107,98 @@ func TestExecuteWithHostFailsOverAndRewritesAlias(t *testing.T) {
 	}
 }
 
-func TestExecuteWithHostDoesNotFailOverTerminalError(t *testing.T) {
+// testRouterPluginFromConfig builds a plugin through the real configuration
+// parser, so a test can exercise the status lists the plugin is configured with.
+func testRouterPluginFromConfig(t *testing.T, raw string) *modelRouterPlugin {
+	t.Helper()
+	cfg, err := decodeRouterConfig([]byte(raw))
+	if err != nil {
+		t.Fatalf("decodeRouterConfig() error = %v", err)
+	}
+	plugin := testRouterPlugin(cfg.Routes...)
+	plugin.config = cfg
+	return plugin
+}
+
+func TestExecuteWithHostDoesNotFailOverOnBadRequest(t *testing.T) {
 	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "a", "b"))
+	rejected := &fakeModelHost{execute: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelExecutionResponse, error) {
+		return pluginapi.HostModelExecutionResponse{StatusCode: 400, Body: []byte(`{"error":"invalid request"}`)}, nil
+	}}
+	_, err := plugin.executeWithHost(pluginapi.ExecutorRequest{Model: "smart"}, rejected)
+	if statusFromError(err) != 400 {
+		t.Fatalf("executeWithHost() error = %v, want the host status", err)
+	}
+	if len(rejected.executeCalls) != 1 {
+		t.Fatalf("a rejected request must not be retried against the next target, calls = %d", len(rejected.executeCalls))
+	}
+	healthy := &fakeModelHost{execute: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelExecutionResponse, error) {
+		return pluginapi.HostModelExecutionResponse{StatusCode: http.StatusOK, Body: []byte(`{"model":"a"}`)}, nil
+	}}
+	if _, err := plugin.executeWithHost(pluginapi.ExecutorRequest{Model: "smart"}, healthy); err != nil {
+		t.Fatalf("a valid request after a rejected one must still reach a provider: %v", err)
+	}
+	if len(healthy.executeCalls) != 1 {
+		t.Fatalf("valid request calls = %d, want 1", len(healthy.executeCalls))
+	}
+	if model := healthy.executeCalls[0].Model; model != "a" {
+		t.Fatalf("the rejected request must not cool the preferred target, valid request selected %q", model)
+	}
+}
+
+func TestExecuteWithHostKeepsRouteAvailableAfterPersistedItemMiss(t *testing.T) {
+	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "a", "b"))
+	miss := &fakeModelHost{execute: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelExecutionResponse, error) {
+		return pluginapi.HostModelExecutionResponse{StatusCode: 404, Body: []byte(`{"error":"items are not persisted when store is false"}`)}, nil
+	}}
+	_, err := plugin.executeWithHost(pluginapi.ExecutorRequest{Model: "smart"}, miss)
+	if statusFromError(err) != 404 || len(miss.executeCalls) != 1 {
+		t.Fatalf("executeWithHost() error = %v, calls = %d", err, len(miss.executeCalls))
+	}
+	healthy := &fakeModelHost{execute: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelExecutionResponse, error) {
+		return pluginapi.HostModelExecutionResponse{StatusCode: http.StatusOK, Body: []byte(`{"model":"a"}`)}, nil
+	}}
+	if _, err := plugin.executeWithHost(pluginapi.ExecutorRequest{Model: "smart"}, healthy); err != nil {
+		t.Fatalf("a persisted response miss must not cool the route: %v", err)
+	}
+	if len(healthy.executeCalls) != 1 {
+		t.Fatalf("valid request calls = %d, want 1", len(healthy.executeCalls))
+	}
+	if model := healthy.executeCalls[0].Model; model != "a" {
+		t.Fatalf("the persisted miss must not cool the preferred target, valid request selected %q", model)
+	}
+}
+
+func TestExecuteWithHostFailsOverOnConfiguredStatus(t *testing.T) {
+	plugin := testRouterPluginFromConfig(t, `
+fallback:
+  fallback_on_status: [400]
+routes:
+  - alias: smart
+    cooldown_seconds: 30
+    targets:
+      - model: a
+      - model: b
+`)
 	host := &fakeModelHost{execute: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelExecutionResponse, error) {
 		return pluginapi.HostModelExecutionResponse{StatusCode: 400, Body: []byte(`{"error":"invalid request"}`)}, nil
 	}}
 	_, err := plugin.executeWithHost(pluginapi.ExecutorRequest{Model: "smart"}, host)
-	if statusFromError(err) != 400 || len(host.executeCalls) != 1 {
+	if len(host.executeCalls) != 2 {
+		t.Fatalf("a 400 listed in fallback_on_status must be retried, calls = %d", len(host.executeCalls))
+	}
+	if statusFromError(err) != 503 || codeFromError(err, "") != "model_route_unavailable" {
+		t.Fatalf("executeWithHost() error = %v", err)
+	}
+}
+
+func TestExecuteWithHostDoesNotFailOverTerminalError(t *testing.T) {
+	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "a", "b"))
+	host := &fakeModelHost{execute: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelExecutionResponse, error) {
+		return pluginapi.HostModelExecutionResponse{}, context.Canceled
+	}}
+	_, err := plugin.executeWithHost(pluginapi.ExecutorRequest{Model: "smart"}, host)
+	if !errors.Is(err, context.Canceled) || len(host.executeCalls) != 1 {
 		t.Fatalf("executeWithHost() error = %v, calls = %d", err, len(host.executeCalls))
 	}
 }

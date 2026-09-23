@@ -78,28 +78,64 @@ func codeFromError(err error, fallback string) string {
 	return fallback
 }
 
-func eligibleRouteFailure(err error) bool {
+// fallbackPolicy decides whether a failed attempt moves on to the next target.
+// The status sets come from plugin configuration, so they can be changed without
+// rebuilding the library.
+type fallbackPolicy struct {
+	onStatus   map[int]struct{}
+	noFallback map[int]struct{}
+}
+
+func newFallbackPolicy(fallbackOnStatus, noFallbackOnStatus []int) fallbackPolicy {
+	policy := fallbackPolicy{
+		onStatus:   make(map[int]struct{}, len(fallbackOnStatus)),
+		noFallback: make(map[int]struct{}, len(noFallbackOnStatus)),
+	}
+	for _, status := range fallbackOnStatus {
+		policy.onStatus[status] = struct{}{}
+	}
+	for _, status := range noFallbackOnStatus {
+		policy.noFallback[status] = struct{}{}
+	}
+	return policy
+}
+
+// shouldFallback reports whether a non-2xx status moves the request to the next
+// target. no_fallback_on_status takes precedence over fallback_on_status. A 5xx
+// that appears in neither list still falls back, because it reports a fault at
+// the target rather than a rejected request.
+func (p fallbackPolicy) shouldFallback(status int) bool {
+	if _, excluded := p.noFallback[status]; excluded {
+		return false
+	}
+	if _, listed := p.onStatus[status]; listed {
+		return true
+	}
+	return status >= http.StatusInternalServerError
+}
+
+func eligibleRouteFailure(err error, policy fallbackPolicy) bool {
 	if err == nil || terminalRequestError(err) {
 		return false
 	}
-	status := statusFromError(err)
-	switch status {
-	case http.StatusBadRequest, http.StatusUnprocessableEntity:
-		return false
-	case http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusForbidden, http.StatusRequestTimeout, http.StatusTooManyRequests:
-		return true
-	case http.StatusNotFound:
-		message := strings.ToLower(err.Error())
-		return !strings.Contains(message, "items are not persisted") && !(strings.Contains(message, "store") && strings.Contains(message, "false"))
-	default:
-		if status >= http.StatusInternalServerError {
-			return true
-		}
-		if status > 0 {
+	if status := statusFromError(err); status > 0 {
+		if persistedResponseMiss(status, err.Error()) {
 			return false
 		}
+		return policy.shouldFallback(status)
 	}
 	return recognizableTransientError(err)
+}
+
+// persistedResponseMiss reports the 404 that describes the request rather than
+// the target. An upstream asked not to persist reports a miss that every other
+// target reproduces, so it must not fail over or cool the route.
+func persistedResponseMiss(status int, message string) bool {
+	if status != http.StatusNotFound {
+		return false
+	}
+	message = strings.ToLower(message)
+	return strings.Contains(message, "items are not persisted") || (strings.Contains(message, "store") && strings.Contains(message, "false"))
 }
 
 func terminalRequestError(err error) bool {
@@ -126,7 +162,7 @@ func recognizableTransientError(err error) bool {
 		"auth_not_found", "auth_unavailable", "model_cooldown", "no auth available", "no active auth", "no available auth",
 		"no active account", "no available account", "account disabled", "auth disabled", "credential disabled", "credentials disabled",
 		"unknown provider", "no provider for model", "provider unavailable", "model unavailable",
-		"timed out", "connection reset", "connection refused", "connection aborted", "broken pipe", "no such host", "network is unreachable", "temporary failure", "eof",
+		"timed out", "timeout", "connection reset", "connection refused", "connection aborted", "broken pipe", "no such host", "network is unreachable", "temporary failure", "eof",
 	} {
 		if strings.Contains(message, token) {
 			return true

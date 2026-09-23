@@ -39,6 +39,7 @@ func (p *modelRouterPlugin) executeStreamWithHost(_ context.Context, request plu
 	}
 	requestedModel := strings.TrimSpace(request.Model)
 	bodyInfo := bodyForExecution(request)
+	policy := p.config.fallbackPolicy()
 	var lastErr error
 	attempted := make(map[string]struct{}, len(route.Targets))
 	for attempt := 0; attempt < len(route.Targets); attempt++ {
@@ -56,10 +57,10 @@ func (p *modelRouterPlugin) executeStreamWithHost(_ context.Context, request plu
 		if err == nil {
 			return nil
 		}
-		if eligibleRouteFailure(err) {
+		if eligibleRouteFailure(err, policy) {
 			p.runtime.MarkFailure(route, selection.model)
 		}
-		if receivedPayload || !eligibleRouteFailure(err) {
+		if receivedPayload || !eligibleRouteFailure(err, policy) {
 			return err
 		}
 		lastErr = err
@@ -74,6 +75,12 @@ func (p *modelRouterPlugin) executeStreamWithHost(_ context.Context, request plu
 func forwardStreamAttempt(request pluginapi.ExecutorRequest, bodyInfo executionBody, target, requestedModel, pluginStreamID string, host modelHost) (bool, error) {
 	response, err := host.StartStream(hostRequest(request, bodyInfo, target, true))
 	if err != nil {
+		// StartStream may report the upstream status alongside the error. Preserve it
+		// so the failure is classified by the fallback policy instead of falling
+		// through to the ambiguous-error path.
+		if status := response.StatusCode; status > 0 {
+			return false, statusError{status: status, message: err.Error()}
+		}
 		return false, err
 	}
 	if response.StatusCode >= 400 {

@@ -2,11 +2,74 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
+
+// StartStream may report the upstream status alongside the error. A 400 carried
+// that way must move the request to the next target when the configuration lists
+// it, rather than be treated as an ambiguous failure.
+func TestExecuteStreamFailsOverWhenStartReturnsStatusWithError(t *testing.T) {
+	plugin := testRouterPluginFromConfig(t, `
+fallback:
+  fallback_on_status: [400]
+routes:
+  - alias: smart
+    cooldown_seconds: 30
+    targets:
+      - model: provider-a
+      - model: provider-b
+`)
+	host := &fakeModelHost{reads: map[string][]pluginapi.HostModelStreamReadResponse{
+		"stream-b": {
+			{Payload: []byte(`data: {"model":"provider-b"}` + "\n\n"), Done: true},
+		},
+	}}
+	host.start = func(request pluginapi.HostModelExecutionRequest) (pluginapi.HostModelStreamResponse, error) {
+		if request.Model == "provider-a" {
+			return pluginapi.HostModelStreamResponse{StatusCode: 400}, errors.New(`{"error":{"message":"reasoning settings conflict","code":"convert_request_failed"}}`)
+		}
+		return pluginapi.HostModelStreamResponse{StatusCode: 200, StreamID: "stream-b"}, nil
+	}
+	err := plugin.executeStreamWithHost(context.Background(), pluginapi.ExecutorRequest{Model: "smart", SourceFormat: "openai"}, "plugin-stream", host)
+	if err != nil {
+		t.Fatalf("executeStreamWithHost() error = %v", err)
+	}
+	if len(host.startCalls) != 2 {
+		t.Fatalf("a 400 reported with the error must fail over, start calls = %d", len(host.startCalls))
+	}
+}
+
+func TestExecuteStreamDoesNotFailOverOnRequestError(t *testing.T) {
+	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "provider-a", "provider-b"))
+	rejected := &fakeModelHost{start: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelStreamResponse, error) {
+		return pluginapi.HostModelStreamResponse{StatusCode: 400}, errors.New(`{"error":{"message":"invalid request"}}`)
+	}}
+	err := plugin.executeStreamWithHost(context.Background(), pluginapi.ExecutorRequest{Model: "smart", SourceFormat: "openai"}, "plugin-stream", rejected)
+	if statusFromError(err) != 400 || len(rejected.startCalls) != 1 {
+		t.Fatalf("executeStreamWithHost() error = %v, start calls = %d", err, len(rejected.startCalls))
+	}
+	healthy := &fakeModelHost{reads: map[string][]pluginapi.HostModelStreamReadResponse{
+		"stream-a": {
+			{Payload: []byte(`data: {"model":"provider-a"}` + "\n\n"), Done: true},
+		},
+	}}
+	healthy.start = func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelStreamResponse, error) {
+		return pluginapi.HostModelStreamResponse{StatusCode: 200, StreamID: "stream-a"}, nil
+	}
+	if err := plugin.executeStreamWithHost(context.Background(), pluginapi.ExecutorRequest{Model: "smart", SourceFormat: "openai"}, "plugin-stream", healthy); err != nil {
+		t.Fatalf("a valid stream after a rejected one must still reach a provider: %v", err)
+	}
+	if len(healthy.startCalls) != 1 {
+		t.Fatalf("valid stream calls = %d, want 1", len(healthy.startCalls))
+	}
+	if model := healthy.startCalls[0].Model; model != "provider-a" {
+		t.Fatalf("the rejected stream must not cool the preferred target, valid stream selected %q", model)
+	}
+}
 
 func TestExecuteStreamFailsOverBeforePayload(t *testing.T) {
 	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "provider-a", "provider-b"))
