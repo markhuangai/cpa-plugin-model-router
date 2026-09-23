@@ -907,8 +907,10 @@ func waitForSmokeUsage(t *testing.T, baseURL string, from time.Time, minimumTota
 			"to":    {time.Now().UTC().Add(time.Minute).Format(time.RFC3339Nano)},
 			"limit": {"100"},
 		}
-		lastErr = requestSmokeManagementJSON(baseURL, modelRouterUsageBasePath+"/requests?"+query.Encode(), &lastPage)
+		var page usageRequestPage
+		lastErr = requestSmokeManagementJSON(baseURL, modelRouterUsageBasePath+"/requests?"+query.Encode(), &page)
 		if lastErr == nil {
+			lastPage = page
 			foundRouted, foundDirect := false, false
 			for _, item := range lastPage.Items {
 				foundRouted = foundRouted || item.Attribution == attributionRouted && item.RouterModel == "smoke-router-alias"
@@ -922,6 +924,38 @@ func waitForSmokeUsage(t *testing.T, baseURL string, from time.Time, minimumTota
 	}
 	t.Fatalf("usage records did not contain routed and direct requests: page=%#v error=%v", lastPage, lastErr)
 	return usageRequestPage{}
+}
+
+func TestWaitForSmokeUsageDoesNotReuseOmittedRouterModel(t *testing.T) {
+	var polls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		page := usageRequestPage{
+			Total: 5,
+			Items: []usageRequestDetail{
+				{storedUsageRecord: storedUsageRecord{Attribution: attributionRouted, RouterModel: "smoke-router-alias"}},
+				{storedUsageRecord: storedUsageRecord{Attribution: attributionRouted, RouterModel: "smoke-router-alias"}},
+			},
+		}
+		if polls.Add(1) > 1 {
+			page = usageRequestPage{
+				Total: 6,
+				Items: []usageRequestDetail{
+					{storedUsageRecord: storedUsageRecord{Attribution: attributionDirect}},
+					{storedUsageRecord: storedUsageRecord{Attribution: attributionRouted, RouterModel: "smoke-router-alias"}},
+				},
+			}
+		}
+		if err := json.NewEncoder(response).Encode(page); err != nil {
+			t.Errorf("encode usage page: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	page := waitForSmokeUsage(t, server.URL, time.Now().UTC().Add(-time.Second), 6, time.Second)
+	if polls.Load() < 2 || page.Total != 6 || page.Items[0].Attribution != attributionDirect || page.Items[0].RouterModel != "" {
+		t.Fatalf("direct usage row retained a prior router model: polls=%d page=%#v", polls.Load(), page)
+	}
 }
 
 func postSmokeChatStream(t *testing.T, baseURL, model string) string {
