@@ -306,3 +306,57 @@ routes:
 		})
 	}
 }
+
+func TestDecodeRouterConfigExclusionOverridesDefaults(t *testing.T) {
+	raw := []byte(`
+fallback:
+  no_fallback_on_status: [400, 429, 503]
+routes:
+  - alias: demo
+    targets:
+      - model: target-a
+`)
+	cfg, err := decodeRouterConfig(raw)
+	if err != nil {
+		t.Fatalf("decodeRouterConfig() error = %v", err)
+	}
+	policy := cfg.fallbackPolicy()
+	for _, status := range []int{400, 429, 503} {
+		if policy.shouldFallback(status) {
+			t.Fatalf("excluded status %d must not fall back", status)
+		}
+	}
+	for _, status := range []int{402, 404, 504} {
+		if !policy.shouldFallback(status) {
+			t.Fatalf("status %d is not excluded and must keep the default", status)
+		}
+	}
+}
+
+func TestDecodeRouterConfigFallbackListFormsAgree(t *testing.T) {
+	routes := `
+routes:
+  - alias: demo
+    targets:
+      - model: target-a
+`
+	cases := map[string]string{
+		"omitted":        "fallback:\n  no_fallback_on_status: [400, 503]\n" + routes,
+		"empty explicit": "fallback:\n  fallback_on_status: []\n  no_fallback_on_status: [400, 503]\n" + routes,
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := decodeRouterConfig([]byte(raw))
+			if err != nil {
+				t.Fatalf("decodeRouterConfig() error = %v", err)
+			}
+			policy := cfg.fallbackPolicy()
+			if policy.shouldFallback(400) || policy.shouldFallback(503) {
+				t.Fatal("an exclusion must remove a status from the inherited default set")
+			}
+			if !policy.shouldFallback(404) || !policy.shouldFallback(500) {
+				t.Fatal("an omitted or empty fallback_on_status must keep the default set")
+			}
+		})
+	}
+}

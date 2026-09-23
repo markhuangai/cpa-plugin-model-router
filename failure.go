@@ -119,9 +119,23 @@ func eligibleRouteFailure(err error, policy fallbackPolicy) bool {
 		return false
 	}
 	if status := statusFromError(err); status > 0 {
+		if persistedResponseMiss(status, err.Error()) {
+			return false
+		}
 		return policy.shouldFallback(status)
 	}
 	return recognizableTransientError(err)
+}
+
+// persistedResponseMiss reports the 404 that describes the request rather than
+// the target. An upstream asked not to persist reports a miss that every other
+// target reproduces, so it must not fail over or cool the route.
+func persistedResponseMiss(status int, message string) bool {
+	if status != http.StatusNotFound {
+		return false
+	}
+	message = strings.ToLower(message)
+	return strings.Contains(message, "items are not persisted") || (strings.Contains(message, "store") && strings.Contains(message, "false"))
 }
 
 func terminalRequestError(err error) bool {

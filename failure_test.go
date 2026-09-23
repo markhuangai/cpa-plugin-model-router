@@ -15,11 +15,12 @@ func TestEligibleRouteFailure(t *testing.T) {
 	}{
 		{name: "rate limit", err: statusError{status: 429, message: "rate limited"}, want: true},
 		{name: "provider server error", err: statusError{status: 503, message: "unavailable"}, want: true},
-		{name: "bad request", err: statusError{status: 400, message: "invalid prompt"}, want: true},
-		{name: "unprocessable", err: statusError{status: 422, message: "invalid payload"}, want: true},
-		{name: "conflict", err: statusError{status: 409, message: "conflict"}, want: true},
+		{name: "bad request", err: statusError{status: 400, message: "invalid prompt"}, want: false},
+		{name: "unprocessable", err: statusError{status: 422, message: "invalid payload"}, want: false},
+		{name: "conflict", err: statusError{status: 409, message: "conflict"}, want: false},
 		{name: "payment required", err: statusError{status: 402, message: "package_quota_exhausted"}, want: true},
-		{name: "persisted response miss", err: statusError{status: 404, message: "items are not persisted when store is false"}, want: true},
+		{name: "persisted response miss", err: statusError{status: 404, message: "items are not persisted when store is false"}, want: false},
+		{name: "store disabled response miss", err: statusError{status: 404, message: "store is false for this request"}, want: false},
 		{name: "model missing", err: statusError{status: 404, message: "model not found"}, want: true},
 		{name: "unlisted client error", err: statusError{status: 413, message: "payload too large"}, want: false},
 		{name: "unlisted server error", err: statusError{status: 507, message: "insufficient storage"}, want: true},
@@ -51,5 +52,18 @@ func TestFallbackPolicyNoFallbackWins(t *testing.T) {
 	}
 	if !policy.shouldFallback(500) {
 		t.Fatal("every remaining 5xx must fall back")
+	}
+}
+
+func TestEligibleRouteFailureUsesConfiguredStatuses(t *testing.T) {
+	policy := newFallbackPolicy([]int{400}, []int{429})
+	if !eligibleRouteFailure(statusError{status: 400, message: "invalid prompt"}, policy) {
+		t.Fatal("400 must fail over when fallback_on_status lists it")
+	}
+	if eligibleRouteFailure(statusError{status: 429, message: "rate limited"}, policy) {
+		t.Fatal("429 must not fail over when no_fallback_on_status excludes it")
+	}
+	if eligibleRouteFailure(statusError{status: 404, message: "items are not persisted when store is false"}, policy) {
+		t.Fatal("a persisted response miss describes the request, so it must never fail over")
 	}
 }

@@ -23,11 +23,12 @@ const (
 )
 
 // defaultFallbackOnStatus is the status set used when fallback_on_status is not
-// configured: client errors that may be specific to a single target's upstream
-// (400, 409, 422), target availability and quota errors (401, 402, 403, 404,
-// 408, 429), and server-side faults (500, 502, 503, 504).
+// configured, and it matches the 0.5.0 behaviour: target availability and quota
+// errors (401, 402, 403, 404, 408, 429) and server-side faults (500, 502, 503,
+// 504). Statuses that describe the rejected request rather than the target stay
+// out of the set, so an invalid request does not cool a healthy route.
 var defaultFallbackOnStatus = []int{
-	400, 401, 402, 403, 404, 408, 409, 422, 429, 500, 502, 503, 504,
+	401, 402, 403, 404, 408, 429, 500, 502, 503, 504,
 }
 
 type modelTarget struct {
@@ -65,8 +66,9 @@ type routerConfig struct {
 	NoFallbackOnStatus []int
 }
 
-// fallbackPolicy resolves the configured status lists into lookup sets. When
-// fallback_on_status is empty, the built-in defaultFallbackOnStatus is used.
+// fallbackPolicy resolves the configured status lists into lookup sets. An
+// omitted or empty fallback_on_status inherits defaultFallbackOnStatus, and
+// no_fallback_on_status then removes statuses from whichever set applies.
 func (c routerConfig) fallbackPolicy() fallbackPolicy {
 	onStatus := c.FallbackOnStatus
 	if len(onStatus) == 0 {
@@ -183,7 +185,7 @@ func decodeRouterConfig(raw []byte) (routerConfig, error) {
 			}
 		}
 	}
-	fallbackOnStatus := append([]int(nil), defaultFallbackOnStatus...)
+	var fallbackOnStatus []int
 	var noFallbackOnStatus []int
 	if wire.Fallback != nil {
 		if wire.Fallback.StreamFallbackBeforeFirstChunkOnly != nil && !*wire.Fallback.StreamFallbackBeforeFirstChunkOnly {
@@ -196,6 +198,9 @@ func decodeRouterConfig(raw []byte) (routerConfig, error) {
 			noFallbackOnStatus = append([]int(nil), (*wire.Fallback.NoFallbackOnStatus)...)
 		}
 	}
+	// Only the lists the configuration supplies are validated. The default set is
+	// expanded when the policy is built, so an exclusion may name a status it does
+	// not list, and an omitted or empty fallback_on_status keeps the defaults.
 	if err := validateFallbackStatuses(fallbackOnStatus, noFallbackOnStatus); err != nil {
 		return routerConfig{}, err
 	}
