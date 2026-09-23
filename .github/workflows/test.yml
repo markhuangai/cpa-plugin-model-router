@@ -15,11 +15,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Check out minimum supported CPA v7.2.143
+      - name: Check out minimum supported CPA v7.3.9
         uses: actions/checkout@v7
         with:
           repository: router-for-me/CLIProxyAPI
-          ref: 4b5f1eab25fca4b3815369a826e958e7c070a69e
+          ref: 61fdfc341b96178a8dcb53f2efc46cbc341d267c
           path: .cpa-source
           persist-credentials: false
       - uses: actions/setup-go@v7
