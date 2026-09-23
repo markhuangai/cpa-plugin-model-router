@@ -82,6 +82,12 @@ func handleModelRouterManagement(plugin *modelRouterPlugin, request pluginapi.Ma
 				"message": "dashboard only supports GET",
 			})
 		}
+		if configDashboardError != nil {
+			return modelRouterJSONResponse(http.StatusInternalServerError, map[string]any{
+				"error":   "dashboard_render_failed",
+				"message": configDashboardError.Error(),
+			})
+		}
 		return pluginapi.ManagementResponse{
 			StatusCode: http.StatusOK,
 			Headers: http.Header{

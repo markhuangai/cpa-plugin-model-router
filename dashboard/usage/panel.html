@@ -1,0 +1,109 @@
+    <section id="usage-panel" class="tab-panel usage-panel" role="tabpanel" aria-labelledby="usage-tab" aria-busy="false" hidden>
+      <div class="usage-toolbar" aria-label="Usage range controls">
+        <div class="usage-control">
+          <label for="usage-range">Time range</label>
+          <select id="usage-range">
+            <option value="5h">Last 5 hours</option>
+            <option value="24h" selected>Last 24 hours</option>
+            <option value="7d">Last 7 days</option>
+            <option value="30d">Last 30 days</option>
+            <option value="month">Current month</option>
+            <option value="custom">Custom range</option>
+          </select>
+        </div>
+        <div class="usage-control">
+          <label for="usage-granularity">Granularity</label>
+          <select id="usage-granularity"><option value="minute">Minute</option><option value="hour" selected>Hour</option><option value="day">Day</option></select>
+        </div>
+        <div class="usage-control">
+          <label for="usage-router-model">Router model</label>
+          <select id="usage-router-model"><option value="">All router models</option></select>
+        </div>
+        <div class="usage-control">
+          <label for="usage-provider-model">Provider model</label>
+          <select id="usage-provider-model"><option value="">All provider models</option></select>
+        </div>
+        <div class="usage-actions">
+          <button id="usage-pricing" class="secondary" type="button">Model pricing</button>
+          <button id="usage-reset" class="danger-button" type="button">Reset</button>
+          <button id="usage-refresh" class="secondary" type="button">Refresh</button>
+        </div>
+      </div>
+
+      <div id="usage-custom-range" class="custom-range" hidden>
+        <div class="usage-control"><label for="usage-from">From</label><input id="usage-from" type="datetime-local" step="1"></div>
+        <div class="usage-control"><label for="usage-to">To</label><input id="usage-to" type="datetime-local" step="1"></div>
+      </div>
+
+      <div class="usage-filter-row" aria-label="Usage filters">
+        <div class="usage-control"><label for="usage-source">Source</label><select id="usage-source"><option value="">All sources</option></select></div>
+        <div class="usage-control"><label for="usage-service-tier">Service tier</label><select id="usage-service-tier"><option value="">All service tiers</option></select></div>
+        <div class="usage-control"><label for="usage-result">Result</label><select id="usage-result"><option value="">All results</option><option value="success">Success</option><option value="failed">Failed without status</option></select></div>
+        <div class="usage-control"><label for="usage-auto-refresh">Refresh interval</label><select id="usage-auto-refresh" disabled><option>Every 15 seconds</option></select></div>
+      </div>
+
+      <div class="usage-status-row">
+        <span id="usage-status" class="usage-status" aria-live="polite">Open Usage tracking to load data.</span>
+        <span id="usage-live" class="usage-live" hidden>Live while this tab is visible</span>
+      </div>
+
+      <section class="metric-grid" aria-label="Usage summary">
+        <article class="metric-card"><span class="metric-label">Total tokens</span><strong id="metric-tokens" class="metric-value">—</strong><span id="metric-token-detail" class="metric-detail">Input, output, cache, and reasoning</span></article>
+        <article class="metric-card"><span class="metric-label">Estimated cost</span><strong id="metric-cost" class="metric-value">—</strong><span id="metric-cost-detail" class="metric-detail">USD pricing coverage</span></article>
+        <article class="metric-card"><span class="metric-label">Requests</span><strong id="metric-requests" class="metric-value">—</strong><span id="metric-request-detail" class="metric-detail">Success and failure counts</span></article>
+        <article class="metric-card"><span class="metric-label">Top router model</span><strong id="metric-router" class="metric-value">—</strong><span id="metric-router-detail" class="metric-detail">By request count</span></article>
+        <article class="metric-card"><span class="metric-label">Top provider model</span><strong id="metric-provider" class="metric-value">—</strong><span id="metric-provider-detail" class="metric-detail">Physical CPA execution model</span></article>
+      </section>
+
+      <div class="chart-grid">
+        <section class="chart-card">
+          <header><div><h3>Token trend</h3><p>Input, output, cache read, and reasoning by time bucket.</p></div><div class="chart-tools"><button class="secondary" type="button" data-chart="tokens" data-zoom="out" aria-label="Zoom token trend out">−</button><button class="secondary" type="button" data-chart="tokens" data-zoom="reset" aria-label="Reset token trend zoom">1:1</button><button class="secondary" type="button" data-chart="tokens" data-zoom="in" aria-label="Zoom token trend in">+</button></div></header>
+          <canvas id="token-chart" class="chart-canvas" role="img" aria-label="Stacked token usage over time. Focus and use arrow keys to inspect buckets." aria-describedby="chart-tooltip" tabindex="0"></canvas>
+          <div id="token-legend" class="chart-legend">
+            <button class="legend-toggle" type="button" data-token-series="input" aria-pressed="true"><span class="legend-swatch" data-color="input"></span>Input</button>
+            <button class="legend-toggle" type="button" data-token-series="output" aria-pressed="true"><span class="legend-swatch" data-color="output"></span>Output</button>
+            <button class="legend-toggle" type="button" data-token-series="cache_read" aria-pressed="true"><span class="legend-swatch" data-color="cache"></span>Cache read</button>
+            <button class="legend-toggle" type="button" data-token-series="reasoning" aria-pressed="true"><span class="legend-swatch" data-color="reasoning"></span>Reasoning</button>
+          </div>
+        </section>
+        <section class="chart-card compact"><header><div><h3>Provider model share</h3><p>Request volume by physical provider model.</p></div></header><canvas id="model-chart" class="chart-canvas" role="img" aria-label="Provider model request share. Focus and use arrow keys to inspect models; press Enter to filter." aria-describedby="chart-tooltip" tabindex="0"></canvas><div id="model-legend" class="chart-legend"></div></section>
+      </div>
+
+      <div class="chart-grid">
+        <section class="chart-card">
+          <header><div><h3>Cost trend</h3><p>Estimated USD cost using the active price book.</p></div><div class="chart-tools"><button class="secondary" type="button" data-chart="cost" data-zoom="out" aria-label="Zoom cost trend out">−</button><button class="secondary" type="button" data-chart="cost" data-zoom="reset" aria-label="Reset cost trend zoom">1:1</button><button class="secondary" type="button" data-chart="cost" data-zoom="in" aria-label="Zoom cost trend in">+</button></div></header>
+          <canvas id="cost-chart" class="chart-canvas" role="img" aria-label="Estimated cost over time. Focus and use arrow keys to inspect buckets." aria-describedby="chart-tooltip" tabindex="0"></canvas>
+          <div class="chart-legend"><span class="legend-item"><span class="legend-swatch" data-color="cost"></span>Estimated USD</span></div>
+        </section>
+        <section class="chart-card compact">
+          <header><div><h3>Efficiency</h3><p>Average latency, time to first token, and output throughput.</p></div><div class="chart-tools"><button class="secondary" type="button" data-chart="efficiency" data-zoom="out" aria-label="Zoom efficiency trend out">−</button><button class="secondary" type="button" data-chart="efficiency" data-zoom="reset" aria-label="Reset efficiency trend zoom">1:1</button><button class="secondary" type="button" data-chart="efficiency" data-zoom="in" aria-label="Zoom efficiency trend in">+</button></div></header>
+          <canvas id="efficiency-chart" class="chart-canvas" role="img" aria-label="Latency, time to first token, and tokens per second over time. Focus and use arrow keys to inspect buckets." aria-describedby="chart-tooltip" tabindex="0"></canvas>
+          <div class="chart-legend"><span class="legend-item"><span class="legend-swatch" data-color="input"></span>Latency</span><span class="legend-item"><span class="legend-swatch" data-color="cache"></span>TTFT</span><span class="legend-item"><span class="legend-swatch" data-color="output"></span>Tokens/sec</span></div>
+        </section>
+      </div>
+
+      <section class="usage-section" aria-labelledby="breakdown-title">
+        <div class="usage-section-head">
+          <div class="usage-section-title"><h3 id="breakdown-title">Usage breakdown</h3><p>Group the selected range by router identity, provider identity, source, tier, or result.</p></div>
+          <div class="table-tools">
+            <label class="sr-only" for="group-dimension">Group dimension</label><select id="group-dimension"><option value="router_model">Router model</option><option value="provider_model" selected>Provider model</option><option value="provider">Provider</option><option value="source">Source</option><option value="service_tier">Service tier</option><option value="result">Result</option></select>
+            <label class="sr-only" for="group-page-size">Groups per page</label><select id="group-page-size"><option value="25">25 rows</option><option value="50" selected>50 rows</option><option value="100">100 rows</option><option value="250">250 rows</option></select>
+            <details id="group-columns" class="column-picker"><summary>Columns</summary><div id="group-column-options" class="column-menu"></div></details>
+          </div>
+        </div>
+        <div id="group-table-scroll" class="table-scroll"><table id="group-table" class="usage-table"><thead><tr id="group-headers"></tr></thead><tbody id="usage-groups"><tr><td class="empty-row">Usage data has not loaded.</td></tr></tbody></table></div>
+        <div class="pagination"><span id="group-page-status">0 groups</span><button id="group-prev" class="secondary" type="button" disabled>Previous</button><button id="group-next" class="secondary" type="button" disabled>Next</button></div>
+      </section>
+
+      <section class="usage-section" aria-labelledby="request-title">
+        <div class="usage-section-head">
+          <div class="usage-section-title"><h3 id="request-title">Request details</h3><p>Router model and physical provider model remain separate for each CPA request.</p></div>
+          <div class="table-tools">
+            <label class="sr-only" for="request-page-size">Requests per page</label><select id="request-page-size"><option value="25">25 rows</option><option value="50" selected>50 rows</option><option value="100">100 rows</option><option value="250">250 rows</option></select>
+            <details id="request-columns" class="column-picker"><summary>Columns</summary><div id="request-column-options" class="column-menu"></div></details>
+          </div>
+        </div>
+        <div id="request-table-scroll" class="table-scroll"><table id="request-table" class="usage-table"><thead><tr id="request-headers"></tr></thead><tbody id="usage-requests"><tr><td class="empty-row">Request data has not loaded.</td></tr></tbody></table></div>
+        <div class="pagination"><span id="request-page-status">0 requests</span><button id="request-prev" class="secondary" type="button" disabled>Previous</button><button id="request-next" class="secondary" type="button" disabled>Next</button></div>
+      </section>
+    </section>

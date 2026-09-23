@@ -1,5 +1,6 @@
 /dist/
 /.test-cpa/
+/node_modules/
 *.h
 *.so
 *.dylib

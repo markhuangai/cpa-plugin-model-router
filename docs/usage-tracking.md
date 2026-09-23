@@ -229,7 +229,11 @@ usage_query.go               filters, aggregation, sorting, pagination
 usage_pricing.go             price validation and cost calculation
 modelsdev.go                 catalog fetch, matching, and synchronization
 usage_management.go          authenticated management endpoints
-dashboard.html               Configuration and Usage tracking UI
+dashboard.html               Single-page dashboard shell; Go embeds dashboard/ sources into this response
+dashboard/shared.*           Shared styles, authentication, theme, and page elements
+dashboard/configuration/     Configuration panel, route templates, styles, and behavior
+dashboard/usage/             Usage tracking panel, charts, tables, pricing, and reset behavior
+dashboard/app.js             Ordered page startup and cross-tab lifecycle events
 integration_test.go          real CPA plugin, request, stream, and restart coverage
 ```
 

@@ -1,0 +1,43 @@
+    <section id="configuration-panel" class="tab-panel" role="tabpanel" aria-labelledby="configuration-tab">
+      <section class="control-strip" aria-label="Plugin settings">
+        <label class="toggle-wrap">
+          <span class="toggle">
+            <input id="plugin-enabled" type="checkbox">
+            <span aria-hidden="true"></span>
+          </span>
+          Plugin enabled
+        </label>
+        <div class="priority-field">
+          <label for="plugin-priority">Priority</label>
+          <input id="plugin-priority" type="number" step="1" inputmode="numeric">
+        </div>
+        <span id="save-state" class="save-state" data-dirty="false">Loaded from CPA</span>
+      </section>
+
+      <section class="flow-rail" aria-label="Model routing flow">
+        <span class="flow-node">Client alias</span><span class="flow-line"></span>
+        <span class="flow-node action">Select target</span><span class="flow-line"></span>
+        <span class="flow-node gate">Cooldown gate</span><span class="flow-line"></span>
+        <span class="flow-node">CPA executor</span>
+      </section>
+
+      <div class="section-head">
+        <div class="section-title">
+          <h2>Route table</h2>
+          <span id="route-count" class="count">0 routes</span>
+          <span id="model-status" class="count catalog-status" data-tone="loading" aria-live="polite">Loading CPA models…</span>
+        </div>
+        <button id="add-route" class="secondary" type="button">Add route</button>
+      </div>
+      <section id="routes" class="routes" aria-live="polite"></section>
+
+      <div id="configuration-actions" class="configuration-actions-dock" aria-hidden="true" hidden inert>
+        <div id="configuration-actions-bar" class="footer-bar">
+          <span class="footer-hint">Save checks duplicate aliases, recursion, target pools, and cooldowns with the plugin's Go parser.</span>
+          <div class="footer-actions">
+            <button id="reload" class="secondary" type="button">Discard and reload</button>
+            <button id="save" class="primary" type="button">Save changes</button>
+          </div>
+        </div>
+      </div>
+    </section>

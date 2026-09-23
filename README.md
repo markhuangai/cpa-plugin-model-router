@@ -108,7 +108,7 @@ The fixed **Save changes** and **Discard and reload** dock slides into view only
 /v0/resource/plugins/model-router/config
 ```
 
-The dashboard HTML is a public plugin resource so CPA can embed it in the frontend. Reading or changing configuration still requires the management key. The page reads CPAMC's persisted `cli-proxy-auth` value from same-origin browser storage; it does not change CPAMC's stored session. If **Remember password** is disabled, the persisted session has no key, so the page reveals a fallback key field. A fallback key is cached only in that tab's session storage and is removed when CPA rejects it. CPA's Management API must be enabled and reachable from the browser.
+The dashboard's shared, Configuration, and Usage tracking source lives under dashboard/; Go embeds these files in the plugin and assembles one HTML response when the plugin starts. CPA exposes that page as a public plugin resource so it can embed it in the frontend. Reading or changing configuration still requires the management key. The page reads CPAMC's persisted `cli-proxy-auth` value from same-origin browser storage; it does not change CPAMC's stored session. If **Remember password** is disabled, the persisted session has no key, so the page reveals a fallback key field. A fallback key is cached only in that tab's session storage and is removed when CPA rejects it. CPA's Management API must be enabled and reachable from the browser.
 
 ### Usage tracking
 
@@ -229,6 +229,17 @@ The black-box test builds CPA and the native plugin in a temporary directory, st
 - usage history, model prices, and dashboard preferences survive a CPA restart.
 
 The test currently runs on Linux and macOS.
+
+The browser E2E test exercises the dashboard against a disposable local CPA instance. It changes route configuration, pricing, and dashboard preferences, then resets usage history, so do not point it at a shared or production instance. Install its pinned browser dependency with `npm ci`, then run:
+
+```bash
+DASHBOARD_URL=http://127.0.0.1:8317/v0/resource/plugins/model-router/config \
+DASHBOARD_MANAGEMENT_KEY='replace-with-disposable-instance-key' \
+DASHBOARD_E2E_ALLOW_MUTATIONS=1 \
+npm run test:e2e
+```
+
+Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` when Chromium is not available at `/usr/bin/google-chrome`.
 
 ### Manual local installation
 
