@@ -71,6 +71,26 @@ func TestExecuteStreamDoesNotFailOverOnRequestError(t *testing.T) {
 	}
 }
 
+func TestExecuteStreamDoesNotFailOverOnExcludedStatusFromError(t *testing.T) {
+	plugin := testRouterPluginFromConfig(t, `
+fallback:
+  fallback_on_status: [400]
+  no_fallback_on_status: [429]
+routes:
+  - alias: smart
+    targets:
+      - model: provider-a
+      - model: provider-b
+`)
+	host := &fakeModelHost{start: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelStreamResponse, error) {
+		return pluginapi.HostModelStreamResponse{}, statusError{status: 429, message: "rate limit exceeded"}
+	}}
+	err := plugin.executeStreamWithHost(context.Background(), pluginapi.ExecutorRequest{Model: "smart"}, "plugin-stream", host)
+	if statusFromError(err) != 429 || len(host.startCalls) != 1 {
+		t.Fatalf("executeStreamWithHost() error = %v, start calls = %d, want status 429 and one call", err, len(host.startCalls))
+	}
+}
+
 func TestExecuteStreamFailsOverBeforePayload(t *testing.T) {
 	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "provider-a", "provider-b"))
 	host := &fakeModelHost{reads: map[string][]pluginapi.HostModelStreamReadResponse{

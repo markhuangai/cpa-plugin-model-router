@@ -181,7 +181,7 @@ routes:
       - model: b
 `)
 	host := &fakeModelHost{execute: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelExecutionResponse, error) {
-		return pluginapi.HostModelExecutionResponse{StatusCode: 400, Body: []byte(`{"error":"invalid request"}`)}, nil
+		return pluginapi.HostModelExecutionResponse{}, statusError{status: http.StatusBadRequest, message: "invalid prompt"}
 	}}
 	_, err := plugin.executeWithHost(pluginapi.ExecutorRequest{Model: "smart"}, host)
 	if len(host.executeCalls) != 2 {

@@ -107,7 +107,7 @@ CPA usage.handle callback --> correlate marker and store one request row
 
 Correlation uses request time, provider model, and an in-memory keyed fingerprint of the client credential when available. The fingerprint secret is random for the process and is never persisted. A uniquely matched marker is consumed. Conflicting candidates and timestamp-less callbacks with multiple active candidates are not guessed; the delivered record is retained as `unattributed`. Markers expire after 24 hours and are capped at 50,000 entries.
 
-CPA v7.2.143 or newer is required. That release detaches asynchronous native usage delivery from request cancellation while preserving context values. CPA v7.2.142 and older can cancel `usage.handle` before Model Router receives it; the plugin does not recreate missing records from response bodies.
+CPA v7.3.9 or newer is required. That release preserves numeric HTTP statuses returned through native model callbacks, which lets Model Router apply its configured fallback rules. CPA v7.2.143 also detached asynchronous native usage delivery from request cancellation while preserving context values. CPA v7.2.142 and older can cancel `usage.handle` before Model Router receives it; the plugin does not recreate missing records from response bodies.
 
 Routed stream retry behavior is unchanged: an attempt can fail over only before any upstream payload is emitted. CPA remains responsible for stream timing and usage totals.
 
@@ -244,7 +244,7 @@ CPA_SOURCE=../CLIProxyAPI \
   go test -tags=integration ./... -count=1
 ```
 
-Public CI runs this suite against the exact CPA v7.2.143 commit so the minimum supported delivery contract remains covered.
+Public CI runs this suite against the exact CPA v7.3.9 commit so the minimum supported delivery contract remains covered.
 
 For repeatable query performance comparisons, point the optional benchmark at a representative SQLite database:
 

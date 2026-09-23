@@ -331,6 +331,193 @@ openai-compatibility:
 	}
 }
 
+func TestModelRouterFallbackStatusesWithCLIProxyAPI(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the native host smoke test is currently exercised on Unix hosts")
+	}
+	cpaSource := os.Getenv("CPA_SOURCE")
+	if cpaSource == "" {
+		cpaSource = filepath.Join("..", "CLIProxyAPI")
+	}
+	cpaSource, err := filepath.Abs(cpaSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(cpaSource, "go.mod")); err != nil {
+		t.Fatalf("CPA source not found at %s; set CPA_SOURCE: %v", cpaSource, err)
+	}
+
+	type fallbackScenario struct {
+		name   string
+		status int
+		stream bool
+	}
+	scenarios := []fallbackScenario{
+		{name: "configured_400_chat", status: http.StatusBadRequest},
+		{name: "excluded_429_chat", status: http.StatusTooManyRequests},
+		{name: "configured_400_stream", status: http.StatusBadRequest, stream: true},
+		{name: "excluded_429_stream", status: http.StatusTooManyRequests, stream: true},
+	}
+	type fallbackProvider struct {
+		first  bool
+		status int
+	}
+	providersByKey := make(map[string]fallbackProvider, len(scenarios)*2)
+	var routes strings.Builder
+	for _, scenario := range scenarios {
+		fmt.Fprintf(&routes, `
+        - alias: %s
+          strategy: priority
+          cooldown_seconds: 60
+          targets:
+`, scenario.name)
+		for _, target := range []struct {
+			name  string
+			first bool
+		}{{name: "first", first: true}, {name: "second"}} {
+			providerName := "issue11-" + scenario.name + "-" + target.name
+			fmt.Fprintf(&routes, "            - model: %s/issue11-model\n", providerName)
+			providersByKey["issue11-"+scenario.name+"-"+target.name+"-key"] = fallbackProvider{
+				first:  target.first,
+				status: scenario.status,
+			}
+		}
+	}
+
+	var callsMu sync.Mutex
+	calls := make(map[string]int, len(scenarios)*2)
+	provider := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if !strings.HasSuffix(request.URL.Path, "/chat/completions") {
+			http.NotFound(response, request)
+			return
+		}
+		var body struct {
+			Model  string `json:"model"`
+			Stream bool   `json:"stream"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			http.Error(response, err.Error(), http.StatusBadRequest)
+			return
+		}
+		key := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
+		fixture, ok := providersByKey[key]
+		if !ok {
+			http.Error(response, "unexpected fixture credential", http.StatusUnauthorized)
+			return
+		}
+		callsMu.Lock()
+		calls[key]++
+		callsMu.Unlock()
+		if fixture.first {
+			response.Header().Set("Content-Type", "application/json")
+			response.WriteHeader(fixture.status)
+			message := "invalid prompt"
+			code := "invalid_request_error"
+			if fixture.status == http.StatusTooManyRequests {
+				message = "rate limit exceeded"
+				code = "rate_limit_error"
+			}
+			_ = json.NewEncoder(response).Encode(map[string]any{"error": map[string]string{"message": message, "type": code}})
+			return
+		}
+		if body.Stream {
+			response.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprintf(response, "data: {\"id\":\"issue11-fallback\",\"object\":\"chat.completion.chunk\",\"model\":%q,\"choices\":[{\"index\":0,\"delta\":{\"content\":\"upstream=%s\"},\"finish_reason\":\"stop\"}]}\n\n", body.Model, body.Model)
+			_, _ = io.WriteString(response, "data: [DONE]\n\n")
+			return
+		}
+		_ = json.NewEncoder(response).Encode(map[string]any{
+			"id": "issue11-fallback", "object": "chat.completion", "created": 1, "model": body.Model,
+			"choices": []any{map[string]any{
+				"index":         0,
+				"message":       map[string]string{"role": "assistant", "content": "upstream=" + body.Model},
+				"finish_reason": "stop",
+			}},
+		})
+	}))
+	defer provider.Close()
+
+	var providerConfig strings.Builder
+	for key := range providersByKey {
+		name := strings.TrimSuffix(key, "-key")
+		prefix := "issue11-" + strings.TrimPrefix(name, "issue11-")
+		fmt.Fprintf(&providerConfig, `
+  - name: %s
+    prefix: %s
+    base-url: %q
+    api-key-entries:
+      - api-key: %s
+    models:
+      - name: issue11-model
+`, name, prefix, provider.URL+"/v1", key)
+	}
+	workDir := t.TempDir()
+	pluginArtifact := filepath.Join(workDir, "model-router"+sharedLibraryExtension())
+	runSmokeCommand(t, ".", "go", "build", "-buildmode=c-shared", "-o", pluginArtifact, ".")
+	cpaBinary := filepath.Join(workDir, "cli-proxy-api")
+	runSmokeCommand(t, cpaSource, "go", "build", "-o", cpaBinary, "./cmd/server")
+	for _, scenario := range scenarios {
+		caseDir := filepath.Join(workDir, scenario.name)
+		pluginsDir := filepath.Join(caseDir, "plugins")
+		if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Link(pluginArtifact, filepath.Join(pluginsDir, "model-router"+sharedLibraryExtension())); err != nil {
+			t.Fatalf("link plugin for %s: %v", scenario.name, err)
+		}
+		port := reserveLocalPort(t)
+		configPath := filepath.Join(caseDir, "config.yaml")
+		config := fmt.Sprintf(`host: "127.0.0.1"
+port: %d
+auth-dir: %q
+api-keys: ["local-test-key"]
+request-retry: 0
+streaming-bootstrap-retries: 0
+plugins:
+  enabled: true
+  dir: %q
+  configs:
+    model-router:
+      enabled: true
+      priority: 100
+      fallback:
+        fallback_on_status: [400]
+        no_fallback_on_status: [429]
+      routes:%s
+openai-compatibility:%s`, port, filepath.Join(caseDir, "auth"), pluginsDir, routes.String(), providerConfig.String())
+		if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+		cpa := startSmokeCPA(t, cpaBinary, configPath, baseURL)
+		if !waitForSmokeModel(t, baseURL, scenario.name, 10*time.Second) {
+			t.Fatalf("model route alias %s was not registered", scenario.name)
+		}
+		status, body := postSmokeChatResponse(t, baseURL, scenario.name, scenario.stream)
+		firstKey := "issue11-" + scenario.name + "-first-key"
+		secondKey := "issue11-" + scenario.name + "-second-key"
+		callsMu.Lock()
+		firstCalls, secondCalls := calls[firstKey], calls[secondKey]
+		callsMu.Unlock()
+		if firstCalls != 1 {
+			t.Fatalf("%s first target calls = %d, want 1; body = %s", scenario.name, firstCalls, body)
+		}
+		if scenario.status == http.StatusBadRequest {
+			if status != http.StatusOK || secondCalls != 1 || !strings.Contains(body, "upstream=issue11-model") || !strings.Contains(body, scenario.name) {
+				t.Fatalf("%s response status=%d second-target calls=%d body=%s", scenario.name, status, secondCalls, body)
+			}
+		} else {
+			if secondCalls != 0 {
+				t.Fatalf("%s excluded 429 reached the second target %d times; body = %s", scenario.name, secondCalls, body)
+			}
+			if !scenario.stream && status != http.StatusTooManyRequests {
+				t.Fatalf("%s response status = %d, want 429; body = %s", scenario.name, status, body)
+			}
+		}
+		cpa.Stop()
+	}
+}
+
 func TestModelRouterResponsesSSEFramingWithCLIProxyAPI(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the native host smoke test is currently exercised on Unix hosts")
@@ -919,6 +1106,40 @@ func postSmokeChat(t *testing.T, baseURL, model string) map[string]any {
 		t.Fatalf("chat status = %s; body = %#v", response.Status, body)
 	}
 	return body
+}
+
+func postSmokeChatResponse(t *testing.T, baseURL, model string, stream bool) (int, string) {
+	t.Helper()
+	body := map[string]any{
+		"model": model,
+		"messages": []map[string]string{
+			{"role": "user", "content": "hello"},
+		},
+		"stream": stream,
+	}
+	if stream {
+		body["stream_options"] = map[string]bool{"include_usage": true}
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequest(http.MethodPost, baseURL+"/v1/chat/completions", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer local-test-key")
+	request.Header.Set("Content-Type", "application/json")
+	response, err := (&http.Client{Timeout: 20 * time.Second}).Do(request)
+	if err != nil {
+		t.Fatalf("send %s chat request: %v", model, err)
+	}
+	defer response.Body.Close()
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read %s chat response: %v", model, err)
+	}
+	return response.StatusCode, string(responseBody)
 }
 
 func sharedLibraryExtension() string {

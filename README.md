@@ -26,7 +26,7 @@ The plugin does not call providers directly. For each selected physical model it
 
 ## Compatibility
 
-The module is built against `github.com/router-for-me/CLIProxyAPI/v7` v7.2.143 and requires CPA v7.2.143 or newer. That release preserves asynchronous native `usage_plugin` callbacks after request completion; older hosts can silently omit usage records. The plugin negotiates RPC schema v2 with older compatible hosts and schema v3 when offered; schema v3 avoids resending the full request body with every streaming response chunk. The CPA host must support native plugins, `model_router`, `executor`, `model_registrar`, request interception, `usage_plugin`, and the `host.model.*` callback methods. The configuration and usage page also requires CPA's `management_api` capability and plugin resource menus.
+The module is built against `github.com/router-for-me/CLIProxyAPI/v7` v7.3.9 and requires CPA v7.3.9 or newer. That release preserves numeric HTTP statuses returned through native host callbacks so configured fallback rules can classify upstream errors correctly. CPA v7.2.143 introduced asynchronous native `usage_plugin` callbacks that survive request completion; older hosts can silently omit usage records. The plugin negotiates RPC schema v2 with older compatible hosts and schema v3 when offered; schema v3 avoids resending the full request body with every streaming response chunk. The CPA host must support native plugins, `model_router`, `executor`, `model_registrar`, request interception, `usage_plugin`, and the `host.model.*` callback methods. The configuration and usage page also requires CPA's `management_api` capability and plugin resource menus.
 
 Build the plugin for the same operating system and architecture as CPA. A Go `c-shared` library is not portable across OS or CPU targets.
 
@@ -217,7 +217,7 @@ CPA_SOURCE=../CLIProxyAPI \
   go test -tags=integration ./... -count=1 -v
 ```
 
-The black-box test builds CPA and the native plugin in a temporary directory, starts two logical providers on a local mock OpenAI-compatible server, loads the library through CPA, and verifies all of the following without real provider credentials. Public CI runs it against the minimum supported CPA v7.2.143 commit:
+The black-box test builds CPA and the native plugin in a temporary directory, starts logical providers on a local mock OpenAI-compatible server, loads the library through CPA, and verifies all of the following without real provider credentials. Public CI runs it against the minimum supported CPA v7.3.9 commit:
 
 - the logical alias appears in `/v1/models`;
 - the Model Router menu and parser-backed validation endpoint are available;

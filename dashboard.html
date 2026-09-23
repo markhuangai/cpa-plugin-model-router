@@ -2452,12 +2452,14 @@ function routeIndexFrom(target){
 function moveRoute(index,delta,action){
   const next=index+delta;
   if(next<0||next>=state.routes.length)return;
+  const scrollX=window.scrollX,scrollY=window.scrollY;
   const moved=state.routes.splice(index,1)[0];
   state.routes.splice(next,0,moved);
   const cards=routeCardsInOrder(),card=cards[index];
   if(swapNodes(cards,index,next)){renumberRouteCards();keepRouteControlFocus(card,action)}
   else renderRoutes();
   refreshDirty();
+  window.scrollTo(scrollX,scrollY);
 }
 function moveTarget(routeIndex,targetIndex,delta,action){
   const route=state.routes[routeIndex];
