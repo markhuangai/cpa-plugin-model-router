@@ -433,7 +433,7 @@ func validateSQLiteMigration(path string, marker legacyMigrationMarker) error {
 }
 
 func sqliteReadOnlyDSN(path string) string {
-	fileURL := &url.URL{Scheme: "file", Path: filepath.ToSlash(sqliteAbsolutePath(path))}
+	fileURL := sqliteFileURL(path)
 	query := url.Values{}
 	query.Set("mode", "ro")
 	query.Set("_busy_timeout", fmt.Sprintf("%d", sqliteBusyTimeoutMS))

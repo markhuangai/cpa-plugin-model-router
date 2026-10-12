@@ -140,7 +140,7 @@ func openUsageDatabase(path string) (*sql.DB, error) {
 }
 
 func sqliteDSN(path, journalMode string) string {
-	fileURL := &url.URL{Scheme: "file", Path: filepath.ToSlash(sqliteAbsolutePath(path))}
+	fileURL := sqliteFileURL(path)
 	query := url.Values{}
 	query.Set("_busy_timeout", fmt.Sprintf("%d", sqliteBusyTimeoutMS))
 	query.Set("_foreign_keys", "on")
@@ -149,6 +149,15 @@ func sqliteDSN(path, journalMode string) string {
 	query.Set("_txlock", "immediate")
 	fileURL.RawQuery = query.Encode()
 	return fileURL.String()
+}
+
+func sqliteFileURL(path string) *url.URL {
+	uriPath := filepath.ToSlash(sqliteAbsolutePath(path))
+	// A leading slash keeps Windows drive letters out of the URI authority.
+	if !strings.HasPrefix(uriPath, "/") {
+		uriPath = "/" + uriPath
+	}
+	return &url.URL{Scheme: "file", Path: uriPath}
 }
 
 func sqliteAbsolutePath(path string) string {

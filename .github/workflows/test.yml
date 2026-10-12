@@ -39,3 +39,25 @@ jobs:
         run: |
           mkdir -p dist
           CGO_ENABLED=1 go build -trimpath -buildmode=c-shared -o dist/model-router.so .
+
+  windows-sqlite:
+    runs-on: windows-latest
+    env:
+      CGO_ENABLED: "1"
+      CC: gcc
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Verify native Windows toolchain and source
+        run: |
+          git rev-parse HEAD
+          go env GOOS GOARCH CGO_ENABLED CC
+          gcc --version
+      - name: Test Windows SQLite paths and registration
+        run: go test ./... -run '^(TestSQLite|TestUsageStoreDataPaths|TestUsageStoreRelativePathPersists|TestABIRegistration|TestLegacy)' -count=1 -v
