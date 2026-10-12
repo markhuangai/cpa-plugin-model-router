@@ -433,7 +433,7 @@ func validateSQLiteMigration(path string, marker legacyMigrationMarker) error {
 }
 
 func sqliteReadOnlyDSN(path string) string {
-	fileURL := &url.URL{Scheme: "file", Path: filepath.ToSlash(sqliteAbsolutePath(path))}
+	fileURL := sqliteFileURL(path)
 	query := url.Values{}
 	query.Set("mode", "ro")
 	query.Set("_busy_timeout", fmt.Sprintf("%d", sqliteBusyTimeoutMS))
@@ -606,7 +606,8 @@ func writeMigrationMarker(path string, marker legacyMigrationMarker) error {
 }
 
 func syncFile(path string) error {
-	file, err := os.OpenFile(path, os.O_RDONLY, 0)
+	// Windows FlushFileBuffers requires a writable file handle.
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}

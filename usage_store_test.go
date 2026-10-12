@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -18,8 +19,175 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
+
+func TestSQLiteDSNPaths(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	filename := "usage 日本語 100% # &.db"
+	wantPath := filepath.ToSlash(filepath.Join(root, filename))
+	if runtime.GOOS == "windows" {
+		wantPath = "/" + wantPath
+	}
+	paths := []struct {
+		name, path, want string
+	}{
+		{"absolute", filepath.Join(root, filename), wantPath},
+		{"relative", filename, wantPath},
+		{"forward slashes", filepath.ToSlash(filepath.Join(root, filename)), wantPath},
+	}
+	if runtime.GOOS == "windows" {
+		paths = append(paths,
+			struct{ name, path, want string }{"drive backslashes", `D:\Download\插件 100% # &\usage.db`, "/D:/Download/插件 100% # &/usage.db"},
+			struct{ name, path, want string }{"drive forward slashes", "D:/Download/插件 100% # &/usage.db", "/D:/Download/插件 100% # &/usage.db"},
+		)
+	}
+	builders := []struct {
+		name  string
+		build func(string) string
+		query url.Values
+	}{
+		{"WAL", func(path string) string { return sqliteDSN(path, "WAL") }, url.Values{
+			"_busy_timeout": {"5000"}, "_foreign_keys": {"on"}, "_journal_mode": {"WAL"}, "_synchronous": {"FULL"}, "_txlock": {"immediate"},
+		}},
+		{"DELETE", func(path string) string { return sqliteDSN(path, "DELETE") }, url.Values{
+			"_busy_timeout": {"5000"}, "_foreign_keys": {"on"}, "_journal_mode": {"DELETE"}, "_synchronous": {"FULL"}, "_txlock": {"immediate"},
+		}},
+		{"read only", sqliteReadOnlyDSN, url.Values{"mode": {"ro"}, "_busy_timeout": {"5000"}}},
+	}
+	for _, path := range paths {
+		for _, builder := range builders {
+			t.Run(path.name+"/"+builder.name, func(t *testing.T) {
+				dsn := builder.build(path.path)
+				uri, err := url.Parse(dsn)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if uri.Scheme != "file" || uri.Host != "" || uri.Path != path.want || uri.Fragment != "" || uri.Opaque != "" {
+					t.Fatalf("SQLite URI = %q, want file path %q with no authority or fragment", dsn, path.want)
+				}
+				if !reflect.DeepEqual(uri.Query(), builder.query) {
+					t.Fatalf("SQLite query = %#v, want %#v", uri.Query(), builder.query)
+				}
+			})
+		}
+	}
+}
+
+func TestSQLiteReadOnlyAccess(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage 日本語 100% # &.db")
+	store, err := openUsageStore(path, 365)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Record(storedUsageRecord{RequestedAt: time.Now().UTC(), Attribution: attributionDirect, ProviderModel: "read-only", TotalTokens: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite3", sqliteReadOnlyDSN(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	var count int
+	if err := database.QueryRow("SELECT COUNT(*) FROM requests").Scan(&count); err != nil || count != 1 {
+		t.Fatalf("read-only request count = %d, %v, want 1", count, err)
+	}
+	_, err = database.Exec("DELETE FROM requests")
+	var sqliteError sqlite3.Error
+	if !errors.As(err, &sqliteError) || sqliteError.Code != sqlite3.ErrReadonly {
+		t.Fatalf("read-only write error = %v, want SQLite read-only error", err)
+	}
+	missingPath := filepath.Join(filepath.Dir(path), "missing.db")
+	missing, err := sql.Open("sqlite3", sqliteReadOnlyDSN(missingPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = missing.Close() })
+	if err := missing.Ping(); err == nil {
+		t.Fatal("read-only connection opened a missing database")
+	}
+	if _, err := os.Stat(missingPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read-only connection created a missing database: %v", err)
+	}
+}
+
+func TestSQLiteMigrationFileSync(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage.db.sqlite-v1.migrating")
+	want := []byte("migration temporary file contents")
+	if err := os.WriteFile(path, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncFile(path); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("synced file contents = %q, %v, want %q", got, err, want)
+	}
+	missing := filepath.Join(filepath.Dir(path), "missing.db")
+	if err := syncFile(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("sync missing file error = %v, want not exist", err)
+	}
+	if _, err := os.Stat(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("sync created a missing file: %v", err)
+	}
+}
+
+func TestUsageStoreDataPaths(t *testing.T) {
+	for _, name := range []string{"default", "relative", "absolute", "forward slashes"} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			t.Chdir(root)
+			wantPath := filepath.Join(root, "plugins", "usage 日本語 100% # &.db")
+			config := []byte("routes: []\n")
+			switch name {
+			case "default":
+				wantPath = filepath.Join(root, "plugins", defaultDataFileName)
+			case "relative":
+				config = []byte(fmt.Sprintf("data_path: %q\nroutes: []\n", filepath.Join("plugins", filepath.Base(wantPath))))
+			case "absolute":
+				config = []byte(fmt.Sprintf("data_path: %q\nroutes: []\n", wantPath))
+			case "forward slashes":
+				config = []byte(fmt.Sprintf("data_path: %q\nroutes: []\n", filepath.ToSlash(wantPath)))
+			}
+			plugin, metadata, err := newModelRouterPlugin(config, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = plugin.store.Close() })
+			if plugin.config.DataPath != wantPath || metadata.Name != pluginName {
+				t.Fatalf("plugin data path = %q, metadata name = %q; want %q, %q", plugin.config.DataPath, metadata.Name, wantPath, pluginName)
+			}
+			var journalMode string
+			if err := plugin.store.db.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil || journalMode != "wal" {
+				t.Fatalf("journal mode = %q, %v, want WAL", journalMode, err)
+			}
+			if err := plugin.store.Record(storedUsageRecord{RequestedAt: time.Now().UTC(), Attribution: attributionDirect, ProviderModel: name, TotalTokens: 7}); err != nil {
+				t.Fatal(err)
+			}
+			if err := plugin.store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if kind, err := usageDatabaseKind(wantPath); err != nil || kind != usageDatabaseSQLite {
+				t.Fatalf("configured database kind = %s, %v, want SQLite", kind, err)
+			}
+			reopened, _, err := newModelRouterPlugin(config, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = reopened.store.Close() })
+			page, err := reopened.store.Requests(usageFilter{}, "time", "asc", 0, 10)
+			if err != nil || page.Total != 1 || len(page.Items) != 1 || page.Items[0].ProviderModel != name || page.Items[0].TotalTokens != 7 {
+				t.Fatalf("reopened usage = %#v, %v", page, err)
+			}
+		})
+	}
+}
 
 func TestUsageStorePersistsAndResetPreservesSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage.db")
@@ -874,7 +1042,7 @@ func BenchmarkUsageQueries(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	uri := url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
+	uri := sqliteFileURL(path)
 	uri.RawQuery = url.Values{"mode": {"ro"}, "_query_only": {"1"}}.Encode()
 	database, err := sql.Open("sqlite3", uri.String())
 	if err != nil {

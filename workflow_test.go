@@ -29,7 +29,8 @@ func TestWorkflowYAML(t *testing.T) {
 func TestWorkflowRunnersAndActionRuntimes(t *testing.T) {
 	allowedRunners := map[string]map[string]bool{
 		".github/workflows/test.yml": {
-			"ubuntu-latest": true,
+			"ubuntu-latest":  true,
+			"windows-latest": true,
 		},
 		".github/workflows/codeql.yml": {
 			"ubuntu-latest": true,
@@ -39,7 +40,7 @@ func TestWorkflowRunnersAndActionRuntimes(t *testing.T) {
 		},
 	}
 	expectedRunners := map[string]int{
-		".github/workflows/test.yml":    1,
+		".github/workflows/test.yml":    2,
 		".github/workflows/codeql.yml":  1,
 		".github/workflows/release.yml": 3,
 	}

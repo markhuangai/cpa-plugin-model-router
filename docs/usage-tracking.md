@@ -44,6 +44,8 @@ plugins:
 | `data_path` | CPA root plus `plugins/model-router.db` | Converted to a clean absolute path; the parent directory is created with mode `0700` |
 | `retention_days` | `365` | Integer from 1 through 3650 |
 
+`data_path` is a filesystem path, not a `file://` URI. Windows examples are `plugins/model-router.db`, `D:/CLIProxyAPI/plugins/model-router.db`, and `'D:\CLIProxyAPI\plugins\model-router.db'` in YAML. Relative paths resolve from the CPA process working directory. Configure drive-letter paths without an extra leading slash; SQLite URI encoding is handled internally.
+
 If `data_path` is absent, resolution checks:
 
 1. the loaded shared-library path for an ancestor named `plugins`;

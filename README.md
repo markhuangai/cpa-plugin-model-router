@@ -73,6 +73,8 @@ Only two usage-storage settings are supported:
 | `data_path` | CPA `plugins/model-router.db` | Dedicated SQLite database path. Explicit relative paths resolve from the CPA process working directory. |
 | `retention_days` | `365` | UTC days of request details and aggregates to retain, from 1 through 3650. |
 
+`data_path` accepts filesystem paths, not `file://` URIs. On Windows, use a relative path such as `plugins/model-router.db`, an absolute path such as `D:/CLIProxyAPI/plugins/model-router.db`, or a single-quoted YAML path such as `'D:\CLIProxyAPI\plugins\model-router.db'`. Relative paths resolve from the CPA process working directory; do not add a slash before a Windows drive letter.
+
 When `data_path` is omitted, the plugin locates the CPA root from the loaded library, then the CPA executable, then the current working directory. It stores the database at `<CPA root>/plugins/model-router.db`; outside a detected CPA layout it uses `<working directory>/plugins/model-router.db`. The plugins directory must be writable and persistently mounted. Use an explicit absolute `data_path` when the plugin directory is read-only or stored on a disposable container layer.
 
 Version 0.4.0 opens the configured path as SQLite in WAL mode. When that path contains a v0.3.x bbolt database, the first v0.4.0 open performs a one-time, integrity-checked migration and retains the original file as `<data_path>.bbolt-v1.bak`. The migration marker and temporary file make an interrupted copy recoverable; a changed or corrupt source is rejected rather than overwritten. The former omitted-path default at `<CPA root>/data/model-router-usage.db` is not discovered automatically, so set that path explicitly when its history must remain active.
