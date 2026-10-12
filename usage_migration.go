@@ -606,7 +606,8 @@ func writeMigrationMarker(path string, marker legacyMigrationMarker) error {
 }
 
 func syncFile(path string) error {
-	file, err := os.OpenFile(path, os.O_RDONLY, 0)
+	// Windows FlushFileBuffers requires a writable file handle.
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}

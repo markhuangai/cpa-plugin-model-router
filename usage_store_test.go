@@ -117,6 +117,27 @@ func TestSQLiteReadOnlyAccess(t *testing.T) {
 	}
 }
 
+func TestSQLiteMigrationFileSync(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage.db.sqlite-v1.migrating")
+	want := []byte("migration temporary file contents")
+	if err := os.WriteFile(path, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncFile(path); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("synced file contents = %q, %v, want %q", got, err, want)
+	}
+	missing := filepath.Join(filepath.Dir(path), "missing.db")
+	if err := syncFile(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("sync missing file error = %v, want not exist", err)
+	}
+	if _, err := os.Stat(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("sync created a missing file: %v", err)
+	}
+}
+
 func TestUsageStoreDataPaths(t *testing.T) {
 	for _, name := range []string{"default", "relative", "absolute", "forward slashes"} {
 		t.Run(name, func(t *testing.T) {
