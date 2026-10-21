@@ -348,15 +348,37 @@ func TestModelRouterFallbackStatusesWithCLIProxyAPI(t *testing.T) {
 	}
 
 	type fallbackScenario struct {
-		name   string
-		status int
-		stream bool
+		name           string
+		status         int
+		stream         bool
+		fallback       string
+		missingTargets int
+		wantStatus     int
 	}
+	configuredFallback := "fallback_on_status: [400], no_fallback_on_status: [429]"
 	scenarios := []fallbackScenario{
-		{name: "configured_400_chat", status: http.StatusBadRequest},
-		{name: "excluded_429_chat", status: http.StatusTooManyRequests},
-		{name: "configured_400_stream", status: http.StatusBadRequest, stream: true},
-		{name: "excluded_429_stream", status: http.StatusTooManyRequests, stream: true},
+		{name: "configured_400_chat", status: 400, fallback: configuredFallback, wantStatus: 200},
+		{name: "excluded_429_chat", status: 429, fallback: configuredFallback, wantStatus: 429},
+		{name: "configured_400_stream", status: 400, stream: true, fallback: configuredFallback, wantStatus: 200},
+		{name: "excluded_429_stream", status: 429, stream: true, fallback: configuredFallback, wantStatus: 429},
+	}
+	for _, stream := range []bool{false, true} {
+		suffix := "_chat"
+		if stream {
+			suffix = "_stream"
+		}
+		scenarios = append(scenarios,
+			fallbackScenario{name: "missing_provider" + suffix, stream: stream, missingTargets: 1, wantStatus: 200},
+			fallbackScenario{name: "excluded_missing_provider" + suffix, stream: stream, missingTargets: 1, fallback: "no_fallback_on_status: [400]", wantStatus: 400},
+			fallbackScenario{name: "all_providers_missing" + suffix, stream: stream, missingTargets: 2, wantStatus: 503},
+		)
+		for _, status := range []int{400, 401, 402, 422, 429} {
+			wantStatus := 200
+			if status == 400 || status == 422 {
+				wantStatus = status
+			}
+			scenarios = append(scenarios, fallbackScenario{name: fmt.Sprintf("default_%d%s", status, suffix), status: status, stream: stream, wantStatus: wantStatus})
+		}
 	}
 	type fallbackProvider struct {
 		first  bool
@@ -371,12 +393,15 @@ func TestModelRouterFallbackStatusesWithCLIProxyAPI(t *testing.T) {
           cooldown_seconds: 60
           targets:
 `, scenario.name)
-		for _, target := range []struct {
+		for index, target := range []struct {
 			name  string
 			first bool
 		}{{name: "first", first: true}, {name: "second"}} {
 			providerName := "issue11-" + scenario.name + "-" + target.name
 			fmt.Fprintf(&routes, "            - model: %s/issue11-model\n", providerName)
+			if index < scenario.missingTargets {
+				continue
+			}
 			providersByKey["issue11-"+scenario.name+"-"+target.name+"-key"] = fallbackProvider{
 				first:  target.first,
 				status: scenario.status,
@@ -457,17 +482,18 @@ func TestModelRouterFallbackStatusesWithCLIProxyAPI(t *testing.T) {
 	cpaBinary := filepath.Join(workDir, "cli-proxy-api")
 	runSmokeCommand(t, cpaSource, "go", "build", "-o", cpaBinary, "./cmd/server")
 	for _, scenario := range scenarios {
-		caseDir := filepath.Join(workDir, scenario.name)
-		pluginsDir := filepath.Join(caseDir, "plugins")
-		if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Link(pluginArtifact, filepath.Join(pluginsDir, "model-router"+sharedLibraryExtension())); err != nil {
-			t.Fatalf("link plugin for %s: %v", scenario.name, err)
-		}
-		port := reserveLocalPort(t)
-		configPath := filepath.Join(caseDir, "config.yaml")
-		config := fmt.Sprintf(`host: "127.0.0.1"
+		t.Run(scenario.name, func(t *testing.T) {
+			caseDir := filepath.Join(workDir, scenario.name)
+			pluginsDir := filepath.Join(caseDir, "plugins")
+			if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Link(pluginArtifact, filepath.Join(pluginsDir, "model-router"+sharedLibraryExtension())); err != nil {
+				t.Fatalf("link plugin for %s: %v", scenario.name, err)
+			}
+			port := reserveLocalPort(t)
+			configPath := filepath.Join(caseDir, "config.yaml")
+			config := fmt.Sprintf(`host: "127.0.0.1"
 port: %d
 auth-dir: %q
 api-keys: ["local-test-key"]
@@ -480,41 +506,57 @@ plugins:
     model-router:
       enabled: true
       priority: 100
-      fallback:
-        fallback_on_status: [400]
-        no_fallback_on_status: [429]
+      fallback: {%s}
       routes:%s
-openai-compatibility:%s`, port, filepath.Join(caseDir, "auth"), pluginsDir, routes.String(), providerConfig.String())
-		if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
-		cpa := startSmokeCPA(t, cpaBinary, configPath, baseURL)
-		if !waitForSmokeModel(t, baseURL, scenario.name, 10*time.Second) {
-			t.Fatalf("model route alias %s was not registered", scenario.name)
-		}
-		status, body := postSmokeChatResponse(t, baseURL, scenario.name, scenario.stream)
-		firstKey := "issue11-" + scenario.name + "-first-key"
-		secondKey := "issue11-" + scenario.name + "-second-key"
-		callsMu.Lock()
-		firstCalls, secondCalls := calls[firstKey], calls[secondKey]
-		callsMu.Unlock()
-		if firstCalls != 1 {
-			t.Fatalf("%s first target calls = %d, want 1; body = %s", scenario.name, firstCalls, body)
-		}
-		if scenario.status == http.StatusBadRequest {
-			if status != http.StatusOK || secondCalls != 1 || !strings.Contains(body, "upstream=issue11-model") || !strings.Contains(body, scenario.name) {
-				t.Fatalf("%s response status=%d second-target calls=%d body=%s", scenario.name, status, secondCalls, body)
+openai-compatibility:%s`, port, filepath.Join(caseDir, "auth"), pluginsDir, scenario.fallback, routes.String(), providerConfig.String())
+			if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+				t.Fatal(err)
 			}
-		} else {
-			if secondCalls != 0 {
-				t.Fatalf("%s excluded 429 reached the second target %d times; body = %s", scenario.name, secondCalls, body)
+			baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+			cpa := startSmokeCPA(t, cpaBinary, configPath, baseURL)
+			defer cpa.Stop()
+			if !waitForSmokeModel(t, baseURL, scenario.name, 10*time.Second) {
+				t.Fatalf("model route alias %s was not registered", scenario.name)
 			}
-			if !scenario.stream && status != http.StatusTooManyRequests {
-				t.Fatalf("%s response status = %d, want 429; body = %s", scenario.name, status, body)
+			for attempt := range 2 {
+				status, body := postSmokeChatResponse(t, baseURL, scenario.name, scenario.stream)
+				wantStatus := scenario.wantStatus
+				if attempt == 1 && wantStatus == 503 {
+					wantStatus = 429
+				}
+				if status != wantStatus {
+					t.Fatalf("request %d status = %d, want %d; body = %s", attempt+1, status, wantStatus, body)
+				}
+				if wantStatus == 200 && (!strings.Contains(body, "upstream=issue11-model") || !strings.Contains(body, scenario.name)) {
+					t.Fatalf("request %d did not return the rewritten fallback response: %s", attempt+1, body)
+				}
+				if (wantStatus == 400 || wantStatus == 422) && scenario.missingTargets == 0 && !strings.Contains(body, "invalid prompt") {
+					t.Fatalf("request %d lost upstream error details: %s", attempt+1, body)
+				}
+				// CPA cools the credential even when the router excludes 429 from failover.
+				if attempt == 1 && scenario.wantStatus == 429 && !strings.Contains(body, `"code":"model_cooldown"`) {
+					t.Fatalf("excluded 429 should retain CPA's credential cooldown: %s", body)
+				}
 			}
-		}
-		cpa.Stop()
+			firstKey := "issue11-" + scenario.name + "-first-key"
+			secondKey := "issue11-" + scenario.name + "-second-key"
+			callsMu.Lock()
+			firstCalls, secondCalls := calls[firstKey], calls[secondKey]
+			callsMu.Unlock()
+			wantFirstCalls := 2
+			if scenario.missingTargets > 0 {
+				wantFirstCalls = 0
+			} else if scenario.wantStatus == 200 || scenario.wantStatus == 429 {
+				wantFirstCalls = 1
+			}
+			wantSecondCalls := 0
+			if scenario.wantStatus == 200 {
+				wantSecondCalls = 2
+			}
+			if firstCalls != wantFirstCalls || secondCalls != wantSecondCalls {
+				t.Fatalf("target calls = (%d, %d), want (%d, %d)", firstCalls, secondCalls, wantFirstCalls, wantSecondCalls)
+			}
+		})
 	}
 }
 

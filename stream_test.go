@@ -2,12 +2,222 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
+
+func TestExecuteStreamAvailabilityFailures(t *testing.T) {
+	for _, status := range []int{400, 401, 402, 429} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "provider-a", "provider-b"))
+			host := &fakeModelHost{reads: make(map[string][]pluginapi.HostModelStreamReadResponse)}
+			host.start = func(request pluginapi.HostModelExecutionRequest) (pluginapi.HostModelStreamResponse, error) {
+				if request.Model == "provider-a" {
+					return pluginapi.HostModelStreamResponse{}, statusError{status: status, message: missingProviderErrorBody}
+				}
+				host.reads["stream-b"] = []pluginapi.HostModelStreamReadResponse{{Payload: []byte("data: {\"model\":\"provider-b\"}\n\n"), Done: true}}
+				return pluginapi.HostModelStreamResponse{StatusCode: 200, StreamID: "stream-b"}, nil
+			}
+			for range 2 {
+				if err := plugin.executeStreamWithHost(t.Context(), pluginapi.ExecutorRequest{Model: "smart"}, "plugin-stream", host, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(host.startCalls) != 3 || host.startCalls[0].Model != "provider-a" || host.startCalls[1].Model != "provider-b" || host.startCalls[2].Model != "provider-b" {
+				t.Fatalf("calls = %#v, want first target, fallback, then cooled-target skip", host.startCalls)
+			}
+			if len(host.emitted) != 2 || !strings.Contains(string(host.emitted[0]), `"model":"smart"`) {
+				t.Fatalf("emitted = %q", host.emitted)
+			}
+		})
+	}
+}
+
+func TestStartStreamPreservesStartupErrors(t *testing.T) {
+	for _, status := range []int{400, 422, 429} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			plugin := testRouterPluginFromConfig(t, `fallback:
+  no_fallback_on_status: [400, 429]
+routes:
+  - alias: smart
+    models: [provider-a, provider-b]
+`)
+			closed := make(chan string, 1)
+			host := &fakeModelHost{
+				start: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelStreamResponse, error) {
+					return pluginapi.HostModelStreamResponse{StatusCode: status}, errors.New(missingProviderErrorBody)
+				},
+				closePlugin: func(_, message string) { closed <- message },
+			}
+			envelope := startTestStream(t, plugin, host)
+			if envelope.OK || envelope.Error == nil || envelope.Error.HTTPStatus != status || envelope.Error.Message != missingProviderErrorBody {
+				t.Fatalf("startup envelope = %#v", envelope)
+			}
+			if message := waitTestStreamClose(t, closed); message != missingProviderErrorBody || len(host.startCalls) != 1 {
+				t.Fatalf("close = %q, calls = %#v", message, host.startCalls)
+			}
+			host.start = func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelStreamResponse, error) {
+				return pluginapi.HostModelStreamResponse{StatusCode: 200, StreamID: "stream-a"}, nil
+			}
+			host.reads = map[string][]pluginapi.HostModelStreamReadResponse{"stream-a": {{Done: true}}}
+			if next := startTestStream(t, plugin, host); !next.OK {
+				t.Fatalf("next startup = %#v", next)
+			}
+			if message := waitTestStreamClose(t, closed); message != "" || len(host.startCalls) != 2 || host.startCalls[1].Model != "provider-a" {
+				t.Fatalf("rejected startup cooled preferred target: close = %q, calls = %#v", message, host.startCalls)
+			}
+		})
+	}
+}
+
+func TestStartStreamMissingProvidersExhaustRoute(t *testing.T) {
+	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "provider-a", "provider-b"))
+	closed := make(chan string, 1)
+	host := &fakeModelHost{
+		start: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelStreamResponse, error) {
+			return pluginapi.HostModelStreamResponse{}, statusError{status: 400, message: missingProviderErrorBody}
+		},
+		closePlugin: func(_, message string) { closed <- message },
+	}
+	for _, want := range []struct {
+		status int
+		code   string
+	}{{503, "model_route_unavailable"}, {429, "model_route_cooldown"}} {
+		envelope := startTestStream(t, plugin, host)
+		if envelope.OK || envelope.Error == nil || envelope.Error.HTTPStatus != want.status || envelope.Error.Code != want.code {
+			t.Fatalf("startup envelope = %#v, want %#v", envelope, want)
+		}
+		waitTestStreamClose(t, closed)
+	}
+	if len(host.startCalls) != 2 {
+		t.Fatalf("exhausted stream calls = %#v", host.startCalls)
+	}
+}
+
+func TestStartStreamReturnsBeforeBlockedEmit(t *testing.T) {
+	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "provider-a"))
+	closed := make(chan string, 1)
+	release := make(chan struct{})
+	emitting := make(chan struct{}, 1)
+	host := &fakeModelHost{
+		start: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelStreamResponse, error) {
+			return pluginapi.HostModelStreamResponse{StatusCode: 200, StreamID: "stream-a"}, nil
+		},
+		reads: map[string][]pluginapi.HostModelStreamReadResponse{"stream-a": {{Payload: []byte("data: {\"model\":\"provider-a\"}\n\n"), Done: true}}},
+		emit: func(string, []byte) error {
+			emitting <- struct{}{}
+			<-release
+			return nil
+		},
+		closePlugin: func(_, message string) { closed <- message },
+	}
+	func() {
+		defer close(release)
+		if envelope := startTestStream(t, plugin, host); !envelope.OK {
+			t.Fatalf("startup envelope = %#v", envelope)
+		}
+		select {
+		case <-emitting:
+		case <-time.After(5 * time.Second):
+			t.Fatal("stream never reached emission")
+		}
+	}()
+	if message := waitTestStreamClose(t, closed); message != "" || !strings.Contains(string(host.emitted[0]), `"model":"smart"`) {
+		t.Fatalf("close = %q, emitted = %q", message, host.emitted)
+	}
+}
+
+func TestStartStreamCommitsOnPartialPayload(t *testing.T) {
+	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "provider-a", "provider-b"))
+	closed := make(chan string, 1)
+	release := make(chan struct{})
+	reads := 0
+	host := &fakeModelHost{
+		start: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelStreamResponse, error) {
+			return pluginapi.HostModelStreamResponse{StatusCode: 200, StreamID: "stream-a"}, nil
+		},
+		read: func(string) (pluginapi.HostModelStreamReadResponse, error) {
+			reads++
+			if reads == 1 {
+				return pluginapi.HostModelStreamReadResponse{Payload: []byte(`data: {"model":`)}, nil
+			}
+			<-release
+			return pluginapi.HostModelStreamReadResponse{Error: "status 429: late rate limit", Done: true}, nil
+		},
+		closePlugin: func(_, message string) { closed <- message },
+	}
+	func() {
+		defer close(release)
+		if envelope := startTestStream(t, plugin, host); !envelope.OK {
+			t.Fatalf("partial-payload startup = %#v", envelope)
+		}
+	}()
+	if message := waitTestStreamClose(t, closed); !strings.Contains(message, "429") || len(host.startCalls) != 1 || len(host.emitted) != 0 {
+		t.Fatalf("close = %q, calls = %#v, emitted = %q", message, host.startCalls, host.emitted)
+	}
+}
+
+func TestStartStreamPanicBeforePayload(t *testing.T) {
+	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "provider-a"))
+	closed := make(chan string, 1)
+	host := &fakeModelHost{
+		start: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelStreamResponse, error) {
+			panic("fixture panic")
+		},
+		closePlugin: func(_, message string) { closed <- message },
+	}
+	envelope := startTestStream(t, plugin, host)
+	if envelope.OK || envelope.Error == nil || !strings.Contains(envelope.Error.Message, "fixture panic") {
+		t.Fatalf("panic startup = %#v", envelope)
+	}
+	if message := waitTestStreamClose(t, closed); message != envelope.Error.Message {
+		t.Fatalf("panic close = %q", message)
+	}
+}
+
+func startTestStream(t *testing.T, plugin *modelRouterPlugin, host modelHost) abiEnvelope {
+	t.Helper()
+	result := make(chan abiEnvelope, 1)
+	errors := make(chan error, 1)
+	go func() {
+		raw, err := plugin.startStream(executorRPCRequest{ExecutorRequest: pluginapi.ExecutorRequest{Model: "smart", SourceFormat: "openai"}, StreamID: "plugin-stream"}, host)
+		var envelope abiEnvelope
+		if err == nil {
+			err = json.Unmarshal(raw, &envelope)
+		}
+		if err != nil {
+			errors <- err
+			return
+		}
+		result <- envelope
+	}()
+	select {
+	case envelope := <-result:
+		return envelope
+	case err := <-errors:
+		t.Fatal(err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("stream startup did not return")
+	}
+	return abiEnvelope{}
+}
+
+func waitTestStreamClose(t *testing.T, closed <-chan string) string {
+	t.Helper()
+	select {
+	case message := <-closed:
+		return message
+	case <-time.After(5 * time.Second):
+		t.Fatal("plugin stream was not closed")
+		return ""
+	}
+}
 
 // StartStream may report the upstream status alongside the error. A 400 carried
 // that way must move the request to the next target when the configuration lists
@@ -34,7 +244,7 @@ routes:
 		}
 		return pluginapi.HostModelStreamResponse{StatusCode: 200, StreamID: "stream-b"}, nil
 	}
-	err := plugin.executeStreamWithHost(context.Background(), pluginapi.ExecutorRequest{Model: "smart", SourceFormat: "openai"}, "plugin-stream", host)
+	err := plugin.executeStreamWithHost(context.Background(), pluginapi.ExecutorRequest{Model: "smart", SourceFormat: "openai"}, "plugin-stream", host, nil)
 	if err != nil {
 		t.Fatalf("executeStreamWithHost() error = %v", err)
 	}
@@ -48,7 +258,7 @@ func TestExecuteStreamDoesNotFailOverOnRequestError(t *testing.T) {
 	rejected := &fakeModelHost{start: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelStreamResponse, error) {
 		return pluginapi.HostModelStreamResponse{StatusCode: 400}, errors.New(`{"error":{"message":"invalid request"}}`)
 	}}
-	err := plugin.executeStreamWithHost(context.Background(), pluginapi.ExecutorRequest{Model: "smart", SourceFormat: "openai"}, "plugin-stream", rejected)
+	err := plugin.executeStreamWithHost(context.Background(), pluginapi.ExecutorRequest{Model: "smart", SourceFormat: "openai"}, "plugin-stream", rejected, nil)
 	if statusFromError(err) != 400 || len(rejected.startCalls) != 1 {
 		t.Fatalf("executeStreamWithHost() error = %v, start calls = %d", err, len(rejected.startCalls))
 	}
@@ -60,7 +270,7 @@ func TestExecuteStreamDoesNotFailOverOnRequestError(t *testing.T) {
 	healthy.start = func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelStreamResponse, error) {
 		return pluginapi.HostModelStreamResponse{StatusCode: 200, StreamID: "stream-a"}, nil
 	}
-	if err := plugin.executeStreamWithHost(context.Background(), pluginapi.ExecutorRequest{Model: "smart", SourceFormat: "openai"}, "plugin-stream", healthy); err != nil {
+	if err := plugin.executeStreamWithHost(context.Background(), pluginapi.ExecutorRequest{Model: "smart", SourceFormat: "openai"}, "plugin-stream", healthy, nil); err != nil {
 		t.Fatalf("a valid stream after a rejected one must still reach a provider: %v", err)
 	}
 	if len(healthy.startCalls) != 1 {
@@ -85,7 +295,7 @@ routes:
 	host := &fakeModelHost{start: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelStreamResponse, error) {
 		return pluginapi.HostModelStreamResponse{}, statusError{status: 429, message: "rate limit exceeded"}
 	}}
-	err := plugin.executeStreamWithHost(context.Background(), pluginapi.ExecutorRequest{Model: "smart"}, "plugin-stream", host)
+	err := plugin.executeStreamWithHost(context.Background(), pluginapi.ExecutorRequest{Model: "smart"}, "plugin-stream", host, nil)
 	if statusFromError(err) != 429 || len(host.startCalls) != 1 {
 		t.Fatalf("executeStreamWithHost() error = %v, start calls = %d, want status 429 and one call", err, len(host.startCalls))
 	}
@@ -105,7 +315,7 @@ func TestExecuteStreamFailsOverBeforePayload(t *testing.T) {
 		}
 		return pluginapi.HostModelStreamResponse{StatusCode: 200, StreamID: "stream-b"}, nil
 	}
-	err := plugin.executeStreamWithHost(context.Background(), pluginapi.ExecutorRequest{Model: "smart", SourceFormat: "openai"}, "plugin-stream", host)
+	err := plugin.executeStreamWithHost(context.Background(), pluginapi.ExecutorRequest{Model: "smart", SourceFormat: "openai"}, "plugin-stream", host, nil)
 	if err != nil {
 		t.Fatalf("executeStreamWithHost() error = %v", err)
 	}
@@ -128,7 +338,7 @@ func TestExecuteStreamDoesNotRetryAfterPayload(t *testing.T) {
 	host.start = func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelStreamResponse, error) {
 		return pluginapi.HostModelStreamResponse{StatusCode: 200, StreamID: "stream-a"}, nil
 	}
-	err := plugin.executeStreamWithHost(context.Background(), pluginapi.ExecutorRequest{Model: "smart"}, "plugin-stream", host)
+	err := plugin.executeStreamWithHost(context.Background(), pluginapi.ExecutorRequest{Model: "smart"}, "plugin-stream", host, nil)
 	if statusFromError(err) != 429 || len(host.startCalls) != 1 || len(host.emitted) != 1 {
 		t.Fatalf("error = %v, start calls = %d, emitted = %d", err, len(host.startCalls), len(host.emitted))
 	}
@@ -149,7 +359,7 @@ func TestExecuteStreamAttemptsWeightedTargetOncePerRequest(t *testing.T) {
 	host.start = func(request pluginapi.HostModelExecutionRequest) (pluginapi.HostModelStreamResponse, error) {
 		return pluginapi.HostModelStreamResponse{StatusCode: 429}, statusError{status: 429, message: request.Model + " unavailable"}
 	}
-	err := plugin.executeStreamWithHost(context.Background(), pluginapi.ExecutorRequest{Model: "weighted"}, "plugin-stream", host)
+	err := plugin.executeStreamWithHost(context.Background(), pluginapi.ExecutorRequest{Model: "weighted"}, "plugin-stream", host, nil)
 	if statusFromError(err) != 503 || codeFromError(err, "") != "model_route_unavailable" {
 		t.Fatalf("executeStreamWithHost() error = %v", err)
 	}

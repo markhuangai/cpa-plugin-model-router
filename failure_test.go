@@ -6,6 +6,8 @@ import (
 	"testing"
 )
 
+const missingProviderErrorBody = `{"error":{"message":"unknown provider for model provider-a","type":"invalid_request_error","code":"model_not_found","param":"model"}}`
+
 func TestEligibleRouteFailure(t *testing.T) {
 	policy := newFallbackPolicy(defaultFallbackOnStatus, nil)
 	tests := []struct {
@@ -16,6 +18,13 @@ func TestEligibleRouteFailure(t *testing.T) {
 		{name: "rate limit", err: statusError{status: 429, message: "rate limited"}, want: true},
 		{name: "provider server error", err: statusError{status: 503, message: "unavailable"}, want: true},
 		{name: "bad request", err: statusError{status: 400, message: "invalid prompt"}, want: false},
+		{name: "missing provider", err: statusError{status: 400, message: missingProviderErrorBody}, want: true},
+		{name: "prefixed missing provider", err: statusError{status: 400, message: "host model provider-a returned status 400: " + missingProviderErrorBody}, want: true},
+		{name: "missing provider alternate message", err: statusError{status: 400, message: `{"error":{"code":"model_not_found","message":"no provider for model provider-a"}}`}, want: true},
+		{name: "unstructured bad request", err: statusError{status: 400, message: "unknown provider for model provider-a"}, want: false},
+		{name: "request mentions missing provider", err: statusError{status: 400, message: `{"error":{"code":"invalid_request_error","message":"invalid prompt: unknown provider for model provider-a"}}`}, want: false},
+		{name: "different model error", err: statusError{status: 400, message: `{"error":{"code":"model_not_found","message":"invalid model parameter"}}`}, want: false},
+		{name: "missing provider with different status", err: statusError{status: 422, message: missingProviderErrorBody}, want: false},
 		{name: "unprocessable", err: statusError{status: 422, message: "invalid payload"}, want: false},
 		{name: "conflict", err: statusError{status: 409, message: "conflict"}, want: false},
 		{name: "payment required", err: statusError{status: 402, message: "package_quota_exhausted"}, want: true},
@@ -65,5 +74,8 @@ func TestEligibleRouteFailureUsesConfiguredStatuses(t *testing.T) {
 	}
 	if eligibleRouteFailure(statusError{status: 404, message: "items are not persisted when store is false"}, policy) {
 		t.Fatal("a persisted response miss describes the request, so it must never fail over")
+	}
+	if eligibleRouteFailure(statusError{status: 400, message: missingProviderErrorBody}, newFallbackPolicy(defaultFallbackOnStatus, []int{400})) {
+		t.Fatal("an explicit 400 exclusion must also exclude missing-provider errors")
 	}
 }

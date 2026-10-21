@@ -146,9 +146,9 @@ The plugin fails over for these numeric statuses:
 - `404`, except request-scoped persisted-item misses such as `store=false`
 - all `5xx` statuses
 
-`400` and `422` are treated as request errors and returned immediately. Cancellation and deadline errors never fail over. When the host callback loses a numeric status, the plugin fails over only for recognized quota, auth-unavailable, model/provider-unavailable, timeout, DNS, connection, broken-pipe, reset, or EOF messages. Ambiguous errors stop the route to avoid repeating a bad request against every provider.
+`400` and `422` are treated as request errors and returned immediately by default. CPA's structured `model_not_found` error reporting an unknown or missing provider is an exception: its `400` cools the unavailable target and moves to the next candidate. An explicit `fallback.no_fallback_on_status: [400]` also excludes this exception. Cancellation and deadline errors never fail over. When the host callback loses a numeric status, the plugin fails over only for recognized quota, auth-unavailable, model/provider-unavailable, timeout, DNS, connection, broken-pipe, reset, or EOF messages. Ambiguous errors stop the route to avoid repeating a bad request against every provider.
 
-A stream can move to the next target only when start-up fails before any payload bytes arrive. A failure after payload arrival cools the target but is returned to the client without splicing a second provider stream into the first.
+A stream can move to the next target only when start-up fails before any payload bytes arrive. Startup errors preserve their HTTP status and error details before the stream begins. A failure after payload arrival cools the target but is returned to the client without splicing a second provider stream into the first, including when an incomplete frame is still buffered.
 
 ### Thinking suffixes
 

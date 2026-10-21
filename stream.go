@@ -14,22 +14,38 @@ func (p *modelRouterPlugin) startStream(request executorRPCRequest, host modelHo
 	if streamID == "" {
 		return errorEnvelope("executor_error", "stream_id is required for executor.execute_stream", 0), nil
 	}
+	startup := make(chan error, 1)
 	go func() {
-		errorMessage := ""
+		started := false
+		notifyStartup := func(err error) {
+			if !started {
+				started = true
+				startup <- err
+			}
+		}
+		var streamErr error
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				errorMessage = fmt.Sprintf("stream orchestration panic: %v", recovered)
+				streamErr = fmt.Errorf("stream orchestration panic: %v", recovered)
 			}
-			host.ClosePluginStream(streamID, errorMessage)
+			notifyStartup(streamErr)
+			errorMessage := ""
+			if streamErr != nil {
+				errorMessage = streamErr.Error()
+			}
+			if host != nil {
+				host.ClosePluginStream(streamID, errorMessage)
+			}
 		}()
-		if err := p.executeStreamWithHost(context.Background(), request.ExecutorRequest, streamID, host); err != nil {
-			errorMessage = err.Error()
-		}
+		streamErr = p.executeStreamWithHost(context.Background(), request.ExecutorRequest, streamID, host, func() { notifyStartup(nil) })
 	}()
+	if err := <-startup; err != nil {
+		return errorForExecution(err, "executor_error"), nil
+	}
 	return okEnvelope(map[string]any{"headers": http.Header{"Content-Type": []string{"text/event-stream"}}})
 }
 
-func (p *modelRouterPlugin) executeStreamWithHost(_ context.Context, request pluginapi.ExecutorRequest, pluginStreamID string, host modelHost) error {
+func (p *modelRouterPlugin) executeStreamWithHost(_ context.Context, request pluginapi.ExecutorRequest, pluginStreamID string, host modelHost, onPayload func()) error {
 	if p == nil || host == nil {
 		return statusError{status: http.StatusBadGateway, message: "model router host callback is unavailable"}
 	}
@@ -53,7 +69,7 @@ func (p *modelRouterPlugin) executeStreamWithHost(_ context.Context, request plu
 		attempted[routeKey(selection.model)] = struct{}{}
 		target := targetModel(requestedModel, selection.model)
 		p.attribution.MarkRouted(route.Alias, target, request.Headers)
-		receivedPayload, err := forwardStreamAttempt(request, bodyInfo, target, requestedModel, pluginStreamID, host)
+		receivedPayload, err := forwardStreamAttempt(request, bodyInfo, target, requestedModel, pluginStreamID, host, onPayload)
 		if err == nil {
 			return nil
 		}
@@ -72,7 +88,7 @@ func (p *modelRouterPlugin) executeStreamWithHost(_ context.Context, request plu
 	return newRouteError(http.StatusServiceUnavailable, "model_route_unavailable", route.Alias, fmt.Sprintf("no available candidate for model route %q", route.Alias), detail)
 }
 
-func forwardStreamAttempt(request pluginapi.ExecutorRequest, bodyInfo executionBody, target, requestedModel, pluginStreamID string, host modelHost) (bool, error) {
+func forwardStreamAttempt(request pluginapi.ExecutorRequest, bodyInfo executionBody, target, requestedModel, pluginStreamID string, host modelHost, onPayload func()) (bool, error) {
 	response, err := host.StartStream(hostRequest(request, bodyInfo, target, true))
 	if err != nil {
 		// StartStream may report the upstream status alongside the error. Preserve it
@@ -102,6 +118,9 @@ func forwardStreamAttempt(request pluginapi.ExecutorRequest, bodyInfo executionB
 			return receivedPayload, statusError{status: statusFromError(fmt.Errorf("%s", chunk.Error)), message: chunk.Error}
 		}
 		if len(chunk.Payload) > 0 {
+			if !receivedPayload && onPayload != nil {
+				onPayload()
+			}
 			receivedPayload = true
 			if rewritten := rewriter.Rewrite(chunk.Payload); len(rewritten) > 0 {
 				if err := host.Emit(pluginStreamID, rewritten); err != nil {

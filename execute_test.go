@@ -15,6 +15,9 @@ import (
 type fakeModelHost struct {
 	execute      func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelExecutionResponse, error)
 	start        func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelStreamResponse, error)
+	read         func(string) (pluginapi.HostModelStreamReadResponse, error)
+	emit         func(string, []byte) error
+	closePlugin  func(string, string)
 	reads        map[string][]pluginapi.HostModelStreamReadResponse
 	executeCalls []pluginapi.HostModelExecutionRequest
 	startCalls   []pluginapi.HostModelExecutionRequest
@@ -39,6 +42,9 @@ func (host *fakeModelHost) StartStream(request pluginapi.HostModelExecutionReque
 }
 
 func (host *fakeModelHost) ReadStream(streamID string) (pluginapi.HostModelStreamReadResponse, error) {
+	if host.read != nil {
+		return host.read(streamID)
+	}
 	responses := host.reads[streamID]
 	if len(responses) == 0 {
 		return pluginapi.HostModelStreamReadResponse{}, errors.New("unexpected ReadStream call")
@@ -53,12 +59,79 @@ func (host *fakeModelHost) CloseStream(streamID string) error {
 	return nil
 }
 
-func (host *fakeModelHost) Emit(_ string, payload []byte) error {
+func (host *fakeModelHost) Emit(streamID string, payload []byte) error {
 	host.emitted = append(host.emitted, append([]byte(nil), payload...))
+	if host.emit != nil {
+		return host.emit(streamID, payload)
+	}
 	return nil
 }
 
-func (*fakeModelHost) ClosePluginStream(string, string) {}
+func (host *fakeModelHost) ClosePluginStream(streamID, message string) {
+	if host.closePlugin != nil {
+		host.closePlugin(streamID, message)
+	}
+}
+
+func TestExecuteWithHostAvailabilityFailures(t *testing.T) {
+	for _, status := range []int{400, 401, 402, 429} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "provider-a", "provider-b"))
+			host := &fakeModelHost{execute: func(request pluginapi.HostModelExecutionRequest) (pluginapi.HostModelExecutionResponse, error) {
+				if request.Model == "provider-a" {
+					return pluginapi.HostModelExecutionResponse{StatusCode: status, Body: []byte(missingProviderErrorBody)}, nil
+				}
+				return pluginapi.HostModelExecutionResponse{StatusCode: 200, Body: []byte(`{"model":"provider-b"}`)}, nil
+			}}
+			for range 2 {
+				response, err := plugin.executeWithHost(pluginapi.ExecutorRequest{Model: "smart"}, host)
+				if err != nil || jsonModel(t, response.Payload) != "smart" {
+					t.Fatalf("response = %#v, error = %v", response, err)
+				}
+			}
+			if len(host.executeCalls) != 3 || host.executeCalls[0].Model != "provider-a" || host.executeCalls[1].Model != "provider-b" || host.executeCalls[2].Model != "provider-b" {
+				t.Fatalf("calls = %#v, want first target, fallback, then cooled-target skip", host.executeCalls)
+			}
+		})
+	}
+}
+
+func TestExecuteWithHostMissingProvidersExhaustRoute(t *testing.T) {
+	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "provider-a", "provider-b"))
+	host := &fakeModelHost{execute: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelExecutionResponse, error) {
+		return pluginapi.HostModelExecutionResponse{}, statusError{status: 400, message: missingProviderErrorBody}
+	}}
+	_, err := plugin.executeWithHost(pluginapi.ExecutorRequest{Model: "smart"}, host)
+	if statusFromError(err) != 503 || codeFromError(err, "") != "model_route_unavailable" || len(host.executeCalls) != 2 {
+		t.Fatalf("exhausted route error = %v, calls = %d", err, len(host.executeCalls))
+	}
+	_, err = plugin.executeWithHost(pluginapi.ExecutorRequest{Model: "smart"}, host)
+	if statusFromError(err) != 429 || codeFromError(err, "") != "model_route_cooldown" || len(host.executeCalls) != 2 {
+		t.Fatalf("cooled route error = %v, calls = %d", err, len(host.executeCalls))
+	}
+}
+
+func TestExecuteWithHostExplicitlyExcludesMissingProvider(t *testing.T) {
+	plugin := testRouterPluginFromConfig(t, `fallback:
+  no_fallback_on_status: [400]
+routes:
+  - alias: smart
+    models: [provider-a, provider-b]
+`)
+	host := &fakeModelHost{execute: func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelExecutionResponse, error) {
+		return pluginapi.HostModelExecutionResponse{}, statusError{status: 400, message: missingProviderErrorBody}
+	}}
+	_, err := plugin.executeWithHost(pluginapi.ExecutorRequest{Model: "smart"}, host)
+	if statusFromError(err) != 400 || len(host.executeCalls) != 1 {
+		t.Fatalf("excluded error = %v, calls = %d", err, len(host.executeCalls))
+	}
+	host.execute = func(pluginapi.HostModelExecutionRequest) (pluginapi.HostModelExecutionResponse, error) {
+		return pluginapi.HostModelExecutionResponse{StatusCode: 200, Body: []byte(`{"model":"provider-a"}`)}, nil
+	}
+	if _, err := plugin.executeWithHost(pluginapi.ExecutorRequest{Model: "smart"}, host); err != nil || len(host.executeCalls) != 2 || host.executeCalls[1].Model != "provider-a" {
+		t.Fatalf("excluded failure cooled preferred target: error = %v, calls = %#v", err, host.executeCalls)
+	}
+}
 
 func TestExecuteWithHostFailsOverAndRewritesAlias(t *testing.T) {
 	plugin := testRouterPlugin(testModelRoute("smart", routeStrategyPriority, 30, "provider-a", "provider-b"))
