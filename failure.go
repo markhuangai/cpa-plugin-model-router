@@ -122,9 +122,32 @@ func eligibleRouteFailure(err error, policy fallbackPolicy) bool {
 		if persistedResponseMiss(status, err.Error()) {
 			return false
 		}
+		if _, excluded := policy.noFallback[status]; excluded {
+			return false
+		}
+		if status == http.StatusBadRequest && missingProviderFailure(err.Error()) {
+			return true
+		}
 		return policy.shouldFallback(status)
 	}
 	return recognizableTransientError(err)
+}
+
+func missingProviderFailure(message string) bool {
+	var body struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	// Host status responses can prefix the JSON body with the target and HTTP status.
+	if start := strings.IndexByte(message, '{'); start >= 0 {
+		message = message[start:]
+	}
+	if json.Unmarshal([]byte(message), &body) != nil || body.Error.Code != "model_not_found" {
+		return false
+	}
+	return strings.HasPrefix(body.Error.Message, "unknown provider for model ") || strings.HasPrefix(body.Error.Message, "no provider for model ")
 }
 
 // persistedResponseMiss reports the 404 that describes the request rather than
