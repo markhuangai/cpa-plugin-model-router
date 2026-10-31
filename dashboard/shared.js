@@ -7,7 +7,8 @@ const USAGE_API='/v0/management/plugins/model-router/usage';
 const ROUTER_FILTER_MODEL_PREFIX='model:';
 const ROUTER_FILTER_ATTRIBUTION_PREFIX='attribution:';
 const DEFAULT_HIDDEN_GROUP_COLUMNS=['provider','result','router_model','service_tier','source'];
-const CPA_STORAGE_PREFIX='enc::v1::';
+const CPA_STORAGE_PREFIX='enc::v2::';
+const CPA_LEGACY_STORAGE_PREFIX='enc::v1::';
 const CPA_STORAGE_SALT='cli-proxy-api-webui::secure-storage';
 const SESSION_KEY='cpa_model_router_key';
 const REJECTED_KEY='cpa_model_router_rejected_key';
@@ -93,20 +94,26 @@ function parseStoredValue(value){
   try{return JSON.parse(value)}catch(_error){return value}
 }
 function decodeCPAStorage(value){
-  if(!value||!value.startsWith(CPA_STORAGE_PREFIX))return value;
+  if(!value||!value.startsWith('enc::'))return value;
+  const legacy=value.startsWith(CPA_LEGACY_STORAGE_PREFIX);
+  if(!legacy&&!value.startsWith(CPA_STORAGE_PREFIX))return '';
   try{
-    const data=Uint8Array.from(atob(value.slice(CPA_STORAGE_PREFIX.length)),character=>character.charCodeAt(0));
-    const key=new TextEncoder().encode(CPA_STORAGE_SALT+'|'+window.location.host+'|'+navigator.userAgent);
+    const prefix=legacy?CPA_LEGACY_STORAGE_PREFIX:CPA_STORAGE_PREFIX;
+    const data=Uint8Array.from(atob(value.slice(prefix.length)),character=>character.charCodeAt(0));
+    const key=new TextEncoder().encode(CPA_STORAGE_SALT+'|'+window.location.host+(legacy?'|'+navigator.userAgent:''));
     const decoded=new Uint8Array(data.length);
     for(let index=0;index<data.length;index++)decoded[index]=data[index]^key[index%key.length];
-    return new TextDecoder().decode(decoded);
+    return new TextDecoder('utf-8',{fatal:true}).decode(decoded);
   }catch(_error){return ''}
 }
 function readCPAStorageValue(storage,name){
   const raw=readStorageText(storage,name);
   if(!raw)return null;
   const decoded=decodeCPAStorage(raw);
-  return parseStoredValue(decoded||raw);
+  if(raw.startsWith('enc::')){
+    try{return JSON.parse(decoded)}catch(_error){return null}
+  }
+  return parseStoredValue(decoded);
 }
 function readCPAAuthStoreKey(storage){
   const auth=readCPAStorageValue(storage,'cli-proxy-auth');
@@ -116,6 +123,9 @@ function readCPAAuthStoreKey(storage){
 function cpaStoredManagementKey(){
   const session=safeSessionStorage();
   const local=safeLocalStorage();
+  for(const storage of [local,session]){
+    if(readStorageText(storage,'cli-proxy-auth').startsWith(CPA_STORAGE_PREFIX))return readCPAAuthStoreKey(storage);
+  }
   return firstText(
     readCPAStorageValue(session,'managementKey'),
     readCPAStorageValue(local,'managementKey'),

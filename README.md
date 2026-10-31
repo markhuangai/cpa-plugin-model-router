@@ -112,6 +112,8 @@ The fixed **Save changes** and **Discard and reload** dock slides into view only
 
 The dashboard's shared, Configuration, and Usage tracking source lives under dashboard/; Go embeds these files in the plugin and assembles one HTML response when the plugin starts. CPA exposes that page as a public plugin resource so it can embed it in the frontend. Reading or changing configuration still requires the management key. The page reads CPAMC's persisted `cli-proxy-auth` value from same-origin browser storage; it does not change CPAMC's stored session. If **Remember password** is disabled, the persisted session has no key, so the page reveals a fallback key field. A fallback key is cached only in that tab's session storage and is removed when CPA rejects it. CPA's Management API must be enabled and reachable from the browser.
 
+The page supports CPAMC's `enc::v2::` saved sessions and older `enc::v1::` sessions. A present v2 auth record takes precedence over legacy standalone management keys, including when it contains no remembered key. CPAMC v1.27.0 discards pre-v2 saved logins, so sign into CPA once again with **Remember password** enabled after upgrading. Missing, malformed, or unsupported encoded credentials leave the manual key field available.
+
 ### Usage tracking
 
 Usage tracking stores one row for each CPA usage record delivered for a physical routed attempt, including failed attempts before failover, and for each delivered direct-provider record. A routed row keeps the client-visible router alias in `router_model` and the physical CPA target in `provider_model`; direct rows have no router alias. This separation is used consistently in filters, summaries, grouped results, and request details.
