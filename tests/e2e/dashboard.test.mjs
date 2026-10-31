@@ -5,6 +5,25 @@ import { chromium } from 'playwright-core';
 
 const defaultChrome = '/usr/bin/google-chrome';
 
+function dashboardEnvironment() {
+  const dashboardUrl = process.env.DASHBOARD_URL;
+  const managementKey = process.env.DASHBOARD_MANAGEMENT_KEY;
+  const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || defaultChrome;
+  assert.ok(dashboardUrl, 'DASHBOARD_URL must point to a disposable local CPA instance');
+  assert.ok(managementKey, 'DASHBOARD_MANAGEMENT_KEY must be set for that instance');
+  assert.equal(process.env.DASHBOARD_E2E_ALLOW_MUTATIONS, '1', 'set DASHBOARD_E2E_ALLOW_MUTATIONS=1 only for an isolated test instance');
+  assert.ok(existsSync(executablePath), `Chromium executable does not exist: ${executablePath}`);
+  assert.ok(['127.0.0.1', 'localhost', '::1'].includes(new URL(dashboardUrl).hostname), 'DASHBOARD_URL must use loopback');
+  return { dashboardUrl, managementKey, executablePath };
+}
+
+// Fixture format: CPAMC v1.27.0 src/utils/encryption.ts and src/services/storage/secureStorage.ts.
+function cpamcStorage(value, version, host, userAgent) {
+  const key = Buffer.from(`cli-proxy-api-webui::secure-storage|${host}${version === 1 ? `|${userAgent}` : ''}`);
+  const bytes = Buffer.from(JSON.stringify(value));
+  return `enc::v${version}::${Buffer.from(bytes.map((byte, index) => byte ^ key[index % key.length])).toString('base64')}`;
+}
+
 function localDateTime(date) {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
   return local.toISOString().slice(0, 16);
@@ -30,18 +49,89 @@ async function waitForUsageReady(page) {
   assert.doesNotMatch(status || '', /Refresh failed|could not be loaded|could not be saved/i, status || '');
 }
 
+test('dashboard reuses CPAMC credentials and preserves manual recovery', { timeout: 120_000 }, async (t) => {
+  const { dashboardUrl, managementKey, executablePath } = dashboardEnvironment();
+  const { host, origin } = new URL(dashboardUrl);
+  const fixtureUserAgent = 'CPAMC-session-fixture/1';
+  const auth = (key) => ({ state: { apiBase: origin, managementKey: key, rememberPassword: Boolean(key) }, version: 0 });
+  const stored = (value, version = 2) => cpamcStorage(value, version, host, fixtureUserAgent);
+  const currentAuth = stored(auth(managementKey));
+  const scenarios = [
+    { name: 'v2 saved session', local: { 'cli-proxy-auth': currentAuth } },
+    { name: 'v2 survives a changed user agent', local: { 'cli-proxy-auth': currentAuth }, userAgent: 'CPAMC-session-fixture/2' },
+    { name: 'v1 saved session', local: { 'cli-proxy-auth': stored(auth(managementKey), 1) } },
+    { name: 'v1 standalone key', session: { managementKey: stored(managementKey, 1) } },
+    { name: 'legacy plaintext key', local: { managementKey } },
+    { name: 'v2 overrides legacy entries', local: { 'cli-proxy-auth': currentAuth, managementKey: 'stale-fixture-key' }, session: { managementKey: 'stale-fixture-key', 'cli-proxy-auth': stored(auth('stale-fixture-key'), 1) } },
+    { name: 'v2 session storage', session: { 'cli-proxy-auth': currentAuth } },
+    { name: 'missing storage', fallback: true },
+    { name: 'remembering disabled does not revive legacy keys', local: { 'cli-proxy-auth': stored(auth(undefined)), managementKey }, session: { managementKey }, fallback: true },
+    { name: 'corrupt v2 does not revive legacy keys', local: { 'cli-proxy-auth': 'enc::v2::not-base64!', managementKey }, fallback: true },
+    { name: 'corrupt v1 standalone key', session: { managementKey: 'enc::v1::not-base64!' }, fallback: true },
+    { name: 'encoded non-JSON key', session: { managementKey: stored(managementKey).slice(0, -4) }, fallback: true },
+    { name: 'unsupported saved session', local: { 'cli-proxy-auth': 'enc::v3::unsupported' }, fallback: true },
+    { name: 'unsupported standalone key', session: { managementKey: 'enc::v3::unsupported' }, fallback: true },
+    { name: 'rejected key is not retried after reload', local: { 'cli-proxy-auth': stored(auth('rejected-fixture-key')) }, fallback: true, rejected: true },
+  ];
+  const browser = await chromium.launch({ executablePath, headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+  try {
+    for (const scenario of scenarios) await t.test(scenario.name, async () => {
+      const context = await browser.newContext({ userAgent: scenario.userAgent || fixtureUserAgent });
+      try {
+        const local = scenario.local || {};
+        const session = scenario.session || {};
+        await context.addInitScript(({ origin, local, session }) => {
+          if (location.origin !== origin) return;
+          for (const [key, value] of Object.entries(local)) localStorage.setItem(key, value);
+          for (const [key, value] of Object.entries(session)) sessionStorage.setItem(key, value);
+        }, { origin, local, session });
+        const page = await context.newPage();
+        const pageErrors = [];
+        const managementRequests = [];
+        page.on('pageerror', (error) => pageErrors.push(error.message));
+        page.on('request', (request) => {
+          if (new URL(request.url()).pathname.startsWith('/v0/management/')) managementRequests.push(request);
+        });
+        await page.goto(dashboardUrl, { waitUntil: 'domcontentloaded' });
+        if (scenario.fallback) {
+          await page.locator('#auth-dock').waitFor({ state: 'visible' });
+          await page.waitForFunction(() => !document.getElementById('connect').disabled);
+          assert.equal(await page.locator('#workspace').isVisible(), false);
+          if (scenario.rejected) {
+            assert.ok(managementRequests.length > 0);
+            const requestCount = managementRequests.length;
+            await page.reload({ waitUntil: 'domcontentloaded' });
+            await page.locator('#auth-dock').waitFor({ state: 'visible' });
+            assert.equal(managementRequests.length, requestCount, 'a rejected saved key must not be retried');
+          } else assert.equal(managementRequests.length, 0, 'unavailable credentials must not reach the Management API');
+          await page.locator('#management-key').fill(managementKey);
+          await page.locator('#connect').click();
+        }
+        await page.locator('#workspace').waitFor({ state: 'visible' });
+        await page.locator('#model-status[data-tone="ready"]').waitFor();
+        assert.equal(await page.locator('#auth-dock').isVisible(), false);
+        await page.getByRole('tab', { name: 'Usage tracking' }).click();
+        await waitForUsageReady(page);
+        if (!scenario.rejected) {
+          assert.ok(managementRequests.length > 0);
+          assert.ok(managementRequests.every((request) => request.headers().authorization === `Bearer ${managementKey}`));
+        }
+        const hostStorage = await page.evaluate(() => [localStorage, sessionStorage].map((storage) =>
+          Object.fromEntries(['cli-proxy-auth', 'managementKey'].map((key) => [key, storage.getItem(key)]))));
+        assert.deepEqual(hostStorage, [local, session].map((storage) =>
+          Object.fromEntries(['cli-proxy-auth', 'managementKey'].map((key) => [key, storage[key] ?? null]))));
+        assert.deepEqual(pageErrors, []);
+      } finally {
+        await context.close();
+      }
+    });
+  } finally {
+    await browser.close();
+  }
+});
+
 test('dashboard tabs retain their browser interactions after source assembly', { timeout: 120_000 }, async () => {
-  const dashboardUrl = process.env.DASHBOARD_URL;
-  const managementKey = process.env.DASHBOARD_MANAGEMENT_KEY;
-  const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || defaultChrome;
-
-  assert.ok(dashboardUrl, 'DASHBOARD_URL must point to a disposable local CPA instance');
-  assert.ok(managementKey, 'DASHBOARD_MANAGEMENT_KEY must be set for that instance');
-  assert.equal(process.env.DASHBOARD_E2E_ALLOW_MUTATIONS, '1', 'set DASHBOARD_E2E_ALLOW_MUTATIONS=1 only for an isolated test instance');
-  assert.ok(existsSync(executablePath), `Chromium executable does not exist: ${executablePath}`);
-
-  const parsedUrl = new URL(dashboardUrl);
-  assert.ok(['127.0.0.1', 'localhost', '::1'].includes(parsedUrl.hostname), 'DASHBOARD_URL must use loopback');
+  const { dashboardUrl, managementKey, executablePath } = dashboardEnvironment();
 
   const browser = await chromium.launch({
     executablePath,
