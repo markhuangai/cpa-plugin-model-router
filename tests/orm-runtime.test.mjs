@@ -24,12 +24,12 @@ const manifestPath = '/v2/' + upstream + '/manifests/1-prerelease';
 async function fixture(t, { source = 'a'.repeat(40), release = 'v1.0.0-rc.3', workflowFile = 'maintenance.yml' } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'orm-runtime-test-'));
   const state = {
-    source, release, runId: 707, runAttempt: 2, repository, draft: false,
+    source, release, tagSha: annotatedSha, runId: 707, runAttempt: 2, repository, draft: false,
     published: '2026-11-07T01:54:33Z', overrides: {}, receipt: {}, requests: [],
     assets: [{ name: 'publication.json', id: 19 }],
     references: [{
       path: upstream + '/.github/workflows/' + workflowFile + '@v1-prerelease',
-      ref: 'refs/tags/v1-prerelease', sha: source,
+      ref: 'refs/tags/v1-prerelease', sha: annotatedSha,
     }],
   };
   const children = new Set();
@@ -49,8 +49,11 @@ async function fixture(t, { source = 'a'.repeat(40), release = 'v1.0.0-rc.3', wo
       image: 'ghcr.io/' + upstream, digest: imageDigest, ...state.receipt,
     };
     const responses = {
-      [aliasPath]: { ref: 'refs/tags/v1-prerelease', object: { type: 'tag', sha: annotatedSha } },
-      [tagPath]: { tag: 'v1-prerelease', message: state.release, object: { type: 'commit', sha: state.source } },
+      [aliasPath]: { ref: 'refs/tags/v1-prerelease', object: { type: 'tag', sha: state.tagSha } },
+      ['/repos/' + upstream + '/git/tags/' + state.tagSha]: {
+        sha: state.tagSha, tag: 'v1-prerelease', message: state.release,
+        object: { type: 'commit', sha: state.source },
+      },
       ['/repos/' + upstream + '/releases/tags/' + state.release]: {
         id: 17, tag_name: state.release, draft: state.draft, prerelease: true,
         published_at: state.published, assets: state.assets,
@@ -186,7 +189,9 @@ test('selects the image behind the moving channel with real HTTP and native Acti
   const result = await run();
   assert.equal(result.code, 0, result.stderr);
   assert.equal(result.selected.source_sha, state.source);
-  assert.equal(result.selected.workflow_sha, state.source);
+  assert.equal(result.selected.workflow_sha, state.tagSha);
+  assert.equal(result.selected.tag_sha, state.tagSha);
+  assert.equal(result.selected.workflow_sha_kind, 'tag');
   assert.equal(result.selected.release, state.release);
   assert.equal(result.selected.receipt_digest, result.selected.registry_digest);
   assert.ok(result.outputs.includes('ghcr.io/' + upstream + '@' + result.selected.registry_digest));
@@ -196,6 +201,31 @@ test('selects the image behind the moving channel with real HTTP and native Acti
   assert.equal(result.records.filter((record) => record.event === 'orm.channel.selected').length, 1);
   assert.ok(!result.stdout.includes(token));
   assert.ok(!result.stdout.includes(registryToken));
+});
+
+test('accepts the recorded annotated tag SHA from the failed live run', async (t) => {
+  const source = 'e538bdbfd239867029a49a4f003459551b2d0397';
+  const tagSha = '2d5fcfb250c8a012f4000889c47dea788e59c78d';
+  const { state, run } = await fixture(t, { source, workflowFile: 'test-ai.yml' });
+  state.tagSha = tagSha;
+  state.references[0].sha = tagSha;
+  const result = await run();
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assert.equal(result.selected.workflow_sha, tagSha);
+  assert.equal(result.selected.tag_sha, tagSha);
+  assert.equal(result.selected.source_sha, source);
+  assert.equal(result.selected.workflow_sha_kind, 'tag');
+  assert.ok(result.outputs.includes('ghcr.io/' + upstream + '@' + result.selected.registry_digest));
+});
+
+test('accepts a recorded commit SHA matching the verified tag target', async (t) => {
+  const { state, run } = await fixture(t);
+  state.references[0].sha = state.source;
+  const result = await run();
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assert.equal(result.selected.workflow_sha, state.source);
+  assert.equal(result.selected.tag_sha, state.tagSha);
+  assert.equal(result.selected.workflow_sha_kind, 'commit');
 });
 
 test('selects a newer prerelease without changing the resolver or caller', async (t) => {
@@ -218,6 +248,13 @@ const rejected = [
   ['a different run attempt', (s) => { s.runAttempt = 1; }, 'run_identity_mismatch', 'workflow_identity'],
   ['a different repository', (s) => { s.repository = 'someone/else'; }, 'run_identity_mismatch', 'workflow_identity'],
   ['an old workflow selected before the channel advanced', (s) => { s.references[0].sha = 'b'.repeat(40); }, 'workflow_source_mismatch', 'git_tag'],
+  ['an earlier tag object even when its source commit is unchanged', (s) => { s.tagSha = 'e'.repeat(40); }, 'workflow_source_mismatch', 'git_tag'],
+  ['a tag response with a different object identity', (s) => {
+    s.overrides[tagPath] = { raw: JSON.stringify({
+      sha: 'b'.repeat(40), tag: 'v1-prerelease', message: s.release,
+      object: { type: 'commit', sha: s.source },
+    }) };
+  }, 'invalid_git_tag', 'git_tag'],
   ['an unpublished release', (s) => { s.published = null; }, 'release_unpublished', 'release'],
   ['a draft release', (s) => { s.draft = true; }, 'release_unpublished', 'release'],
   ['a missing receipt', (s) => { s.assets = []; }, 'receipt_missing', 'release'],
@@ -247,8 +284,9 @@ test('a mismatch log alone identifies the versions and corrective action', async
   state.references[0].sha = 'b'.repeat(40);
   const result = await run();
   failed(result, 'workflow_source_mismatch', 'git_tag');
-  assert.equal(result.failure.expected, 'b'.repeat(40));
-  assert.equal(result.failure.observed, state.source);
+  assert.deepEqual(result.failure.expected, { tag_sha: state.tagSha, source_sha: state.source });
+  assert.equal(result.failure.observed, 'b'.repeat(40));
+  assert.equal(result.failure.tag_sha, state.tagSha);
   assert.equal(result.failure.release, state.release);
   assert.match(result.failure.next_action, /start a new run/);
   assert.ok(!state.requests.some((request) => request.path === manifestPath));
@@ -292,13 +330,13 @@ test('retains diagnostic evidence when malformed tag metadata exceeds the record
   const { state, run } = await fixture(t);
   state.overrides[tagPath] = {
     raw: JSON.stringify({
-      tag: 'v1-prerelease', object: { type: 'commit', sha: state.source },
+      sha: state.tagSha, tag: 'v1-prerelease', object: { type: 'commit', sha: state.source },
       message: 'malformed-release-canary '.repeat(150),
     }),
   };
   const result = await run();
   failed(result, 'invalid_git_tag', 'git_tag');
-  assert.equal(result.failure.workflow_sha, state.source);
+  assert.equal(result.failure.workflow_sha, state.tagSha);
   assert.equal(result.failure.workflow_ref, 'v1-prerelease');
   assert.equal(result.failure.image_tag, '1-prerelease');
   assert.equal(result.failure.expected.release, 'v1.<minor>.<patch>-rc.<number>');

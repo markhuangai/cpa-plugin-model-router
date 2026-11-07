@@ -199,18 +199,22 @@ export async function resolveRuntime({
         expected: { ref: 'refs/tags/' + workflowRef, type: 'tag' },
         observed: { ref: ref.ref, type: ref.object?.type, sha: ref.object?.sha },
       });
+    selected.tag_sha = ref.object.sha;
     const { data: tag } = await github('git_tag', '/repos/' + upstream + '/git/tags/' + ref.object.sha);
-    requireValue(tag.tag === workflowRef && tag.object?.type === 'commit' && sha.test(tag.object.sha) &&
+    requireValue(tag.sha === selected.tag_sha && tag.tag === workflowRef && tag.object?.type === 'commit' && sha.test(tag.object.sha) &&
       typeof tag.message === 'string' && /^v1\.\d+\.\d+-rc\.\d+$/.test(tag.message.trim()), 'invalid_git_tag', {
-        expected: { tag: workflowRef, type: 'commit', release: 'v1.<minor>.<patch>-rc.<number>' },
-        observed: { tag: tag.tag, type: tag.object?.type, sha: tag.object?.sha, release: tag.message },
+        expected: { sha: selected.tag_sha, tag: workflowRef, type: 'commit', release: 'v1.<minor>.<patch>-rc.<number>' },
+        observed: { sha: tag.sha, tag: tag.tag, type: tag.object?.type, source_sha: tag.object?.sha, release: tag.message },
       });
     selected.release = tag.message.trim();
     selected.source_sha = tag.object.sha;
-    requireValue(selected.source_sha === selected.workflow_sha, 'workflow_source_mismatch', {
-      expected: selected.workflow_sha, observed: selected.source_sha,
-      next_action: 'The channel advanced after workflow selection; start a new run.',
+    requireValue(selected.workflow_sha === selected.tag_sha || selected.workflow_sha === selected.source_sha,
+    'workflow_source_mismatch', {
+      expected: { tag_sha: selected.tag_sha, source_sha: selected.source_sha },
+      observed: selected.workflow_sha,
+      next_action: 'The recorded workflow revision does not match the current channel; start a new run.',
     });
+    selected.workflow_sha_kind = selected.workflow_sha === selected.tag_sha ? 'tag' : 'commit';
 
     const { data: release } = await github('release', '/repos/' + upstream + '/releases/tags/' + selected.release);
     requireValue(release.tag_name === selected.release && release.draft === false &&
