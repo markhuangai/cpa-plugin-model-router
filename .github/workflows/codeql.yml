@@ -15,7 +15,7 @@ permissions:
   security-events: write
 
 jobs:
-  languages:
+  analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     strategy:
@@ -49,16 +49,20 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
+          # Preserve the Go scan identity already present on main.
+          matrix: ${{ matrix.language == 'go' && '{}' || toJSON(matrix) }}
       - name: Build plugin
         if: matrix.language == 'go'
         run: CGO_ENABLED=1 go build -trimpath -buildmode=c-shared -o /tmp/model-router.so .
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v4
         with:
-          category: "/language:${{ matrix.language }}"
+          category: ${{ matrix.language == 'go' && '.github/workflows/codeql.yml:analyze' || format('/language:{0}', matrix.language) }}
+          matrix: ${{ matrix.language == 'go' && '{}' || toJSON(matrix) }}
 
-  analyze:
-    needs: languages
+  gate:
+    name: analyze
+    needs: analyze
     if: always()
     runs-on: ubuntu-latest
     permissions:

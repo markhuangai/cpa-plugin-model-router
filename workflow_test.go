@@ -144,7 +144,7 @@ func TestCodeQLLanguageMatrixAndAggregate(t *testing.T) {
 	if workflow.Name != "CodeQL" {
 		t.Fatal("CodeQL must have the documented workflow name")
 	}
-	languages := workflow.Jobs["languages"]
+	languages := workflow.Jobs["analyze"]
 	modes := map[string]string{}
 	for _, entry := range languages.Strategy.Matrix.Include {
 		modes[entry.Language] = entry.BuildMode
@@ -157,22 +157,25 @@ func TestCodeQLLanguageMatrixAndAggregate(t *testing.T) {
 		t.Fatal("language job names must match the aggregate gate")
 	}
 	var initialized, built, analyzed bool
+	matrixIdentity := "${{ matrix.language == 'go' && '{}' || toJSON(matrix) }}"
 	for _, step := range languages.Steps {
 		switch step.Uses {
 		case "github/codeql-action/init@v4":
-			initialized = step.With["languages"] == "${{ matrix.language }}" && step.With["build-mode"] == "${{ matrix.build-mode }}"
+			initialized = step.With["languages"] == "${{ matrix.language }}" && step.With["build-mode"] == "${{ matrix.build-mode }}" &&
+				step.With["matrix"] == matrixIdentity
 		case "github/codeql-action/analyze@v4":
-			analyzed = step.With["category"] == "/language:${{ matrix.language }}"
+			analyzed = step.With["category"] == "${{ matrix.language == 'go' && '.github/workflows/codeql.yml:analyze' || format('/language:{0}', matrix.language) }}" &&
+				step.With["matrix"] == matrixIdentity
 		}
 		if step.Name == "Build plugin" {
 			built = step.If == "matrix.language == 'go'" && strings.Contains(step.Run, "CGO_ENABLED=1 go build -trimpath -buildmode=c-shared")
 		}
 	}
 	if !initialized || !built || !analyzed {
-		t.Fatal("CodeQL v4 must retain native CGO extraction and language categories")
+		t.Fatal("CodeQL v4 must retain native CGO extraction, the existing Go scan identity, and distinct language categories")
 	}
-	aggregate := workflow.Jobs["analyze"]
-	if aggregate.Needs != "languages" || aggregate.If != "always()" || len(aggregate.Steps) != 1 ||
+	aggregate := workflow.Jobs["gate"]
+	if aggregate.Name != "analyze" || aggregate.Needs != "analyze" || aggregate.If != "always()" || len(aggregate.Steps) != 1 ||
 		!reflect.DeepEqual(aggregate.Permissions, map[string]string{"actions": "read"}) {
 		t.Fatal("the existing analyze check must aggregate every language even after a failure")
 	}
@@ -181,7 +184,7 @@ func TestCodeQLLanguageMatrixAndAggregate(t *testing.T) {
 func TestCodeQLAggregateExecutionPolicy(t *testing.T) {
 	var workflow ormWorkflow
 	readORMYAML(t, ".github/workflows/codeql.yml", &workflow)
-	script, ok := workflow.Jobs["analyze"].Steps[0].With["script"].(string)
+	script, ok := workflow.Jobs["gate"].Steps[0].With["script"].(string)
 	if !ok {
 		t.Fatal("aggregate check script is missing")
 	}

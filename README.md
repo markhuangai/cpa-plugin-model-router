@@ -207,7 +207,8 @@ PATCH /v0/management/plugins/model-router/enabled
 
 The **CodeQL** workflow follows the Dense-Mem matrix pattern: separate Actions,
 Go, and JavaScript/TypeScript analyses use CodeQL v4 and distinct categories.
-Go retains the plugin's explicit CGO `c-shared` build. The existing `analyze`
+Go retains the plugin's explicit CGO `c-shared` build and its existing scan
+identity so GitHub can compare PR results with `main`. The existing `analyze`
 check aggregates every language's latest execution, including partial reruns;
 a missing, skipped, or failed analysis cannot pass that check.
 
