@@ -27,7 +27,7 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: Check formatting
-        run: test -z "$(gofmt -l *.go)"
+        run: test -z "$(gofmt -l ./*.go)"
       - name: Check release scripts
         run: bash -n .github/xgo/*.sh
       - name: Test ORM resolver with Node 24
