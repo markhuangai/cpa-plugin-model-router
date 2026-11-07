@@ -27,9 +27,44 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: Check formatting
-        run: test -z "$(gofmt -l *.go)"
+        run: test -z "$(gofmt -l ./*.go)"
       - name: Check release scripts
         run: bash -n .github/xgo/*.sh
+      - name: Test ORM resolver with Node 24
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            core.info(JSON.stringify({
+              event: 'orm.tests.started',
+              node: process.version,
+              tested_sha: process.env.GITHUB_SHA,
+              pr_head: context.payload.pull_request?.head.sha || context.sha,
+            }));
+            await exec.exec('npm', ['ci']);
+            await exec.exec(process.execPath, ['--test', 'tests/orm-runtime.test.mjs']);
+      - name: Check workflow syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          orm_lint_dir="$(mktemp -d "$RUNNER_TEMP/orm-actionlint.XXXXXX")"
+          cleanup() {
+            for orm_file in "$orm_lint_dir/actionlint.tar.gz" "$orm_lint_dir/actionlint"; do
+              if [[ -f "$orm_file" ]]; then rm -- "$orm_file"; fi
+            done
+            rmdir -- "$orm_lint_dir"
+            echo "orm.tools.cleanup passed"
+          }
+          trap cleanup EXIT
+          curl --fail --silent --show-error --location --max-time 60 \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            --output "$orm_lint_dir/actionlint.tar.gz"
+          printf '%s  %s\n' \
+            8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8 \
+            "$orm_lint_dir/actionlint.tar.gz" | sha256sum --check -
+          tar -xzf "$orm_lint_dir/actionlint.tar.gz" -C "$orm_lint_dir" actionlint
+          "$orm_lint_dir/actionlint" \
+            .github/workflows/test.yml .github/workflows/maintenance.yml \
+            .github/workflows/test-ai.yml .github/workflows/orm-runtime.yml
       - run: go test ./...
       - run: go test -race ./...
       - run: go vet ./...

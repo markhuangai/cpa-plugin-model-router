@@ -1,0 +1,45 @@
+version: 1
+github:
+  token: { from_secret: ORM_GITHUB_TOKEN }
+session_key: { from_secret: ORM_SESSION_KEY }
+proxy:
+  url: { from_secret: AI_ENDPOINT }
+  key: { from_secret: ORM_PROXY_KEY }
+profiles:
+  claude:
+    sdk: claude
+    model: { from_variable: CLAUDE_MODEL }
+    effort: { from_variable: CLAUDE_EFFORT }
+roles:
+  bootstrap:
+    profile: claude
+    prompts: { system: system.md, user: user.md }
+    skills: [project, bootstrap]
+  investigation:
+    profile: claude
+    prompts: { system: system.md, user: investigation.md }
+    skills: [project, investigate]
+  implementation:
+    profile: claude
+    prompts: { system: system.md, user: user.md }
+    skills: [project, implement, review-feedback]
+  audit:
+    profile: claude
+    prompts: { system: system.md, user: user.md }
+    skills: [project, bootstrap, audit]
+  output_review:
+    profile: claude
+    prompts: { system: system.md, user: user.md }
+    skills: [project, output-review]
+pr_monitor:
+  enabled: true
+  requirements_source: github
+  required_checks: [test, windows-sqlite, analyze, CodeQL]
+  automated_reviewers:
+    - { login: "chatgpt-codex-connector[bot]", signal: codex }
+limits:
+  active_minutes: 60
+  model_requests: 200
+  repair_cycles: 3
+  infrastructure_retries: 2
+  wait_hours: 24

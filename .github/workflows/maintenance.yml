@@ -1,0 +1,45 @@
+name: Repository maintenance
+
+on:
+  issues:
+    types: [opened, edited, reopened, closed]
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [synchronize, closed]
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+    inputs:
+      issue-number:
+        description: Existing issue to enroll or resume
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  runtime:
+    if: vars.ORM_ENABLED == 'true'
+    uses: ./.github/workflows/orm-runtime.yml
+    with:
+      workflow-file: maintenance.yml
+
+  maintenance:
+    needs: runtime
+    uses: markhuangai/opensource-repo-manager/.github/workflows/maintenance.yml@v1-prerelease
+    with:
+      runtime-image: ${{ needs.runtime.outputs.runtime-image }}
+      runner: ubuntu-24.04
+      issue-number: ${{ inputs.issue-number || '' }}
+    secrets:
+      ORM_CONFIGURATION_VARIABLES: ${{ toJSON(vars) }}
+      ORM_CONFIGURATION_SECRETS: |
+        {
+          "AI_ENDPOINT": ${{ toJSON(secrets.AI_ENDPOINT) }},
+          "ORM_GITHUB_TOKEN": ${{ toJSON(secrets.ORM_GITHUB_TOKEN) }},
+          "ORM_PROXY_KEY": ${{ toJSON(secrets.ORM_PROXY_KEY) }},
+          "ORM_SESSION_KEY": ${{ toJSON(secrets.ORM_SESSION_KEY) }}
+        }
