@@ -1,0 +1,52 @@
+name: Resolve ORM prerelease runtime
+
+on:
+  workflow_call:
+    inputs:
+      workflow-file:
+        description: Upstream reusable workflow selected by the caller
+        required: true
+        type: string
+    outputs:
+      runtime-image:
+        description: Verified immutable image behind 1-prerelease
+        value: ${{ jobs.resolve.outputs.runtime-image }}
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      runtime-image: ${{ steps.channel.outputs.runtime-image }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Resolve and verify the moving prerelease channel
+        id: channel
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          ORM_WORKFLOW_FILE: ${{ inputs.workflow-file }}
+          ORM_CALLER_SHA: ${{ github.workflow_sha }}
+          ORM_BOOTSTRAP_GITHUB_TOKEN: ${{ github.token }}
+        with:
+          script: |
+            const { pathToFileURL } = await import('node:url');
+            const { resolveRuntime } = await import(pathToFileURL(
+              process.env.GITHUB_WORKSPACE + '/.github/orm/resolve-runtime.mjs'
+            ).href);
+            await resolveRuntime({
+              core,
+              token: process.env.ORM_BOOTSTRAP_GITHUB_TOKEN,
+              repository: context.repo.owner + '/' + context.repo.repo,
+              runId: context.runId,
+              runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+              actor: context.actor,
+              callerSha: process.env.ORM_CALLER_SHA,
+              workflowFile: process.env.ORM_WORKFLOW_FILE,
+            });

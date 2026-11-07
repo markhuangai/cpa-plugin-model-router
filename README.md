@@ -203,6 +203,103 @@ PATCH /v0/management/plugins/model-router/config
 PATCH /v0/management/plugins/model-router/enabled
 ```
 
+## Repository maintenance
+
+The [opensource-repo-manager](https://github.com/markhuangai/opensource-repo-manager)
+workflows investigate new issues, prepare audited fixes for evidenced bugs, and
+follow their own PRs through CI and Codex review. A human reviews and merges each
+PR. Feature requests remain manual.
+
+Maintenance requires the repository Actions variable `ORM_ENABLED=true`.
+Leaving it unset or setting another value disables maintenance. The manual
+**Test AI configuration** workflow remains available while maintenance is off.
+Existing backlog requires selecting an issue through **Repository maintenance**;
+the schedule resumes enrolled tasks every 15 minutes.
+
+Both callers follow `@v1-prerelease` and resolve the container's
+`1-prerelease` tag once per run. The shared resolver checks the Git alias,
+published release receipt, registry digest, and reusable-workflow SHA recorded
+for that run attempt before passing an immutable image to ORM. New runs adopt
+new published v1 prereleases without a repository edit. An alias mismatch stops
+the run; it never substitutes an older release.
+
+### Configuration and activation
+
+`.github/orm.yml` selects the Claude SDK profile for all five roles.
+Model IDs and efforts come from Actions variables without a model catalogue or
+`behaves_as` declaration. The proxy must support the chosen model and effort;
+provider errors fail without changing either setting.
+
+| Actions secret | Purpose |
+| --- | --- |
+| `AI_ENDPOINT` | Private HTTPS proxy URL; the organization secret must be available to this repository. |
+| `ORM_PROXY_KEY` | Proxy authentication. |
+| `ORM_GITHUB_TOKEN` | Repository-scoped PAT for issue/PR publication, branch updates, and monitoring. |
+| `ORM_SESSION_KEY` | Persistent canonical base64 encoding of 32 random bytes for state authentication and artifact encryption. |
+
+`CLAUDE_MODEL` and `CLAUDE_EFFORT` are repository Actions variables.
+The callers forward only the four named secrets through
+`ORM_CONFIGURATION_SECRETS` and variables through
+`ORM_CONFIGURATION_VARIABLES`. Keep the same session key across runs and
+upgrades. See the upstream installation instructions for PAT permissions.
+
+After merging this configuration:
+
+1. Keep maintenance disabled while checking the secret and variable setup.
+2. Run the fixed-prompt live check from the default branch:
+
+   ```bash
+   gh workflow run test-ai.yml --repo markhuangai/cpa-plugin-model-router \
+     --ref main -f role=implementation
+   ```
+
+3. Require its summary to report `outcome: completed` and `cleanup: passed`.
+   The check is bounded to 120 seconds and two upstream requests. It creates no
+   issues, comments, PRs, or session artifacts and does not prove tool execution
+   or GitHub write permissions.
+4. Set the repository Actions variable `ORM_ENABLED` to `true`.
+5. Select one known bug for supervised maintenance. Verify actual tool execution,
+   PR publication, all four CI checks (`test`, `windows-sqlite`,
+   `analyze`, `CodeQL`), and a completed Codex review of the latest head.
+
+Each task retains lifetime limits of 60 active minutes, 200 model requests, three
+repair cycles, two infrastructure retries, and 24 hours waiting for CI/review.
+These limits do not impose a repository-wide spending cap.
+
+### Diagnosis and recovery
+
+Collect the exact run attempt with:
+
+```bash
+gh run view RUN_ID --attempt ATTEMPT \
+  --repo markhuangai/cpa-plugin-model-router --log |
+  rg 'orm\.channel\.|configuration_|model\.request\.|ai\.test\.'
+```
+
+At normal log visibility, `orm.channel.selected` records the release,
+source/workflow revisions and selected image. `orm.channel.failed` identifies
+the failed stage, cause, expected/observed identities or HTTP status, elapsed
+time, and corrective action. Responses are bounded to 1 MiB; records are bounded
+to 2 KiB with explicit omission counts. Credentials and signed download URLs
+are excluded. Logs use the repository's existing Actions retention.
+
+When aliases disagree or an old run retains an earlier reusable-workflow SHA,
+wait for complete upstream publication and start a new run. The resolver does
+not retry automatically. For missing configuration sources, fix the named
+variable or forwarded secret. For provider failures, inspect
+`model.request.failed` and `ai.test.finished` before another live check.
+To pause intake, set `ORM_ENABLED=false`. Preserve managed comments, the
+`orm:managed` label, task branches/PRs, session key, and artifacts during
+recovery; incompatible state is a blocker, not permission to reset budgets.
+
+The resolver's HTTP-fixture and native Actions logging tests run without model
+credentials:
+
+```bash
+npm ci
+npm run test:orm
+```
+
 ## Build And Test
 
 Go 1.26 and a working C compiler are required.

@@ -1,9 +1,11 @@
 {
   "private": true,
   "scripts": {
+    "test:orm": "node --test tests/orm-runtime.test.mjs",
     "test:e2e": "node --test tests/e2e/dashboard.test.mjs"
   },
   "devDependencies": {
+    "@actions/core": "1.11.1",
     "playwright-core": "1.63.0"
   }
 }
