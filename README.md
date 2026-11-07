@@ -203,6 +203,34 @@ PATCH /v0/management/plugins/model-router/config
 PATCH /v0/management/plugins/model-router/enabled
 ```
 
+## Automated code review
+
+The **CodeQL** workflow follows the Dense-Mem matrix pattern: separate Actions,
+Go, and JavaScript/TypeScript analyses use CodeQL v4 and distinct categories.
+Go retains the plugin's explicit CGO `c-shared` build. The existing `analyze`
+check aggregates every language's latest execution, including partial reruns;
+a missing, skipped, or failed analysis cannot pass that check.
+
+**AI Pull Request Review** calls
+`markhuangai/ai-pr-reviewer@v1-prerelease` directly. It reviews pull requests to
+`main`, including forks, using a trusted base-branch workflow and a full-history
+checkout of the PR revision. The job runs only checkout and the packaged reviewer;
+it does not run PR build scripts. Reviews use three bounded Claude goals for
+correctness, security, and test assurance, with automatic approval disabled.
+New events cancel an older review for the same PR.
+
+The reviewer uses the available organization secrets `PR_REVIEW_PAT` and
+`AI_ENDPOINT`, the repository secret `ORM_PROXY_KEY`, and the existing
+`CLAUDE_MODEL`/`CLAUDE_EFFORT` variables. The review PAT needs Contents and Pull
+requests read/write permissions for interactive review and thread resolution.
+This is independent of Codex review and requires no ORM runtime resolver.
+
+After the workflow reaches the default branch, a maintainer can also select a PR
+through its manual `pull-request-number` input. The action binds its result to
+the captured PR revision; a review for an earlier head does not prove the latest
+head was reviewed. Its provider requests and findings are a separate cost from
+ORM's task budgets.
+
 ## Repository maintenance
 
 The [opensource-repo-manager](https://github.com/markhuangai/opensource-repo-manager)
@@ -302,7 +330,8 @@ npm run test:orm
 
 ## Build And Test
 
-Go 1.26 and a working C compiler are required.
+Go 1.26 and a working C compiler are required. Workflow policy tests also require
+Node 24 to execute the CodeQL aggregate script against success and failure cases.
 
 ```bash
 make check

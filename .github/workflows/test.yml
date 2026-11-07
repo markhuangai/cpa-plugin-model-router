@@ -63,7 +63,8 @@ jobs:
             "$orm_lint_dir/actionlint.tar.gz" | sha256sum --check -
           tar -xzf "$orm_lint_dir/actionlint.tar.gz" -C "$orm_lint_dir" actionlint
           "$orm_lint_dir/actionlint" \
-            .github/workflows/test.yml .github/workflows/maintenance.yml \
+            .github/workflows/test.yml .github/workflows/codeql.yml \
+            .github/workflows/ai-pr-review.yml .github/workflows/maintenance.yml \
             .github/workflows/test-ai.yml .github/workflows/orm-runtime.yml
       - run: go test ./...
       - run: go test -race ./...

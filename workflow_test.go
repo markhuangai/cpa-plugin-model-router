@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"reflect"
 	"regexp"
 	"strings"
@@ -14,6 +15,7 @@ import (
 var workflowPaths = []string{
 	".github/workflows/test.yml",
 	".github/workflows/codeql.yml",
+	".github/workflows/ai-pr-review.yml",
 	".github/workflows/release.yml",
 	".github/workflows/maintenance.yml",
 	".github/workflows/test-ai.yml",
@@ -47,6 +49,9 @@ func TestWorkflowRunnersAndActionRuntimes(t *testing.T) {
 		".github/workflows/codeql.yml": {
 			"ubuntu-latest": true,
 		},
+		".github/workflows/ai-pr-review.yml": {
+			"ubuntu-latest": true,
+		},
 		".github/workflows/release.yml": {
 			"ubuntu-latest": true,
 		},
@@ -55,16 +60,18 @@ func TestWorkflowRunnersAndActionRuntimes(t *testing.T) {
 		},
 	}
 	expectedRunners := map[string]int{
-		".github/workflows/test.yml":        2,
-		".github/workflows/codeql.yml":      1,
-		".github/workflows/release.yml":     3,
-		".github/workflows/maintenance.yml": 0,
-		".github/workflows/test-ai.yml":     0,
-		".github/workflows/orm-runtime.yml": 1,
+		".github/workflows/test.yml":         2,
+		".github/workflows/codeql.yml":       2,
+		".github/workflows/ai-pr-review.yml": 1,
+		".github/workflows/release.yml":      3,
+		".github/workflows/maintenance.yml":  0,
+		".github/workflows/test-ai.yml":      0,
+		".github/workflows/orm-runtime.yml":  1,
 	}
 	allowedActions := map[string]bool{
 		"actions/checkout@v7":          true,
 		"actions/setup-go@v7":          true,
+		"actions/setup-node@v7":        true,
 		"actions/upload-artifact@v7":   true,
 		"actions/download-artifact@v8": true,
 		"actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3": true,
@@ -99,17 +106,186 @@ func TestWorkflowRunnersAndActionRuntimes(t *testing.T) {
 }
 
 type ormWorkflow struct {
+	Name        string
+	On          map[string]any
 	Permissions map[string]string
 	Jobs        map[string]struct {
-		If      string
-		Needs   string
-		Uses    string
-		With    map[string]any
-		Secrets map[string]string
-		Steps   []struct {
+		Name        string
+		If          string
+		Needs       string
+		Uses        string
+		With        map[string]any
+		Secrets     map[string]string
+		Permissions map[string]string
+		Concurrency map[string]any
+		Strategy    struct {
+			FailFast bool `yaml:"fail-fast"`
+			Matrix   struct {
+				Include []struct {
+					Language  string
+					BuildMode string `yaml:"build-mode"`
+				}
+			}
+		}
+		Steps []struct {
+			Name string
 			Uses string
+			If   string
+			Run  string
 			With map[string]any
 			Env  map[string]string
+		}
+	}
+}
+
+func TestCodeQLLanguageMatrixAndAggregate(t *testing.T) {
+	var workflow ormWorkflow
+	readORMYAML(t, ".github/workflows/codeql.yml", &workflow)
+	if workflow.Name != "CodeQL" {
+		t.Fatal("CodeQL must have the documented workflow name")
+	}
+	languages := workflow.Jobs["languages"]
+	modes := map[string]string{}
+	for _, entry := range languages.Strategy.Matrix.Include {
+		modes[entry.Language] = entry.BuildMode
+	}
+	if len(languages.Strategy.Matrix.Include) != 3 || languages.Strategy.FailFast ||
+		!reflect.DeepEqual(modes, map[string]string{"actions": "none", "go": "manual", "javascript-typescript": "none"}) {
+		t.Fatalf("all three independent language analyses are required: %v", modes)
+	}
+	if languages.Name != "Analyze (${{ matrix.language }})" {
+		t.Fatal("language job names must match the aggregate gate")
+	}
+	var initialized, built, analyzed bool
+	for _, step := range languages.Steps {
+		switch step.Uses {
+		case "github/codeql-action/init@v4":
+			initialized = step.With["languages"] == "${{ matrix.language }}" && step.With["build-mode"] == "${{ matrix.build-mode }}"
+		case "github/codeql-action/analyze@v4":
+			analyzed = step.With["category"] == "/language:${{ matrix.language }}"
+		}
+		if step.Name == "Build plugin" {
+			built = step.If == "matrix.language == 'go'" && strings.Contains(step.Run, "CGO_ENABLED=1 go build -trimpath -buildmode=c-shared")
+		}
+	}
+	if !initialized || !built || !analyzed {
+		t.Fatal("CodeQL v4 must retain native CGO extraction and language categories")
+	}
+	aggregate := workflow.Jobs["analyze"]
+	if aggregate.Needs != "languages" || aggregate.If != "always()" || len(aggregate.Steps) != 1 ||
+		!reflect.DeepEqual(aggregate.Permissions, map[string]string{"actions": "read"}) {
+		t.Fatal("the existing analyze check must aggregate every language even after a failure")
+	}
+}
+
+func TestCodeQLAggregateExecutionPolicy(t *testing.T) {
+	var workflow ormWorkflow
+	readORMYAML(t, ".github/workflows/codeql.yml", &workflow)
+	script, ok := workflow.Jobs["analyze"].Steps[0].With["script"].(string)
+	if !ok {
+		t.Fatal("aggregate check script is missing")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Fatal("Node.js is required for workflow policy tests")
+	}
+	job := func(language string, attempt int, conclusion string) map[string]any {
+		return map[string]any{"name": "Analyze (" + language + ")", "run_attempt": attempt, "status": "completed", "conclusion": conclusion}
+	}
+	passed := func() []map[string]any {
+		return []map[string]any{job("actions", 1, "success"), job("go", 1, "success"), job("javascript-typescript", 1, "success")}
+	}
+	cases := []struct {
+		name string
+		jobs []map[string]any
+		fail bool
+	}{
+		{"all languages passed", passed(), false},
+		{"missing Actions analysis", passed()[1:], true},
+		{"missing Go analysis", []map[string]any{job("actions", 1, "success"), job("javascript-typescript", 1, "success")}, true},
+		{"missing JavaScript analysis", passed()[:2], true},
+		{"skipped analysis", []map[string]any{job("actions", 1, "success"), job("go", 1, "skipped"), job("javascript-typescript", 1, "success")}, true},
+		{"latest rerun failed", append(passed(), job("go", 2, "failure")), true},
+		{"latest rerun repaired", []map[string]any{job("actions", 1, "success"), job("go", 1, "failure"), job("go", 2, "success"), job("javascript-typescript", 1, "success")}, false},
+		{"duplicate latest execution", append(passed(), job("go", 1, "success")), true},
+		{"future attempt cannot override current failure", append(passed(), job("go", 2, "failure"), job("go", 3, "success")), true},
+	}
+	program := `
+import { readFileSync } from 'node:fs';
+const { script, jobs } = JSON.parse(readFileSync(0, 'utf8'));
+const failures = [];
+const github = { rest: { actions: { listJobsForWorkflowRun: null } }, paginate: async () => jobs };
+const context = { repo: { owner: 'fixture', repo: 'fixture' }, runId: 707 };
+const core = { setFailed: message => failures.push(message) };
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+await new AsyncFunction('github', 'context', 'core', script)(github, context, core);
+process.stdout.write(JSON.stringify(failures));
+`
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			input, err := json.Marshal(map[string]any{"script": script, "jobs": tc.jobs})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(node, "--input-type=module", "--eval", program)
+			cmd.Env = append(os.Environ(), "GITHUB_RUN_ATTEMPT=2")
+			cmd.Stdin = strings.NewReader(string(input))
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("aggregate policy execution failed: %v\n%s", err, output)
+			}
+			var failures []string
+			if err := json.Unmarshal(output, &failures); err != nil {
+				t.Fatal(err)
+			}
+			if (len(failures) > 0) != tc.fail {
+				t.Fatalf("unexpected aggregate result: %v", failures)
+			}
+		})
+	}
+}
+
+func TestAIReviewerDirectActionAndTrust(t *testing.T) {
+	var workflow ormWorkflow
+	readORMYAML(t, ".github/workflows/ai-pr-review.yml", &workflow)
+	if _, ok := workflow.On["pull_request_target"]; !ok {
+		t.Fatal("automatic reviews must use the trusted base-branch workflow")
+	}
+	if !reflect.DeepEqual(workflow.Permissions, map[string]string{"contents": "read", "pull-requests": "read"}) {
+		t.Fatal("review job token must remain read-only")
+	}
+	job := workflow.Jobs["review"]
+	if len(workflow.Jobs) != 1 || len(job.Steps) != 2 || job.Concurrency["cancel-in-progress"] != true {
+		t.Fatal("review must call the packaged action directly with per-PR cancellation")
+	}
+	checkout, review := job.Steps[0], job.Steps[1]
+	if checkout.Uses != "actions/checkout@v7" || checkout.With["persist-credentials"] != false || checkout.With["fetch-depth"] != 0 ||
+		checkout.With["ref"] != "${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}" {
+		t.Fatal("review requires a full-history PR revision without persisted credentials")
+	}
+	if checkout.Run != "" || review.Run != "" || review.Uses != "markhuangai/ai-pr-reviewer@v1-prerelease" {
+		t.Fatal("privileged review must not execute repository setup or build scripts")
+	}
+	for key, expected := range map[string]string{
+		"executor": "claude", "github-pat": "${{ secrets.PR_REVIEW_PAT }}",
+		"ai-base-url": "${{ secrets.AI_ENDPOINT }}", "ai-secret": "${{ secrets.ORM_PROXY_KEY }}",
+		"model": "${{ vars.CLAUDE_MODEL }}", "effort": "${{ vars.CLAUDE_EFFORT }}", "auto-approve": "false",
+	} {
+		if review.With[key] != expected {
+			t.Fatalf("review input %s must be %q", key, expected)
+		}
+	}
+	prompts, ok := review.With["review-prompts"].(string)
+	if !ok {
+		t.Fatal("review prompts are missing")
+	}
+	var goals []struct{ Prompt string }
+	if err := json.Unmarshal([]byte(prompts), &goals); err != nil || len(goals) != 3 {
+		t.Fatalf("review prompts must define three valid goals: %v", err)
+	}
+	for _, goal := range goals {
+		if strings.TrimSpace(goal.Prompt) == "" {
+			t.Fatal("review goals must not be empty")
 		}
 	}
 }
