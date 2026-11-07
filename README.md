@@ -213,8 +213,10 @@ a missing, skipped, or failed analysis cannot pass that check.
 
 **AI Pull Request Review** calls
 `markhuangai/ai-pr-reviewer@v1-prerelease` directly. It reviews pull requests to
-`main`, including forks, using a trusted base-branch workflow and a full-history
-checkout of the PR revision. The job runs only checkout and the packaged reviewer;
+`main` from branches in this repository using an unprivileged PR event and a
+full-history checkout of the PR revision. Fork reviews require an explicit
+maintainer dispatch, so fork code never automatically receives review credentials.
+The job runs only checkout and the packaged reviewer;
 it does not run PR build scripts. Reviews use three bounded Claude goals for
 correctness, security, and test assurance, with automatic approval disabled.
 New events cancel an older review for the same PR.

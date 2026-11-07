@@ -248,13 +248,20 @@ process.stdout.write(JSON.stringify(failures));
 func TestAIReviewerDirectActionAndTrust(t *testing.T) {
 	var workflow ormWorkflow
 	readORMYAML(t, ".github/workflows/ai-pr-review.yml", &workflow)
-	if _, ok := workflow.On["pull_request_target"]; !ok {
-		t.Fatal("automatic reviews must use the trusted base-branch workflow")
+	if _, ok := workflow.On["pull_request"]; !ok {
+		t.Fatal("automatic reviews must use an unprivileged PR event")
+	}
+	if _, ok := workflow.On["pull_request_target"]; ok {
+		t.Fatal("automatic reviews must not check out PR code through a privileged event")
 	}
 	if !reflect.DeepEqual(workflow.Permissions, map[string]string{"contents": "read", "pull-requests": "read"}) {
 		t.Fatal("review job token must remain read-only")
 	}
 	job := workflow.Jobs["review"]
+	if !strings.Contains(job.If, "github.event.pull_request.head.repo.full_name == github.repository") ||
+		!strings.Contains(job.If, "github.event_name == 'workflow_dispatch'") {
+		t.Fatal("fork reviews require an explicit maintainer dispatch")
+	}
 	if len(workflow.Jobs) != 1 || len(job.Steps) != 2 || job.Concurrency["cancel-in-progress"] != true {
 		t.Fatal("review must call the packaged action directly with per-PR cancellation")
 	}
