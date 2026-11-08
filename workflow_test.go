@@ -19,7 +19,6 @@ var workflowPaths = []string{
 	".github/workflows/release.yml",
 	".github/workflows/maintenance.yml",
 	".github/workflows/test-ai.yml",
-	".github/workflows/orm-runtime.yml",
 }
 
 func TestWorkflowYAML(t *testing.T) {
@@ -55,9 +54,6 @@ func TestWorkflowRunnersAndActionRuntimes(t *testing.T) {
 		".github/workflows/release.yml": {
 			"ubuntu-latest": true,
 		},
-		".github/workflows/orm-runtime.yml": {
-			"ubuntu-24.04": true,
-		},
 	}
 	expectedRunners := map[string]int{
 		".github/workflows/test.yml":         2,
@@ -66,7 +62,6 @@ func TestWorkflowRunnersAndActionRuntimes(t *testing.T) {
 		".github/workflows/release.yml":      3,
 		".github/workflows/maintenance.yml":  0,
 		".github/workflows/test-ai.yml":      0,
-		".github/workflows/orm-runtime.yml":  1,
 	}
 	allowedActions := map[string]bool{
 		"actions/checkout@v7":          true,
@@ -311,7 +306,7 @@ func readORMYAML(t *testing.T, path string, target any) {
 	}
 }
 
-func TestORMWorkflowTrustAndChannel(t *testing.T) {
+func TestORMWorkflowDefaultsAndTrust(t *testing.T) {
 	secretReference := regexp.MustCompile("\\$\\{\\{ toJSON\\(secrets\\.([A-Z_]+)\\) \\}\\}")
 	expectedSecrets := map[string]string{
 		"AI_ENDPOINT":      "fixture",
@@ -326,19 +321,19 @@ func TestORMWorkflowTrustAndChannel(t *testing.T) {
 			if !reflect.DeepEqual(workflow.Permissions, map[string]string{"contents": "read", "actions": "read"}) {
 				t.Fatalf("unexpected caller permissions: %v", workflow.Permissions)
 			}
-			resolver := workflow.Jobs["runtime"]
-			if resolver.Uses != "./.github/workflows/orm-runtime.yml" || resolver.With["workflow-file"] != filename || len(resolver.Secrets) != 0 {
-				t.Fatal("caller must resolve the channel without forwarding ORM secrets")
-			}
-			if filename == "maintenance.yml" && resolver.If != "vars.ORM_ENABLED == 'true'" {
-				t.Fatal("maintenance must require explicit activation")
-			}
 			job := workflow.Jobs[jobName]
-			if job.Needs != "runtime" || job.Uses != "markhuangai/opensource-repo-manager/.github/workflows/"+filename+"@v1-prerelease" {
-				t.Fatal("runtime selection must precede the floating upstream workflow")
+			if len(workflow.Jobs) != 1 || job.Needs != "" ||
+				job.Uses != "markhuangai/opensource-repo-manager/.github/workflows/"+filename+"@v1-prerelease" {
+				t.Fatal("caller must use the upstream prerelease workflow directly")
 			}
-			if job.With["runtime-image"] != "${{ needs.runtime.outputs.runtime-image }}" {
-				t.Fatal("caller must pass the verified immutable image")
+			expectedIf := "vars.ORM_ENABLED == 'true'"
+			expectedWith := map[string]any{"runner": "ubuntu-24.04", "issue-number": "${{ inputs.issue-number || '' }}"}
+			if filename == "test-ai.yml" {
+				expectedIf = "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+				expectedWith = map[string]any{"runner": "ubuntu-24.04", "role": "${{ inputs.role }}"}
+			}
+			if job.If != expectedIf || !reflect.DeepEqual(job.With, expectedWith) {
+				t.Fatal("direct caller must preserve admission guards and use upstream runtime defaults")
 			}
 			if len(job.Secrets) != 2 || job.Secrets["ORM_CONFIGURATION_VARIABLES"] != "${{ toJSON(vars) }}" {
 				t.Fatal("unexpected configuration transports")
@@ -357,16 +352,6 @@ func TestORMWorkflowTrustAndChannel(t *testing.T) {
 				t.Fatalf("unexpected forwarded secrets: %v", forwarded)
 			}
 		})
-	}
-	var resolver ormWorkflow
-	readORMYAML(t, ".github/workflows/orm-runtime.yml", &resolver)
-	steps := resolver.Jobs["resolve"].Steps
-	if len(steps) != 2 || steps[0].Uses != "actions/checkout@v7" ||
-		steps[0].With["ref"] != "${{ github.workflow_sha }}" || steps[0].With["persist-credentials"] != false {
-		t.Fatal("resolver must check out the trusted caller revision without persistent credentials")
-	}
-	if steps[1].Env["ORM_BOOTSTRAP_GITHUB_TOKEN"] != "${{ github.token }}" || len(steps[1].Env) != 3 {
-		t.Fatal("resolver must receive the read-only job token and public selection inputs")
 	}
 }
 

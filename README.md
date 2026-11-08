@@ -247,12 +247,10 @@ Leaving it unset or setting another value disables maintenance. The manual
 Existing backlog requires selecting an issue through **Repository maintenance**;
 the schedule resumes enrolled tasks every 15 minutes.
 
-Both callers follow `@v1-prerelease` and resolve the container's
-`1-prerelease` tag once per run. The shared resolver checks the Git alias,
-published release receipt, registry digest, and reusable-workflow SHA recorded
-for that run attempt before passing an immutable image to ORM. New runs adopt
-new published v1 prereleases without a repository edit. An alias mismatch stops
-the run; it never substitutes an older release.
+Both callers use ORM's reusable workflows at `@v1-prerelease` directly.
+ORM selects a compatible immutable image for its workflow revision and reuses
+that image throughout the run. New runs adopt published v1 prereleases without
+a repository edit. This repository supplies no runtime image or resolver.
 
 ### Configuration and activation
 
@@ -277,14 +275,16 @@ upgrades. See the upstream installation instructions for PAT permissions.
 After merging this configuration:
 
 1. Keep maintenance disabled while checking the secret and variable setup.
-2. Run the fixed-prompt live check from the default branch:
+2. Run the fixed-prompt live check for all five roles from the default branch:
 
    ```bash
-   gh workflow run test-ai.yml --repo markhuangai/cpa-plugin-model-router \
-     --ref main -f role=implementation
+   for orm_role in bootstrap investigation implementation audit output_review; do
+     gh workflow run test-ai.yml --repo markhuangai/cpa-plugin-model-router \
+       --ref main -f role="$orm_role"
+   done
    ```
 
-3. Require its summary to report `outcome: completed` and `cleanup: passed`.
+3. Require every run's summary to report `outcome: completed` and `cleanup: passed`.
    The check is bounded to 120 seconds and two upstream requests. It creates no
    issues, comments, PRs, or session artifacts and does not prove tool execution
    or GitHub write permissions.
@@ -304,32 +304,23 @@ Collect the exact run attempt with:
 ```bash
 gh run view RUN_ID --attempt ATTEMPT \
   --repo markhuangai/cpa-plugin-model-router --log |
-  rg 'orm\.channel\.|configuration_|model\.request\.|ai\.test\.'
+  rg 'runtime\.|configuration_|model\.request\.|ai\.test\.'
 ```
 
-At normal log visibility, `orm.channel.selected` records the release,
-source/workflow revisions and selected image. `orm.channel.failed` identifies
-the failed stage, cause, expected/observed identities or HTTP status, elapsed
-time, and corrective action. Responses are bounded to 1 MiB; records are bounded
-to 2 KiB with explicit omission counts. Credentials and signed download URLs
-are excluded. Logs use the repository's existing Actions retention.
+At normal log visibility, ORM's `runtime.resolved` records the workflow revision
+and selected image; `runtime.used` records which image each controller job uses.
+`runtime.failed` identifies the stage, cause, expected/observed publication
+evidence, registry exit status, elapsed time, and recovery action. Logs use the
+repository's existing Actions retention.
 
-When aliases disagree or an old run retains an earlier reusable-workflow SHA,
-wait for complete upstream publication and start a new run. The resolver does
-not retry automatically. For missing configuration sources, fix the named
+For runtime selection failures, verify GHCR access and image publication for
+the workflow revision identified in the log. Start a new run after upstream
+publication completes. For missing configuration sources, fix the named
 variable or forwarded secret. For provider failures, inspect
 `model.request.failed` and `ai.test.finished` before another live check.
 To pause intake, set `ORM_ENABLED=false`. Preserve managed comments, the
 `orm:managed` label, task branches/PRs, session key, and artifacts during
 recovery; incompatible state is a blocker, not permission to reset budgets.
-
-The resolver's HTTP-fixture and native Actions logging tests run without model
-credentials:
-
-```bash
-npm ci
-npm run test:orm
-```
 
 ## Build And Test
 

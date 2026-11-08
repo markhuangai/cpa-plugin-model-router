@@ -26,22 +26,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
       - name: Check formatting
         run: test -z "$(gofmt -l ./*.go)"
       - name: Check release scripts
         run: bash -n .github/xgo/*.sh
-      - name: Test ORM resolver with Node 24
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          script: |
-            core.info(JSON.stringify({
-              event: 'orm.tests.started',
-              node: process.version,
-              tested_sha: process.env.GITHUB_SHA,
-              pr_head: context.payload.pull_request?.head.sha || context.sha,
-            }));
-            await exec.exec('npm', ['ci']);
-            await exec.exec(process.execPath, ['--test', 'tests/orm-runtime.test.mjs']);
       - name: Check workflow syntax
         shell: bash
         run: |
@@ -65,7 +56,7 @@ jobs:
           "$orm_lint_dir/actionlint" \
             .github/workflows/test.yml .github/workflows/codeql.yml \
             .github/workflows/ai-pr-review.yml .github/workflows/maintenance.yml \
-            .github/workflows/test-ai.yml .github/workflows/orm-runtime.yml
+            .github/workflows/test-ai.yml
       - run: go test ./...
       - run: go test -race ./...
       - run: go vet ./...

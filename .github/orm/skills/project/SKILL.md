@@ -18,8 +18,8 @@ black-box CPA integration against its pinned minimum-supported source. Native
 Windows SQLite and CodeQL checks are remote gates; report them as pending until
 their results exist. Never represent a Linux check as Windows coverage.
 
-For workflow changes, run npm ci, npm run test:orm, and actionlint. Preserve the
-CI source pin and the prerelease channel's workflow/image identity checks.
+For workflow changes, run actionlint and the Go workflow policy tests. Preserve
+the CI source pin and consume ORM's prerelease workflow defaults directly.
 
 Browser E2E requires a disposable loopback CPA instance, its own database and
 management key, and an installed Chromium executable. Those tests modify route

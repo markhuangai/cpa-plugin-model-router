@@ -21,17 +21,10 @@ permissions:
   actions: read
 
 jobs:
-  runtime:
-    if: vars.ORM_ENABLED == 'true'
-    uses: ./.github/workflows/orm-runtime.yml
-    with:
-      workflow-file: maintenance.yml
-
   maintenance:
-    needs: runtime
+    if: vars.ORM_ENABLED == 'true'
     uses: markhuangai/opensource-repo-manager/.github/workflows/maintenance.yml@v1-prerelease
     with:
-      runtime-image: ${{ needs.runtime.outputs.runtime-image }}
       runner: ubuntu-24.04
       issue-number: ${{ inputs.issue-number || '' }}
     secrets:
