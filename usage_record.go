@@ -114,11 +114,8 @@ func looksLikeCredential(value string) bool {
 	if value == "" {
 		return false
 	}
-	lower := strings.ToLower(value)
-	for _, prefix := range []string{"bearer ", "basic ", "token ", "apikey ", "api-key ", "api_key ", "sk-", "sk_", "xai-", "gsk_", "aiza", "key-", "sess-"} {
-		if strings.HasPrefix(lower, prefix) {
-			return true
-		}
+	if hasCredentialPrefix(value) {
+		return true
 	}
 	if len(value) < 8 || strings.ContainsAny(value, " \t\r\n") {
 		return false
@@ -133,6 +130,16 @@ func looksLikeCredential(value string) bool {
 		}
 	}
 	return letters > 0 || digits > 0
+}
+
+func hasCredentialPrefix(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	for _, prefix := range []string{"bearer ", "basic ", "token ", "apikey ", "api-key ", "api_key ", "sk-", "sk_", "xai-", "gsk_", "aiza", "key-", "sess-"} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func durationUint64(value time.Duration) uint64 {

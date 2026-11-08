@@ -101,6 +101,7 @@ type estimatedCost struct {
 	CacheReadUSD          float64 `json:"cache_read_usd"`
 	CacheCreationUSD      float64 `json:"cache_creation_usd"`
 	TotalUSD              float64 `json:"total_usd"`
+	priceAccountingMode   string
 }
 
 func defaultPriceSyncSettings() priceSyncSettings {
@@ -373,13 +374,7 @@ func estimateUsageCost(record storedUsageRecord, resolver modelPriceResolver) es
 	}
 	cacheRead := effectiveCacheReadTokens(record)
 	cacheCreation := record.CacheCreationTokens
-	mode := price.AccountingMode
-	if mode == "" {
-		mode = record.AccountingMode
-	}
-	if mode == "" {
-		mode = defaultAccountingMode(record.Provider, record.ExecutorType)
-	}
+	mode := effectiveAccountingMode(record, price.AccountingMode)
 	billableInput, contextTokens := record.InputTokens, record.InputTokens
 	if mode == accountingModeInputIncludesCache {
 		billableInput = saturatingSub(record.InputTokens, saturatingAdd(cacheRead, cacheCreation))
@@ -404,6 +399,7 @@ func estimateUsageCost(record storedUsageRecord, resolver modelPriceResolver) es
 	}
 	result := estimatedCost{
 		Priced:                true,
+		priceAccountingMode:   price.AccountingMode,
 		Source:                price.Source,
 		AccountingMode:        mode,
 		PriceServiceTier:      priceServiceTier,
@@ -418,6 +414,16 @@ func estimateUsageCost(record storedUsageRecord, resolver modelPriceResolver) es
 	}
 	result.TotalUSD = result.InputUSD + result.OutputUSD + result.CacheReadUSD + result.CacheCreationUSD
 	return result
+}
+
+func effectiveAccountingMode(record storedUsageRecord, override string) string {
+	if override != "" {
+		return override
+	}
+	if record.AccountingMode != "" {
+		return record.AccountingMode
+	}
+	return defaultAccountingMode(record.Provider, record.ExecutorType)
 }
 
 func defaultAccountingMode(provider, executor string) string {

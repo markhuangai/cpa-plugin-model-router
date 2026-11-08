@@ -54,6 +54,10 @@ func (store *usageStore) Dashboard(filter usageFilter, granularity string, group
 
 func (store *usageStore) queryUsage(filter usageFilter, granularity string, groups *usageGroupOptions, requests *usagePageOptions) (usageDashboard, error) {
 	var result usageDashboard
+	var diagnostics *usageAccountingDiagnostics
+	if granularity != "" && nativeDiagnosticsAvailable() {
+		diagnostics = &usageAccountingDiagnostics{operation: diagnosticOperationID(), started: time.Now(), filter: filter, groups: make(map[accountingDiagnosticKey]accountingDiagnosticTotals)}
+	}
 	err := store.readSnapshot(func(connection *sql.Conn, retentionDays int) error {
 		book, err := priceBookFromSQLite(connection)
 		if err != nil {
@@ -91,6 +95,9 @@ func (store *usageStore) queryUsage(filter usageFilter, granularity string, grou
 				if withCosts {
 					cost = estimateUsageCost(record, resolver)
 				}
+				if diagnostics != nil {
+					diagnostics.add(record, cost)
+				}
 				if overview != nil {
 					overview.add(record, cost)
 				}
@@ -126,6 +133,9 @@ func (store *usageStore) queryUsage(filter usageFilter, granularity string, grou
 		}
 		return nil
 	})
+	if diagnostics != nil {
+		diagnostics.finish(result.PriceBookRevision, err)
+	}
 	if err != nil {
 		store.recordError(err)
 		return usageDashboard{}, err
@@ -202,29 +212,14 @@ func (acc *usageOverviewAccumulator) add(record storedUsageRecord, cost estimate
 		series[key] = point
 	}
 	point.usageCounters.add(record)
-	mode := cost.AccountingMode
-	if mode == "" {
-		mode = defaultAccountingMode(record.Provider, record.ExecutorType)
-	}
+	mode := effectiveAccountingMode(record, cost.AccountingMode)
 	if mode == accountingModeInputIncludesCache {
 		point.CacheReadIncludedTokens += effectiveCacheReadTokens(record)
 	}
 	if reasoningIncludedInOutput(record) {
 		point.ReasoningIncludedTokens += record.ReasoningTokens
 	}
-	point.latencyTotal += record.LatencyNS
-	point.ttftTotal += record.TTFTNS
-	if record.TTFTNS > 0 {
-		point.ttftRequests++
-	}
-	generation := record.LatencyNS
-	if record.TTFTNS > 0 && record.LatencyNS >= record.TTFTNS {
-		generation -= record.TTFTNS
-	}
-	if generation > 0 {
-		point.tpsTotal += float64(record.OutputTokens) / (float64(generation) / float64(time.Second))
-		point.timingRequests++
-	}
+	point.usageTimingTotals.add(record)
 	point.CostUSD += cost.TotalUSD
 
 	routerKey := usageRouterKey{model: record.RouterModel, attribution: record.Attribution}
@@ -263,15 +258,7 @@ func (acc *usageOverviewAccumulator) finish() usageOverview {
 	routerModels, providerModels := acc.routerModels, acc.providerModels
 	sources, serviceTiers, results := acc.sources, acc.serviceTiers, acc.results
 	for _, point := range series {
-		if point.Requests > 0 {
-			point.AverageLatencyNS = point.latencyTotal / point.Requests
-		}
-		if point.ttftRequests > 0 {
-			point.AverageTTFTNS = point.ttftTotal / point.ttftRequests
-		}
-		if point.timingRequests > 0 {
-			point.AverageTPS = point.tpsTotal / float64(point.timingRequests)
-		}
+		point.AverageLatencyNS, point.AverageTTFTNS, point.AverageTPS = point.usageTimingTotals.averages(point.Requests)
 		overview.Series = append(overview.Series, *point)
 	}
 	sort.Slice(overview.Series, func(left, right int) bool { return overview.Series[left].Time < overview.Series[right].Time })
@@ -310,12 +297,8 @@ func modelStatsValues[K comparable](values map[K]*usageModelStats) []usageModelS
 }
 
 type groupAccumulator struct {
-	group          usageGroup
-	latencyTotal   uint64
-	ttftTotal      uint64
-	ttftRequests   uint64
-	tpsTotal       float64
-	timingRequests uint64
+	group usageGroup
+	usageTimingTotals
 }
 
 type usageGroupsAccumulator struct {
@@ -338,19 +321,7 @@ func (acc *usageGroupsAccumulator) add(record storedUsageRecord, cost estimatedC
 		groups[key] = accumulator
 	}
 	accumulator.group.usageCounters.add(record)
-	accumulator.latencyTotal += record.LatencyNS
-	accumulator.ttftTotal += record.TTFTNS
-	if record.TTFTNS > 0 {
-		accumulator.ttftRequests++
-	}
-	generation := record.LatencyNS
-	if record.TTFTNS > 0 && record.LatencyNS >= record.TTFTNS {
-		generation -= record.TTFTNS
-	}
-	if generation > 0 {
-		accumulator.tpsTotal += float64(record.OutputTokens) / (float64(generation) / float64(time.Second))
-		accumulator.timingRequests++
-	}
+	accumulator.usageTimingTotals.add(record)
 	accumulator.group.CostUSD += cost.TotalUSD
 	if cost.Priced {
 		accumulator.group.PricedRequests++
@@ -361,16 +332,7 @@ func (acc *usageGroupsAccumulator) finish(options usageGroupOptions, now time.Ti
 	groups, dimension, sortField, order, offset, limit := acc.groups, options.Dimension, options.Sort, options.Order, options.Offset, options.Limit
 	items := make([]usageGroup, 0, len(groups))
 	for _, accumulator := range groups {
-		requests := accumulator.group.Requests
-		if requests > 0 {
-			accumulator.group.AverageLatencyNS = accumulator.latencyTotal / requests
-		}
-		if accumulator.ttftRequests > 0 {
-			accumulator.group.AverageTTFTNS = accumulator.ttftTotal / accumulator.ttftRequests
-		}
-		if accumulator.timingRequests > 0 {
-			accumulator.group.AverageTPS = accumulator.tpsTotal / float64(accumulator.timingRequests)
-		}
+		accumulator.group.AverageLatencyNS, accumulator.group.AverageTTFTNS, accumulator.group.AverageTPS = accumulator.usageTimingTotals.averages(accumulator.group.Requests)
 		items = append(items, accumulator.group)
 	}
 	sort.SliceStable(items, func(left, right int) bool {
@@ -518,13 +480,7 @@ func (selection *usageRequestSelection) add(record storedUsageRecord, cost estim
 		candidate.sortValue = cost.TotalUSD
 	}
 	if selection.options.Sort == "tps" {
-		generation := record.LatencyNS
-		if record.TTFTNS > 0 && record.LatencyNS >= record.TTFTNS {
-			generation -= record.TTFTNS
-		}
-		if generation > 0 {
-			candidate.sortValue = float64(record.OutputTokens) / (float64(generation) / float64(time.Second))
-		}
+		_, candidate.sortValue = recordTiming(record)
 	}
 	if len(selection.items) < selection.capacity {
 		selection.items = append(selection.items, candidate)
@@ -618,4 +574,77 @@ func validateQueryChoice(value, fallback string, allowed []string) (string, erro
 		}
 	}
 	return "", fmt.Errorf("unsupported value %q", value)
+}
+
+type accountingDiagnosticKey struct {
+	Model     string `json:"model"`
+	Provider  string `json:"provider"`
+	Executor  string `json:"executor"`
+	Override  string `json:"price_override"`
+	Stored    string `json:"stored_mode"`
+	Default   string `json:"default_mode"`
+	Effective string `json:"effective_mode"`
+	Priced    bool   `json:"priced"`
+}
+
+type accountingDiagnosticTotals struct {
+	Requests      uint64 `json:"requests"`
+	Input         uint64 `json:"input_tokens"`
+	CacheRead     uint64 `json:"cache_read_tokens"`
+	CacheCreation uint64 `json:"cache_creation_tokens"`
+	Included      uint64 `json:"cache_read_included_tokens"`
+}
+
+type usageAccountingDiagnostics struct {
+	operation string
+	started   time.Time
+	filter    usageFilter
+	groups    map[accountingDiagnosticKey]accountingDiagnosticTotals
+}
+
+func (diagnostics *usageAccountingDiagnostics) add(record storedUsageRecord, cost estimatedCost) {
+	key := accountingDiagnosticKey{Model: record.ProviderModel, Provider: record.Provider, Executor: record.ExecutorType, Override: cost.priceAccountingMode, Stored: record.AccountingMode, Default: defaultAccountingMode(record.Provider, record.ExecutorType), Effective: effectiveAccountingMode(record, cost.AccountingMode), Priced: cost.Priced}
+	totals := diagnostics.groups[key]
+	totals.Requests++
+	totals.Input += record.InputTokens
+	totals.CacheRead += effectiveCacheReadTokens(record)
+	totals.CacheCreation += record.CacheCreationTokens
+	if key.Effective == accountingModeInputIncludesCache {
+		totals.Included += effectiveCacheReadTokens(record)
+	}
+	diagnostics.groups[key] = totals
+}
+
+func (diagnostics *usageAccountingDiagnostics) finish(revision uint64, err error) {
+	type decision struct {
+		accountingDiagnosticKey
+		accountingDiagnosticTotals
+	}
+	groups := make([]decision, 0, len(diagnostics.groups))
+	for key, totals := range diagnostics.groups {
+		groups = append(groups, decision{key, totals})
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		left, _ := json.Marshal(groups[i])
+		right, _ := json.Marshal(groups[j])
+		return string(left) < string(right)
+	})
+	filter := diagnostics.filter
+	source := filter.Source
+	if looksLikeCredential(source) {
+		source = "[omitted: credential-shaped source filter]"
+	}
+	fields := map[string]any{"operation_id": diagnostics.operation, "price_book_revision": revision, "from": filter.From, "to": filter.To, "attribution": diagnosticFilterValue(filter.Attribution), "router_model": diagnosticFilterValue(filter.RouterModel), "provider_model": diagnosticFilterValue(filter.ProviderModel), "source": diagnosticFilterValue(source), "service_tier": diagnosticFilterValue(filter.ServiceTier), "result": diagnosticFilterValue(filter.Result), "groups": groups}
+	logModelRouterJSON(diagnostics.operation, "model_router.accounting.decisions", fields)
+	outcome := diagnosticErrorFields(err)
+	outcome["operation_id"] = diagnostics.operation
+	outcome["price_book_revision"] = revision
+	outcome["elapsed_ms"] = time.Since(diagnostics.started).Milliseconds()
+	outcome["decision_groups"] = len(groups)
+	if err != nil {
+		outcome["outcome"] = "failed"
+	} else {
+		outcome["outcome"] = "complete"
+	}
+	logModelRouterEvent("", "debug", "model_router.query.complete", outcome)
 }

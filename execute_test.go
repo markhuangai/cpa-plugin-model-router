@@ -18,6 +18,7 @@ type fakeModelHost struct {
 	read         func(string) (pluginapi.HostModelStreamReadResponse, error)
 	emit         func(string, []byte) error
 	closePlugin  func(string, string)
+	closeStream  func(string) error
 	reads        map[string][]pluginapi.HostModelStreamReadResponse
 	executeCalls []pluginapi.HostModelExecutionRequest
 	startCalls   []pluginapi.HostModelExecutionRequest
@@ -56,6 +57,9 @@ func (host *fakeModelHost) ReadStream(streamID string) (pluginapi.HostModelStrea
 
 func (host *fakeModelHost) CloseStream(streamID string) error {
 	host.closed = append(host.closed, streamID)
+	if host.closeStream != nil {
+		return host.closeStream(streamID)
+	}
 	return nil
 }
 
