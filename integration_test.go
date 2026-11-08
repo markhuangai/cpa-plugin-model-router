@@ -3,10 +3,12 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -328,6 +330,474 @@ openai-compatibility:
 	wantWeightedModels := []string{"working-model", "working-model", "working-model", "working-model-2", "working-model", "working-model", "working-model", "working-model-2"}
 	if !slices.Equal(weightedModels, wantWeightedModels) {
 		t.Fatalf("weighted provider sequence = %#v, want %#v", weightedModels, wantWeightedModels)
+	}
+}
+
+func TestNativeUnloadAndAccountingDiagnostics(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native CPA integration runs on Unix hosts")
+	}
+	cpaSource := os.Getenv("CPA_SOURCE")
+	if cpaSource == "" {
+		cpaSource = filepath.Join("..", "CLIProxyAPI")
+	}
+	cpaSource, err := filepath.Abs(cpaSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buildDir := t.TempDir()
+	library := filepath.Join(buildDir, "model-router"+sharedLibraryExtension())
+	runSmokeCommand(t, ".", "go", "build", "-buildmode=c-shared", "-o", library, ".")
+	cpaBinary := filepath.Join(buildDir, "cli-proxy-api")
+	fixtureSource := filepath.Join(buildDir, "cpa-stall-fixture")
+	copySmokeCPASource(t, cpaSource, fixtureSource)
+	if err := os.WriteFile(filepath.Join(fixtureSource, "cmd", "server", "model_router_stall_fixture.go"), []byte(smokeStallHookSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runSmokeCommand(t, fixtureSource, "go", "build", "-o", cpaBinary, "./cmd/server")
+	for _, test := range []struct {
+		phase string
+		debug bool
+		stall bool
+	}{{"read_stream", true, false}, {"emit", false, false}, {"read_stream", false, true}} {
+		name := test.phase
+		if test.stall {
+			name = "stalled_log_callback"
+		}
+		t.Run(name, func(t *testing.T) {
+			var writes atomic.Int32
+			cancelled := make(chan struct{})
+			const promptSentinel = "PRIVATE_PROMPT_SENTINEL"
+			const payloadSentinel = "PRIVATE_RESPONSE_SENTINEL"
+			const filterTokenSentinel = "eyJhbGciOiJIUzI1NiJ9.PRIVATE_FILTER_PAYLOAD_SENTINEL.signature"
+			provider := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				defer close(cancelled)
+				var body struct {
+					Model string `json:"model"`
+				}
+				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+					t.Errorf("provider decode: %v", err)
+					return
+				}
+				response.Header().Set("Content-Type", "text/event-stream")
+				payload := payloadSentinel
+				if test.phase == "emit" {
+					payload += strings.Repeat("x", 128<<10)
+				}
+				for {
+					if _, err := fmt.Fprintf(response, "data: {\"model\":%q,\"choices\":[{\"index\":0,\"delta\":{\"content\":%q}}]}\n\n", body.Model, payload); err != nil {
+						return
+					}
+					response.(http.Flusher).Flush()
+					writes.Add(1)
+					if test.phase == "read_stream" {
+						<-request.Context().Done()
+						return
+					}
+					select {
+					case <-request.Context().Done():
+						return
+					default:
+					}
+				}
+			}))
+			defer provider.Close()
+			workDir := t.TempDir()
+			pluginsDir := filepath.Join(workDir, "plugins")
+			if err := os.MkdirAll(pluginsDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(library)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(pluginsDir, "model-router"+sharedLibraryExtension()), raw, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			usagePath := filepath.Join(pluginsDir, defaultDataFileName)
+			now := time.Now().UTC().Add(-time.Minute)
+			const groups = 300
+			store, err := openUsageStore(usagePath, 365)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for index := 0; index < groups; index++ {
+				if err := store.Record(storedUsageRecord{RequestedAt: now, Provider: "openai", ExecutorType: "openai", ProviderModel: fmt.Sprintf("legacy-model-%03d", index), AccountingMode: accountingModeInputExcludesCache, InputTokens: 100, CacheReadTokens: 20, CacheCreationTokens: 5}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			port := reserveLocalPort(t)
+			configPath := filepath.Join(workDir, "config.yaml")
+			config := fmt.Sprintf(`host: "127.0.0.1"
+port: %d
+auth-dir: %q
+api-keys: ["local-test-key"]
+debug: %t
+logging-to-file: false
+logs-max-total-size-mb: 100
+request-log: false
+request-retry: 0
+remote-management:
+  allow-remote: false
+  secret-key: "local-management-key"
+  disable-control-panel: true
+plugins:
+  enabled: true
+  dir: %q
+  configs:
+    model-router:
+      enabled: true
+      data_path: %q
+      routes:
+        - alias: unload-router
+          models: [work/stream-model]
+openai-compatibility:
+  - name: work
+    prefix: work
+    base-url: %q
+    api-key-entries:
+      - api-key: sk-PRIVATE_PROVIDER_KEY_SENTINEL
+    models:
+      - name: stream-model
+`, port, filepath.Join(workDir, "auth"), test.debug, pluginsDir, usagePath, provider.URL+"/v1")
+			if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+			var extraArgs []string
+			stallFile := filepath.Join(workDir, "release-log-callback")
+			if test.stall {
+				extraArgs = []string{"-model-router-stall-file", stallFile}
+			}
+			cpa := startSmokeCPA(t, cpaBinary, configPath, baseURL, extraArgs...)
+			defer cpa.Stop()
+			if !waitForSmokeModel(t, baseURL, "unload-router", 10*time.Second) {
+				t.Fatalf("alias absent\n%s", cpa.logs.String())
+			}
+			query := url.Values{"from": {now.Add(-time.Minute).Format(time.RFC3339Nano)}, "to": {now.Add(time.Second).Format(time.RFC3339Nano)}}
+			for stage := 0; stage < 2; stage++ {
+				if stage == 1 {
+					prices := make(map[string]modelPrice, groups)
+					for index := 0; index < groups; index++ {
+						prices[fmt.Sprintf("legacy-model-%03d", index)] = modelPrice{tokenRates: tokenRates{Input: 1}}
+					}
+					putSmokeManagementJSON[saveModelPricesRequest, modelPriceBook](t, baseURL, modelRouterUsageBasePath+"/prices", saveModelPricesRequest{Prices: prices})
+				}
+				overview := getSmokeManagementJSON[usageOverview](t, baseURL, modelRouterUsageBasePath+"/overview?"+query.Encode())
+				var included uint64
+				for _, point := range overview.Series {
+					included += point.CacheReadIncludedTokens
+				}
+				if overview.Summary.Requests != groups || included != 0 {
+					t.Fatalf("stage %d accounting changed: %#v", stage, overview)
+				}
+			}
+			query.Set("source", "sk-PRIVATE_FILTER_KEY_SENTINEL")
+			getSmokeManagementJSON[usageOverview](t, baseURL, modelRouterUsageBasePath+"/overview?"+query.Encode())
+			query.Del("source")
+			query.Set("provider_model", "sk-PRIVATE_FILTER_KEY_SENTINEL")
+			getSmokeManagementJSON[usageOverview](t, baseURL, modelRouterUsageBasePath+"/overview?"+query.Encode())
+			query.Set("provider_model", filterTokenSentinel)
+			getSmokeManagementJSON[usageOverview](t, baseURL, modelRouterUsageBasePath+"/overview?"+query.Encode())
+			query.Set("provider_model", "ordinary/model")
+			getSmokeManagementJSON[usageOverview](t, baseURL, modelRouterUsageBasePath+"/overview?"+query.Encode())
+
+			connection, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer connection.Close()
+			if err := connection.(*net.TCPConn).SetReadBuffer(1024); err != nil {
+				t.Fatal(err)
+			}
+			if err := connection.SetDeadline(time.Now().Add(20 * time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			body := `{"model":"unload-router","messages":[{"role":"user","content":"` + promptSentinel + `"}],"stream":true}`
+			if _, err := fmt.Fprintf(connection, "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer local-test-key\r\nX-Private-Sentinel: PRIVATE_HEADER_SENTINEL\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", len(body), body); err != nil {
+				t.Fatal(err)
+			}
+			reader := bufio.NewReader(connection)
+			status, err := reader.ReadString('\n')
+			if err != nil || !strings.Contains(status, "200 OK") {
+				t.Fatalf("stream status=%q error=%v\n%s", status, err, cpa.logs.String())
+			}
+			for {
+				line, err := reader.ReadString('\n')
+				if err != nil {
+					t.Fatal(err)
+				}
+				if line == "\r\n" {
+					break
+				}
+			}
+			if test.phase == "emit" {
+				deadline := time.Now().Add(10 * time.Second)
+				for {
+					before := writes.Load()
+					time.Sleep(200 * time.Millisecond)
+					if before >= 8 && writes.Load() == before {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("provider did not encounter backpressure: writes=%d", writes.Load())
+					}
+				}
+			}
+			request, err := http.NewRequest(http.MethodDelete, baseURL+"/v0/management/plugins/model-router", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header.Set("Authorization", "Bearer local-management-key")
+			type unloadResult struct {
+				status int
+				body   []byte
+				err    error
+			}
+			unloaded := make(chan unloadResult, 1)
+			go func() {
+				response, err := (&http.Client{Timeout: 20 * time.Second}).Do(request)
+				result := unloadResult{err: err}
+				if err == nil {
+					result.status = response.StatusCode
+					result.body, result.err = io.ReadAll(response.Body)
+					response.Body.Close()
+				}
+				unloaded <- result
+			}()
+			if test.stall {
+				deadline := time.Now().Add(10 * time.Second)
+				for {
+					_, entered := os.Stat(stallFile + ".entered")
+					logs := cpa.logs.String()
+					start := strings.Index(logs, "model_router.shutdown.stalled ")
+					if entered == nil && start >= 0 && strings.Contains(logs[start:], "\n") {
+						break
+					}
+					select {
+					case result := <-unloaded:
+						t.Fatalf("unload returned while log callback was held: %#v\n%s", result, cpa.logs.String())
+					default:
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("missing real WARN for stalled host callback\n%s", cpa.logs.String())
+					}
+					time.Sleep(25 * time.Millisecond)
+				}
+				var warning *smokeRouterEvent
+				warnLevel := false
+				for _, line := range strings.Split(cpa.logs.String(), "\n") {
+					if strings.Contains(line, "model_router.shutdown.stalled ") && strings.Contains(line, "[warn ]") {
+						warnLevel = true
+					}
+				}
+				for _, event := range smokeModelRouterEvents(t, cpa.logs.String()) {
+					if event.name == "model_router.shutdown.stalled" {
+						warning = &event
+					}
+				}
+				if warning == nil || !warnLevel || warning.fields["remaining_calls"].(float64) < 1 || warning.fields["elapsed_ms"].(float64) < 5000 {
+					t.Fatalf("invalid stall warning: %v", warning)
+				}
+				streams := warning.fields["streams"].([]any)
+				if len(streams) != 1 || streams[0].(map[string]any)["phase"] != "log_outcome" || streams[0].(map[string]any)["shutdown_operation_id"] != warning.fields["operation_id"] {
+					t.Fatalf("warning lost outstanding phase: %v", warning)
+				}
+				if err := os.WriteFile(stallFile, []byte("release"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			select {
+			case result := <-unloaded:
+				if result.err != nil || result.status != http.StatusOK {
+					t.Fatalf("unload status=%d body=%s error=%v\n%s", result.status, result.body, result.err, cpa.logs.String())
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatalf("unload did not drain after callback release\n%s", cpa.logs.String())
+			}
+			waitStreamSignal(t, cancelled)
+			plugins := getSmokeManagementJSON[struct {
+				Plugins []struct {
+					ID         string `json:"id"`
+					Registered bool   `json:"registered"`
+				} `json:"plugins"`
+			}](t, baseURL, "/v0/management/plugins")
+			for _, plugin := range plugins.Plugins {
+				if plugin.ID == pluginID && plugin.Registered {
+					t.Fatal("unload left the native plugin registered")
+				}
+			}
+			if !smokeModelListed(t, baseURL, "work/stream-model") {
+				t.Fatal("CPA did not survive native unload")
+			}
+			deadline := time.Now().Add(2 * time.Second)
+			for {
+				logs := cpa.logs.String()
+				start := strings.Index(logs, "model_router.shutdown.complete ")
+				if start >= 0 && strings.Contains(logs[start:], "\n") {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("missing shutdown completion log\n%s", logs)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			events := smokeModelRouterEvents(t, cpa.logs.String())
+			starts, completes, cancellations := 0, 0, 0
+			shutdownOperation := ""
+			for _, event := range events {
+				switch event.name {
+				case "model_router.shutdown.start":
+					starts++
+					shutdownOperation = event.fields["operation_id"].(string)
+					if event.fields["active_streams"] != float64(1) {
+						t.Fatalf("shutdown had no active stream: %v", event.fields)
+					}
+				case "model_router.stream.complete":
+					if completes > 0 {
+						t.Fatal("stream callback completed after shutdown")
+					}
+					if event.fields["outcome"] == "cancelled_shutdown" {
+						cancellations++
+						if event.fields["phase"] != test.phase || event.fields["client_cleanup"] != "returned" || event.fields["upstream_cleanup"] != "returned" {
+							t.Fatalf("cancellation diagnosis=%v", event.fields)
+						}
+					}
+				case "model_router.shutdown.complete":
+					completes++
+					if event.fields["operation_id"] != shutdownOperation || event.fields["remaining_calls"] != float64(0) || cancellations != 1 {
+						t.Fatalf("shutdown did not drain first: %v", event.fields)
+					}
+				}
+			}
+			if starts != 1 || completes != 1 || cancellations != 1 {
+				t.Fatalf("missing native lifetime evidence: %v\n%s", events, cpa.logs.String())
+			}
+			verifySmokeAccountingDecisions(t, events, test.debug, groups)
+			for _, line := range strings.Split(cpa.logs.String(), "\n") {
+				if !strings.Contains(line, "model_router.") {
+					continue
+				}
+				for _, secret := range []string{promptSentinel, payloadSentinel, filterTokenSentinel, "PRIVATE_HEADER_SENTINEL", "sk-PRIVATE_PROVIDER_KEY_SENTINEL", "sk-PRIVATE_FILTER_KEY_SENTINEL", "local-test-key", "local-management-key"} {
+					if strings.Contains(line, secret) {
+						t.Fatalf("diagnostic exposed %q", secret)
+					}
+				}
+				t.Log(line)
+			}
+		})
+	}
+}
+
+type smokeRouterEvent struct {
+	name   string
+	fields map[string]any
+}
+
+func smokeModelRouterEvents(t *testing.T, logs string) []smokeRouterEvent {
+	t.Helper()
+	var events []smokeRouterEvent
+	lines := strings.Split(logs, "\n")
+	for _, line := range lines[:len(lines)-1] {
+		start := strings.Index(line, "model_router.")
+		if start < 0 {
+			continue
+		}
+		name, raw, ok := strings.Cut(line[start:], " ")
+		if !ok {
+			t.Fatalf("diagnostic has no fields: %s", line)
+		}
+		var fields map[string]any
+		if err := json.NewDecoder(strings.NewReader(raw)).Decode(&fields); err != nil {
+			t.Fatalf("diagnostic fields: %v: %s", err, line)
+		}
+		if fields["plugin_version"] != pluginVersion || fields["operation_id"] == "" {
+			t.Fatalf("uncorrelated event: %v", fields)
+		}
+		events = append(events, smokeRouterEvent{name, fields})
+	}
+	return events
+}
+
+func verifySmokeAccountingDecisions(t *testing.T, events []smokeRouterEvent, debug bool, expected int) {
+	t.Helper()
+	chunks := map[string][]string{}
+	outcomes := map[string]map[string]any{}
+	for _, event := range events {
+		if event.name == "model_router.accounting.decisions" {
+			operation := event.fields["operation_id"].(string)
+			index, total := int(event.fields["chunk"].(float64)), int(event.fields["chunks"].(float64))
+			if chunks[operation] == nil {
+				chunks[operation] = make([]string, total)
+			}
+			part := event.fields["decision_json"].(string)
+			if len(part) > 32<<10 || index < 1 || index > total || chunks[operation][index-1] != "" {
+				t.Fatal("unbounded or duplicate diagnostic batch")
+			}
+			chunks[operation][index-1] = part
+		}
+		if event.name == "model_router.query.complete" {
+			outcomes[event.fields["operation_id"].(string)] = event.fields
+		}
+	}
+	if !debug {
+		if len(chunks) != 0 || len(outcomes) != 0 {
+			t.Fatal("DEBUG accounting evidence survived INFO filtering")
+		}
+		return
+	}
+	if len(chunks) != 6 || len(outcomes) != 6 {
+		t.Fatalf("query evidence count: batches=%d outcomes=%d", len(chunks), len(outcomes))
+	}
+	revisions := map[uint64]bool{}
+	for operation, parts := range chunks {
+		for _, part := range parts {
+			if part == "" {
+				t.Fatal("missing diagnostic batch")
+			}
+		}
+		var report struct {
+			Revision      uint64 `json:"price_book_revision"`
+			Source        string `json:"source"`
+			ProviderModel string `json:"provider_model"`
+			Groups        []struct {
+				accountingDiagnosticKey
+				accountingDiagnosticTotals
+			} `json:"groups"`
+		}
+		if err := json.Unmarshal([]byte(strings.Join(parts, "")), &report); err != nil {
+			t.Fatal(err)
+		}
+		if outcomes[operation] == nil || outcomes[operation]["outcome"] != "complete" {
+			t.Fatal("missing correlated query completion")
+		}
+		if report.Source != "" {
+			if report.Source != "[omitted: credential-shaped source filter]" || len(report.Groups) != 0 {
+				t.Fatalf("unsafe filter diagnosis: %#v", report)
+			}
+			continue
+		}
+		if report.ProviderModel != "" {
+			if (report.ProviderModel != "[omitted: credential-shaped filter]" && report.ProviderModel != "ordinary/model") || len(report.Groups) != 0 {
+				t.Fatalf("unsafe or unusable model filter: %#v", report)
+			}
+			continue
+		}
+		if len(parts) < 2 || len(report.Groups) != expected {
+			t.Fatalf("lost decision groups: chunks=%d groups=%d", len(parts), len(report.Groups))
+		}
+		for _, group := range report.Groups {
+			if group.Override != "" || group.Stored != accountingModeInputExcludesCache || group.Default != accountingModeInputIncludesCache || group.Effective != accountingModeInputExcludesCache || group.Requests != 1 || group.CacheRead != 20 || group.Included != 0 || group.Priced != (report.Revision == 1) {
+				t.Fatalf("accounting decision=%#v", group)
+			}
+		}
+		revisions[report.Revision] = true
+	}
+	if !revisions[0] || !revisions[1] {
+		t.Fatal("missing before/after price revision evidence")
 	}
 }
 
@@ -1072,10 +1542,10 @@ func (process *smokeCPAProcess) Stop() {
 	})
 }
 
-func startSmokeCPA(t *testing.T, binary, configPath, baseURL string) *smokeCPAProcess {
+func startSmokeCPA(t *testing.T, binary, configPath, baseURL string, extraArgs ...string) *smokeCPAProcess {
 	t.Helper()
 	logs := &smokeSyncBuffer{}
-	command := exec.Command(binary, "--config", configPath)
+	command := exec.Command(binary, append([]string{"--config", configPath}, extraArgs...)...)
 	command.Stdout = logs
 	command.Stderr = logs
 	if err := command.Start(); err != nil {
@@ -1110,6 +1580,66 @@ func startSmokeCPA(t *testing.T, binary, configPath, baseURL string) *smokeCPAPr
 	t.Fatalf("CLIProxyAPI did not become ready at %s\n%s", baseURL, logs.String())
 	return process
 }
+
+func copySmokeCPASource(t *testing.T, source, destination string) {
+	t.Helper()
+	err := filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return os.MkdirAll(filepath.Join(destination, relative), 0o700)
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("unexpected CPA fixture file type: %s", relative)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(destination, relative), raw, 0o600)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The disposable CPA build holds host.log open without altering the cached source or production host.
+const smokeStallHookSource = `package main
+
+import (
+	"flag"
+	"os"
+	"strings"
+	"time"
+	log "github.com/sirupsen/logrus"
+)
+
+var modelRouterStallFile=flag.String("model-router-stall-file","","disposable native logging fixture")
+
+type modelRouterStallHook struct{}
+
+func (modelRouterStallHook) Levels() []log.Level {return []log.Level{log.InfoLevel}}
+
+func (modelRouterStallHook) Fire(entry *log.Entry) error {
+	path:=*modelRouterStallFile
+	if path=="" || !strings.HasPrefix(entry.Message,"model_router.stream.complete ") {return nil}
+	if err:=os.WriteFile(path+".entered",[]byte("host.log"),0600);err!=nil {return err}
+	for {
+		if _,err:=os.Stat(path);err==nil {return nil} else if !os.IsNotExist(err) {return err}
+		time.Sleep(10*time.Millisecond)
+	}
+}
+
+func init() {log.AddHook(modelRouterStallHook{})}
+`
 
 func smokeModelListed(t *testing.T, baseURL, model string) bool {
 	t.Helper()

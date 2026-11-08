@@ -61,6 +61,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
@@ -122,7 +123,13 @@ var modelRouterABIState = struct {
 	metadata     pluginapi.Metadata
 	shuttingDown bool
 	inFlight     sync.WaitGroup
+	calls        int
+	streams      map[*nativeStreamCall]struct{}
+	shutdownDone chan struct{}
+	hostAttached bool
 }{}
+
+var modelRouterRegistration sync.Mutex
 
 const maxCGoRequestLen = C.size_t(1<<31 - 1)
 
@@ -137,6 +144,8 @@ func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_a
 	C.model_router_store_host(host)
 	modelRouterABIState.Lock()
 	modelRouterABIState.shuttingDown = false
+	modelRouterABIState.shutdownDone = nil
+	modelRouterABIState.hostAttached = true
 	modelRouterABIState.Unlock()
 	plugin.abi_version = C.uint32_t(pluginabi.ABIVersion)
 	plugin.call = C.cliproxy_plugin_call_fn(C.ModelRouterPluginCall)
@@ -181,16 +190,69 @@ func ModelRouterPluginFree(pointer unsafe.Pointer, _ C.size_t) {
 //export ModelRouterPluginShutdown
 func ModelRouterPluginShutdown() {
 	modelRouterABIState.Lock()
+	if modelRouterABIState.shuttingDown {
+		done := modelRouterABIState.shutdownDone
+		modelRouterABIState.Unlock()
+		if done != nil {
+			<-done
+		}
+		return
+	}
 	modelRouterABIState.shuttingDown = true
+	modelRouterABIState.shutdownDone = make(chan struct{})
+	done := modelRouterABIState.shutdownDone
 	plugin := modelRouterABIState.plugin
 	modelRouterABIState.plugin = nil
 	modelRouterABIState.metadata = pluginapi.Metadata{}
-	modelRouterABIState.Unlock()
-	modelRouterABIState.inFlight.Wait()
-	if plugin != nil && plugin.store != nil {
-		_ = plugin.store.Close()
+	streams := make([]*nativeStreamCall, 0, len(modelRouterABIState.streams))
+	for stream := range modelRouterABIState.streams {
+		streams = append(streams, stream)
 	}
+	modelRouterABIState.Unlock()
+	started := time.Now()
+	operation := diagnosticOperationID()
+	for _, stream := range streams {
+		stream.mu.Lock()
+		stream.fields["shutdown_operation_id"] = operation
+		stream.mu.Unlock()
+	}
+	logModelRouterEvent("", "info", "model_router.shutdown.start", map[string]any{"operation_id": operation, "active_streams": len(streams), "phase": "cancel", "elapsed_ms": 0})
+	for _, stream := range streams {
+		stream.cancel()
+	}
+	drained := make(chan struct{})
+	go func() { modelRouterABIState.inFlight.Wait(); close(drained) }()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+wait:
+	for {
+		select {
+		case <-drained:
+			break wait
+		case <-ticker.C:
+			modelRouterABIState.Lock()
+			remaining := modelRouterABIState.calls
+			active := make([]map[string]any, 0, len(modelRouterABIState.streams))
+			for stream := range modelRouterABIState.streams {
+				active = append(active, stream.snapshot())
+			}
+			modelRouterABIState.Unlock()
+			logModelRouterEvent("", "warn", "model_router.shutdown.stalled", map[string]any{"operation_id": operation, "remaining_calls": remaining, "streams": active, "elapsed_ms": time.Since(started).Milliseconds()})
+		}
+	}
+	if plugin != nil && plugin.store != nil {
+		if err := plugin.store.Close(); err != nil {
+			fields := diagnosticErrorFields(err)
+			fields["operation_id"], fields["phase"] = operation, "close_storage"
+			logModelRouterEvent("", "error", "model_router.shutdown.storage_failed", fields)
+		}
+	}
+	logModelRouterEvent("", "info", "model_router.shutdown.complete", map[string]any{"operation_id": operation, "remaining_calls": 0, "elapsed_ms": time.Since(started).Milliseconds()})
+	modelRouterABIState.Lock()
+	modelRouterABIState.hostAttached = false
 	C.model_router_store_host(nil)
+	close(done)
+	modelRouterABIState.Unlock()
 }
 
 func handleModelRouterABIMethod(ctx context.Context, method string, request []byte) ([]byte, error) {
@@ -281,6 +343,17 @@ func handleModelRouterABIMethod(ctx context.Context, method string, request []by
 }
 
 func registerModelRouter(raw []byte) ([]byte, error) {
+	modelRouterABIState.Lock()
+	if modelRouterABIState.shuttingDown {
+		modelRouterABIState.Unlock()
+		return nil, fmt.Errorf("%s is shutting down", pluginID)
+	}
+	modelRouterABIState.inFlight.Add(1)
+	modelRouterABIState.calls++
+	modelRouterABIState.Unlock()
+	defer finishNativeCall()
+	modelRouterRegistration.Lock()
+	defer modelRouterRegistration.Unlock()
 	var request lifecycleRequest
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &request); err != nil {
@@ -288,6 +361,10 @@ func registerModelRouter(raw []byte) ([]byte, error) {
 		}
 	}
 	modelRouterABIState.Lock()
+	if modelRouterABIState.shuttingDown {
+		modelRouterABIState.Unlock()
+		return nil, fmt.Errorf("%s is shutting down", pluginID)
+	}
 	var previous *modelRouterPlugin
 	if modelRouterABIState.plugin != nil {
 		previous = modelRouterABIState.plugin
@@ -298,9 +375,17 @@ func registerModelRouter(raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	modelRouterABIState.Lock()
+	if modelRouterABIState.shuttingDown {
+		modelRouterABIState.Unlock()
+		if previous == nil {
+			if err := plugin.store.Close(); err != nil {
+				logModelRouterEvent("", "error", "model_router.shutdown.storage_failed", diagnosticErrorFields(err))
+			}
+		}
+		return nil, fmt.Errorf("%s is shutting down", pluginID)
+	}
 	modelRouterABIState.plugin = plugin
 	modelRouterABIState.metadata = metadata
-	modelRouterABIState.shuttingDown = false
 	modelRouterABIState.Unlock()
 	formats := []string{"openai", "openai-response", "claude", "gemini", "codex", "antigravity", "interactions"}
 	schemaVersion := registrationSchemaVersion
@@ -337,7 +422,8 @@ func beginModelRouterCall() (*modelRouterPlugin, pluginapi.Metadata, func(), err
 		return nil, pluginapi.Metadata{}, nil, fmt.Errorf("%s is not registered", pluginID)
 	}
 	modelRouterABIState.inFlight.Add(1)
-	return modelRouterABIState.plugin, modelRouterABIState.metadata, modelRouterABIState.inFlight.Done, nil
+	modelRouterABIState.calls++
+	return modelRouterABIState.plugin, modelRouterABIState.metadata, finishNativeCall, nil
 }
 
 func callHost(method string, payload any) (json.RawMessage, error) {
@@ -421,4 +507,109 @@ func writeABIResponse(response *C.cliproxy_buffer, raw []byte) {
 	}
 	response.ptr = pointer
 	response.len = C.size_t(len(raw))
+}
+
+func finishNativeCall() {
+	modelRouterABIState.Lock()
+	modelRouterABIState.calls--
+	modelRouterABIState.Unlock()
+	modelRouterABIState.inFlight.Done()
+}
+
+type nativeStreamContextKey struct{}
+
+type nativeStreamCall struct {
+	cancel  context.CancelFunc
+	mu      sync.Mutex
+	fields  map[string]any
+	started time.Time
+}
+
+func (call *nativeStreamCall) snapshot() map[string]any {
+	call.mu.Lock()
+	defer call.mu.Unlock()
+	fields := make(map[string]any, len(call.fields))
+	for key, value := range call.fields {
+		fields[key] = value
+	}
+	fields["elapsed_ms"] = time.Since(call.started).Milliseconds()
+	return fields
+}
+
+func beginNativeStream(request executorRPCRequest) (context.Context, func(), error) {
+	modelRouterABIState.Lock()
+	defer modelRouterABIState.Unlock()
+	if modelRouterABIState.shuttingDown {
+		return nil, nil, fmt.Errorf("%s is shutting down", pluginID)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	call := &nativeStreamCall{cancel: cancel, started: time.Now(), fields: map[string]any{"operation_id": diagnosticOperationID(), "stream_id": request.StreamID, "host_callback_id": request.HostCallbackID, "route": request.Model, "phase": "startup", "attempt": 0, "target": "", "upstream_cleanup": "pending", "client_cleanup": "pending"}}
+	if modelRouterABIState.streams == nil {
+		modelRouterABIState.streams = make(map[*nativeStreamCall]struct{})
+	}
+	modelRouterABIState.streams[call] = struct{}{}
+	modelRouterABIState.inFlight.Add(1)
+	modelRouterABIState.calls++
+	return context.WithValue(ctx, nativeStreamContextKey{}, call), func() {
+		cancel()
+		modelRouterABIState.Lock()
+		delete(modelRouterABIState.streams, call)
+		modelRouterABIState.Unlock()
+		finishNativeCall()
+	}, nil
+}
+
+func setStreamPhase(ctx context.Context, phase, target string, attempt int) {
+	if call, ok := ctx.Value(nativeStreamContextKey{}).(*nativeStreamCall); ok {
+		call.mu.Lock()
+		call.fields["phase"] = phase
+		if target != "" {
+			call.fields["target"] = target
+		}
+		if attempt > 0 {
+			call.fields["attempt"] = attempt
+		}
+		call.mu.Unlock()
+	}
+}
+
+func logStreamOutcome(ctx context.Context, err error) {
+	if call, ok := ctx.Value(nativeStreamContextKey{}).(*nativeStreamCall); ok {
+		fields := call.snapshot()
+		setStreamPhase(ctx, "log_outcome", "", 0)
+		for key, value := range diagnosticErrorFields(err) {
+			fields[key] = value
+		}
+		level := "debug"
+		if ctx.Err() != nil {
+			level = "info"
+			fields["outcome"] = "cancelled_shutdown"
+		} else if err != nil {
+			fields["outcome"] = "failed"
+		} else {
+			fields["outcome"] = "complete"
+		}
+		callbackID, _ := fields["host_callback_id"].(string)
+		logModelRouterEvent(callbackID, level, "model_router.stream.complete", fields)
+	}
+}
+
+func setStreamCleanup(ctx context.Context, name, state string) {
+	if call, ok := ctx.Value(nativeStreamContextKey{}).(*nativeStreamCall); ok {
+		call.mu.Lock()
+		call.fields[name+"_cleanup"] = state
+		call.mu.Unlock()
+	}
+}
+
+func logStreamCleanupError(ctx context.Context, streamID, phase string, err error) {
+	fields := diagnosticErrorFields(err)
+	if call, ok := ctx.Value(nativeStreamContextKey{}).(*nativeStreamCall); ok {
+		for key, value := range call.snapshot() {
+			fields[key] = value
+		}
+	}
+	fields["phase"], fields["cleanup_stream_id"] = phase, streamID
+	callbackID, _ := fields["host_callback_id"].(string)
+	logModelRouterEvent(callbackID, "error", "model_router.stream.cleanup_failed", fields)
 }

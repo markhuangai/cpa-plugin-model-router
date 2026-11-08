@@ -86,14 +86,7 @@ func requestDetail(record storedUsageRecord, resolver modelPriceResolver) usageR
 }
 
 func requestDetailWithCost(record storedUsageRecord, cost estimatedCost) usageRequestDetail {
-	generation := record.LatencyNS
-	if record.TTFTNS > 0 && record.LatencyNS >= record.TTFTNS {
-		generation = record.LatencyNS - record.TTFTNS
-	}
-	tps := 0.0
-	if generation > 0 {
-		tps = float64(record.OutputTokens) / (float64(generation) / float64(time.Second))
-	}
+	generation, tps := recordTiming(record)
 	return usageRequestDetail{
 		storedUsageRecord:        record,
 		Result:                   record.result(),
@@ -103,6 +96,50 @@ func requestDetailWithCost(record storedUsageRecord, cost estimatedCost) usageRe
 		CacheHit:                 effectiveCacheReadTokens(record) > 0,
 		EstimatedCost:            &cost,
 	}
+}
+
+func recordTiming(record storedUsageRecord) (uint64, float64) {
+	generation := record.LatencyNS
+	if record.TTFTNS > 0 && record.LatencyNS >= record.TTFTNS {
+		generation -= record.TTFTNS
+	}
+	if generation == 0 {
+		return generation, 0
+	}
+	return generation, float64(record.OutputTokens) / (float64(generation) / float64(time.Second))
+}
+
+type usageTimingTotals struct {
+	latencyTotal   uint64
+	ttftTotal      uint64
+	ttftRequests   uint64
+	tpsTotal       float64
+	timingRequests uint64
+}
+
+func (totals *usageTimingTotals) add(record storedUsageRecord) {
+	totals.latencyTotal += record.LatencyNS
+	totals.ttftTotal += record.TTFTNS
+	if record.TTFTNS > 0 {
+		totals.ttftRequests++
+	}
+	if generation, tps := recordTiming(record); generation > 0 {
+		totals.tpsTotal += tps
+		totals.timingRequests++
+	}
+}
+
+func (totals usageTimingTotals) averages(requests uint64) (latency, ttft uint64, tps float64) {
+	if requests > 0 {
+		latency = totals.latencyTotal / requests
+	}
+	if totals.ttftRequests > 0 {
+		ttft = totals.ttftTotal / totals.ttftRequests
+	}
+	if totals.timingRequests > 0 {
+		tps = totals.tpsTotal / float64(totals.timingRequests)
+	}
+	return
 }
 
 func effectiveCacheReadTokens(record storedUsageRecord) uint64 {
@@ -155,11 +192,7 @@ type usageSeriesPoint struct {
 	AverageTPS              float64 `json:"average_tps"`
 	CostUSD                 float64 `json:"cost_usd"`
 
-	latencyTotal   uint64
-	ttftTotal      uint64
-	ttftRequests   uint64
-	tpsTotal       float64
-	timingRequests uint64
+	usageTimingTotals
 }
 
 type usageModelStats struct {

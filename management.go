@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -124,20 +125,9 @@ func validateModelRouterManagementConfig(body []byte) pluginapi.ManagementRespon
 		})
 	}
 	var request modelRouterValidationRequest
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
+	if err := decodeManagementJSON(body, maxManagementRequestBytes, &request); err != nil {
 		return modelRouterJSONResponse(http.StatusBadRequest, map[string]any{
-			"valid":   false,
-			"error":   "invalid_request",
-			"message": err.Error(),
-		})
-	}
-	if err := ensureModelRouterJSONEOF(decoder); err != nil {
-		return modelRouterJSONResponse(http.StatusBadRequest, map[string]any{
-			"valid":   false,
-			"error":   "invalid_request",
-			"message": err.Error(),
+			"valid": false, "error": "invalid_request", "message": err.Error(),
 		})
 	}
 	enabled := true
@@ -169,11 +159,19 @@ func validateModelRouterManagementConfig(body []byte) pluginapi.ManagementRespon
 	})
 }
 
-func ensureModelRouterJSONEOF(decoder *json.Decoder) error {
+func decodeManagementJSON(raw []byte, limit int, destination any) error {
+	if len(raw) > limit {
+		return fmt.Errorf("request exceeds %d bytes", limit)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
 		if err == nil {
-			return fmt.Errorf("multiple JSON values are not supported")
+			return errors.New("multiple JSON values are not supported")
 		}
 		return err
 	}

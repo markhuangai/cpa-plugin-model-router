@@ -92,6 +92,30 @@ The backup is the original bbolt file and must not be overwritten with an unveri
 
 **Reset usage** deletes and recreates only `requests` and `minute_aggregates`. It preserves model pricing and dashboard preferences in `store_state`.
 
+### Native unload and accounting diagnostics
+
+Native unload closes admission, cancels routed streams, and drains forwarding and cleanup callbacks before closing SQLite and releasing the host callback table. Upstream and client streams are each closed once, including upstream IDs returned after cancellation. Reconfiguration keeps active streams running. A stuck callback retains ownership and keeps unload pending; no timeout releases live native resources.
+
+CPA's existing `host.log` callback emits `model_router.shutdown.start`, `model_router.stream.complete` with `cancelled_shutdown`, and `model_router.shutdown.complete` at INFO during unload. `model_router.shutdown.stalled` appears at WARN every five seconds while work remains. `model_router.stream.cleanup_failed` and `model_router.shutdown.storage_failed` are ERROR events. These levels remain visible with debug disabled. Stream events include the operation and stream IDs, available host callback/request correlation, version, target, attempt, forwarding phase, cleanup state and elapsed milliseconds. Shutdown warnings list remaining calls and active stream snapshots; inspect the phase and running cleanup before investigating that host operation. Do not force resource release while it is outstanding.
+
+Before reproducing historical accounting in a disposable instance, enable CPA's existing profile:
+
+```yaml
+debug: true
+logging-to-file: false
+logs-max-total-size-mb: 100
+```
+
+Capture CPA stdout/stderr to a file, or use CPA's existing log collection when file logging is enabled. The retention cap applies to CPA-managed files; bound any shell capture separately. Production defaults are unchanged. Filter the capture with:
+
+```bash
+rg 'model_router\.(stream|shutdown|accounting|query)' <captured-log>
+```
+
+Each message carries JSON because CPA v7.3.9's text formatter omits arbitrary structured fields. Correlate by `operation_id`. For accounting, concatenate the JSON strings in `decision_json` in `chunk` order from 1 through `chunks`, then decode the resulting JSON. Every decision group is retained in batches of at most 32 KiB of decision text; preserve every chunk. The report contains the sanitized range/filters, price-book revision, model/provider/executor identity, explicit override, stored/default/effective accounting modes, request counts and cache overlap totals. `model_router.query.complete` records the outcome and elapsed time under the same operation ID. Query the historical range before and after adding a price without an accounting override: the effective mode and overlap must stay unchanged. The precedence is explicit price override, then stored mode, then provider default. No business-table inspection is needed to explain the decision.
+
+Diagnostics omit credentials, headers, prompts, response bodies and raw provider errors. Every free-form filter omits recognized credential prefixes, unspaced credential-shaped values of 32 bytes or more (including JWT, UUID and base64 forms), credential-bearing URLs and values over 512 bytes; source filters additionally use the conservative stored-source credential heuristic. This conservative policy also omits long model filters while preserving short identities and the accounting groups' model identities. Omitted values are explicitly marked. The native integration fixture captures these events through CPA's real logger, verifies batching and INFO/DEBUG filtering, and checks credential and payload sentinels are absent. A disposable CPA source copy adds a test-only logger hook to hold a native callback across the WARN interval, then verifies drain completion after release; cached source and production builds are unchanged. Timing and strict JSON helper extraction preserve existing responses and add no routine events.
+
 ## CPA usage delivery and attribution
 
 CPA's `usage_plugin` callback is the sole usage source. CPA normalizes provider metadata, timing, failures, totals, cache reads, cache creation, and reasoning before delivering `usage.handle`; Model Router does not parse response bodies or stream chunks for usage and does not persist a fallback record.

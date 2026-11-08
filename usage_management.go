@@ -1,12 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -290,25 +287,6 @@ func parsePagination(offsetText, limitText string) (int, int, error) {
 		}
 	}
 	return offset, limit, nil
-}
-
-func decodeManagementJSON(raw []byte, limit int, destination any) error {
-	if len(raw) > limit {
-		return fmt.Errorf("request exceeds %d bytes", limit)
-	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil {
-		return err
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		if err == nil {
-			return errors.New("multiple JSON values are not supported")
-		}
-		return err
-	}
-	return nil
 }
 
 func usageBadRequest(err error) pluginapi.ManagementResponse {

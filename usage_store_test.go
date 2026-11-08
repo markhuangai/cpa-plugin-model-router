@@ -561,6 +561,136 @@ func TestUsageOverviewTracksCacheAccountingModes(t *testing.T) {
 	}
 }
 
+func TestHistoricalAccountingSurvivesPriceChanges(t *testing.T) {
+	for _, test := range []struct {
+		name, provider, stored, effective string
+	}{
+		{"stored excludes openai default", "openai", accountingModeInputExcludesCache, accountingModeInputExcludesCache},
+		{"stored includes anthropic default", "anthropic", accountingModeInputIncludesCache, accountingModeInputIncludesCache},
+		{"missing stored openai", "openai", "", accountingModeInputIncludesCache},
+		{"missing stored anthropic", "anthropic", "", accountingModeInputExcludesCache},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, err := openUsageStore(filepath.Join(t.TempDir(), "usage.db"), 365)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			now := time.Now().UTC().Truncate(time.Hour).Add(time.Minute)
+			record := storedUsageRecord{RequestedAt: now, Provider: test.provider, ProviderModel: "legacy-model", AccountingMode: test.stored, InputTokens: 100, CacheReadTokens: 20, CacheCreationTokens: 5}
+			if err := store.Record(record); err != nil {
+				t.Fatal(err)
+			}
+			filter := usageFilter{From: now.Add(-time.Minute), To: now.Add(time.Hour)}
+			mode := test.effective
+			var revision uint64
+			for stage := 0; stage < 3; stage++ {
+				if stage > 0 {
+					override := ""
+					if stage == 2 {
+						mode = accountingModeInputIncludesCache
+						if mode == test.effective {
+							mode = accountingModeInputExcludesCache
+						}
+						override = mode
+					}
+					book, err := store.SavePriceBook(saveModelPricesRequest{Revision: revision, Prices: map[string]modelPrice{"legacy-model": {tokenRates: tokenRates{Input: 1}, AccountingMode: override}}}, now)
+					if err != nil {
+						t.Fatal(err)
+					}
+					revision = book.Revision
+				}
+				dashboard, err := store.Dashboard(filter, "hour", usageGroupOptions{"provider_model", usagePageOptions{"key", "asc", 0, 10}}, usagePageOptions{"time", "asc", 0, 10})
+				if err != nil {
+					t.Fatal(err)
+				}
+				overview, err := store.Overview(filter, "hour")
+				if err != nil {
+					t.Fatal(err)
+				}
+				included, billable := uint64(0), uint64(100)
+				if mode == accountingModeInputIncludesCache {
+					included, billable = 20, 75
+				}
+				if len(overview.Series) != 1 || overview.Series[0].CacheReadIncludedTokens != included || !reflect.DeepEqual(canonicalUsageOverview(overview), canonicalUsageOverview(dashboard.Overview)) {
+					t.Fatalf("stage %d accounting overview=%#v dashboard=%#v", stage, overview, dashboard)
+				}
+				cost := dashboard.Requests.Items[0].EstimatedCost
+				if stage == 0 {
+					raw, err := json.Marshal(cost)
+					if err != nil {
+						t.Fatal(err)
+					}
+					const unpriced = `{"priced":false,"input_usd":0,"output_usd":0,"cache_read_usd":0,"cache_creation_usd":0,"total_usd":0}`
+					if string(raw) != unpriced {
+						t.Fatalf("unpriced wire format changed: %s", raw)
+					}
+				} else if !cost.Priced || cost.AccountingMode != mode || cost.BillableInputTokens != billable {
+					t.Fatalf("stage %d cost=%#v", stage, cost)
+				}
+			}
+		})
+	}
+}
+
+func TestUsageTimingEdgesAcrossQueries(t *testing.T) {
+	store, err := openUsageStore(filepath.Join(t.TempDir(), "usage.db"), 365)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC().Truncate(time.Hour).Add(time.Minute)
+	tests := []struct {
+		latency, ttft, generation uint64
+		output                    uint64
+		tps                       float64
+	}{
+		{0, 0, 0, 100, 0},
+		{uint64(2 * time.Second), 0, uint64(2 * time.Second), 10, 5},
+		{uint64(time.Second), uint64(time.Second), 0, 20, 0},
+		{uint64(time.Second), uint64(2 * time.Second), uint64(time.Second), 30, 30},
+		{uint64(4 * time.Second), uint64(time.Second), uint64(3 * time.Second), 9, 3},
+	}
+	for index, test := range tests {
+		record := storedUsageRecord{RequestedAt: now.Add(time.Duration(index) * time.Second), ProviderModel: "timed", LatencyNS: test.latency, TTFTNS: test.ttft, OutputTokens: test.output}
+		if err := store.Record(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	filter := usageFilter{From: now.Add(-time.Second), To: now.Add(time.Minute)}
+	dashboard, err := store.Dashboard(filter, "hour", usageGroupOptions{"provider_model", usagePageOptions{"tps", "desc", 0, 10}}, usagePageOptions{"time", "asc", 0, 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, detail := range dashboard.Requests.Items {
+		if detail.GenerationNS != tests[index].generation || !near(detail.TPS, tests[index].tps) {
+			t.Fatalf("detail %d = %#v", index, detail)
+		}
+	}
+	point, group := dashboard.Overview.Series[0], dashboard.Groups.Items[0]
+	if point.AverageLatencyNS != uint64(8*time.Second)/5 || point.AverageTTFTNS != uint64(4*time.Second)/3 || !near(point.AverageTPS, 38.0/3) {
+		t.Fatalf("mixed timing = %#v", point)
+	}
+	if group.AverageLatencyNS != point.AverageLatencyNS || group.AverageTTFTNS != point.AverageTTFTNS || group.AverageTPS != point.AverageTPS {
+		t.Fatalf("timing group=%#v series=%#v", group, point)
+	}
+	for _, order := range []string{"asc", "desc"} {
+		page, err := store.Requests(filter, "tps", order, 0, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []uint64{1, 3, 5, 2, 4}
+		if order == "desc" {
+			want = []uint64{4, 2, 5, 3, 1}
+		}
+		for index, item := range page.Items {
+			if item.Sequence != want[index] {
+				t.Fatalf("%s TPS order=%#v want=%v", order, page.Items, want)
+			}
+		}
+	}
+}
+
 func TestUsageAggregatesEffectiveCacheReadAliases(t *testing.T) {
 	store, err := openUsageStore(filepath.Join(t.TempDir(), "usage.db"), 365)
 	if err != nil {
@@ -1270,6 +1400,9 @@ func (store *usageStore) referenceUsageOverview(filter usageFilter, granularity 
 		}
 		point.usageCounters.add(record)
 		mode := cost.AccountingMode
+		if mode == "" {
+			mode = record.AccountingMode
+		}
 		if mode == "" {
 			mode = defaultAccountingMode(record.Provider, record.ExecutorType)
 		}

@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -279,5 +281,67 @@ func TestModelRouterManagementRejectsUnsupportedMethod(t *testing.T) {
 	response := handleModelRouterManagement(nil, pluginapi.ManagementRequest{Method: http.MethodDelete, Path: modelRouterDashboardPath})
 	if response.StatusCode != http.StatusMethodNotAllowed || !strings.Contains(string(response.Body), "method_not_allowed") {
 		t.Fatalf("response = %#v, body=%s", response, response.Body)
+	}
+}
+
+func TestManagementStrictJSONContracts(t *testing.T) {
+	for _, endpoint := range []struct {
+		name, method, path, valid string
+		limit, oversize           int
+	}{
+		{"configuration", http.MethodPost, modelRouterValidationPath, `{"routes":[]}`, maxManagementRequestBytes, http.StatusRequestEntityTooLarge},
+		{"preferences", http.MethodPut, modelRouterUsageBasePath + "/preferences", `{}`, maxManagementRequestBytes, http.StatusBadRequest},
+		{"prices", http.MethodPut, modelRouterUsageBasePath + "/prices", `{"revision":0,"prices":{}}`, maxPriceRequestBytes, http.StatusBadRequest},
+	} {
+		t.Run(endpoint.name, func(t *testing.T) {
+			for _, test := range []struct {
+				name, body, message string
+				status              int
+			}{
+				{"valid", endpoint.valid, "", http.StatusOK},
+				{"whitespace", " \n" + endpoint.valid + "\t\r\n", "", http.StatusOK},
+				{"null", "null", "", http.StatusOK},
+				{"unknown", `{"unknown":1}`, `json: unknown field "unknown"`, http.StatusBadRequest},
+				{"multiple", endpoint.valid + " {}", "multiple JSON values are not supported", http.StatusBadRequest},
+				{"trailing", endpoint.valid + " x", "invalid character 'x' looking for beginning of value", http.StatusBadRequest},
+				{"exact limit", endpoint.valid + strings.Repeat(" ", endpoint.limit-len(endpoint.valid)), "", http.StatusOK},
+				{"one over", endpoint.valid + strings.Repeat(" ", endpoint.limit+1-len(endpoint.valid)), "", endpoint.oversize},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					store, err := openUsageStore(filepath.Join(t.TempDir(), "usage.db"), 365)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer store.Close()
+					plugin := &modelRouterPlugin{store: store}
+					response := handleModelRouterManagement(plugin, pluginapi.ManagementRequest{Method: endpoint.method, Path: endpoint.path, Body: []byte(test.body)})
+					var body map[string]any
+					if err := json.Unmarshal(response.Body, &body); err != nil {
+						t.Fatal(err)
+					}
+					if response.StatusCode != test.status {
+						t.Fatalf("status=%d body=%s want=%d", response.StatusCode, response.Body, test.status)
+					}
+					if test.status == http.StatusOK {
+						return
+					}
+					if endpoint.name == "configuration" && body["valid"] != false {
+						t.Fatalf("missing valid:false: %s", response.Body)
+					}
+					message := test.message
+					code := "invalid_request"
+					if test.name == "one over" {
+						message = fmt.Sprintf("request exceeds %d bytes", endpoint.limit)
+						if endpoint.name == "configuration" {
+							message = "configuration exceeds the 1 MiB validation limit"
+							code = "request_too_large"
+						}
+					}
+					if body["error"] != code || body["message"] != message {
+						t.Fatalf("envelope=%s want code=%q message=%q", response.Body, code, message)
+					}
+				})
+			}
+		})
 	}
 }

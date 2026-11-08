@@ -30,6 +30,8 @@ The module is built against `github.com/router-for-me/CLIProxyAPI/v7` v7.3.9 and
 
 Build the plugin for the same operating system and architecture as CPA. A Go `c-shared` library is not portable across OS or CPU targets.
 
+Unloading cancels active routed streams and waits for forwarding and native cleanup callbacks before closing usage storage or releasing the host callback table. Clients receive stream termination; reconfiguration keeps active streams running. A callback that does not return keeps unload pending, with a warning every five seconds identifying the outstanding phase. See the [diagnostic collection procedure](docs/usage-tracking.md#native-unload-and-accounting-diagnostics) before reproducing an unload or accounting problem.
+
 ## Configuration
 
 ```yaml
