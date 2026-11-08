@@ -71,7 +71,12 @@ func TestDiagnosticFiltersPreserveIdentitiesAndOmitCredentials(t *testing.T) {
 			t.Errorf("ordinary filter %q became %q", value, got)
 		}
 	}
-	for _, value := range []string{"sk-private-key", "Bearer private-token", "gsk_private", "https://user:password@example.test/models", "https://example.test/models?token=private", strings.Repeat("a", 64), strings.Repeat("x", 513)} {
+	for _, value := range []string{"sk-private-key", "Bearer private-token", "gsk_private", "https://user:password@example.test/models", "https://example.test/models?token=private", strings.Repeat("a", 64), strings.Repeat("x", 513),
+		"03e6a7b0-693b-4baa-ad22-29f2ed6ec6a7",
+		"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJwcml2YXRlIn0.signature",
+		"YWFhYWFhYWFh/YmJiYmJiYmJiYmJiYmJiYmJiYmJi",
+		strings.Repeat("a", 31) + "_",
+	} {
 		if got := diagnosticFilterValue(value); !strings.HasPrefix(got, "[omitted:") {
 			t.Errorf("credential filter %q was retained", value)
 		}

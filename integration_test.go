@@ -369,6 +369,7 @@ func TestNativeUnloadAndAccountingDiagnostics(t *testing.T) {
 			cancelled := make(chan struct{})
 			const promptSentinel = "PRIVATE_PROMPT_SENTINEL"
 			const payloadSentinel = "PRIVATE_RESPONSE_SENTINEL"
+			const filterTokenSentinel = "eyJhbGciOiJIUzI1NiJ9.PRIVATE_FILTER_PAYLOAD_SENTINEL.signature"
 			provider := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 				defer close(cancelled)
 				var body struct {
@@ -498,6 +499,8 @@ openai-compatibility:
 			getSmokeManagementJSON[usageOverview](t, baseURL, modelRouterUsageBasePath+"/overview?"+query.Encode())
 			query.Del("source")
 			query.Set("provider_model", "sk-PRIVATE_FILTER_KEY_SENTINEL")
+			getSmokeManagementJSON[usageOverview](t, baseURL, modelRouterUsageBasePath+"/overview?"+query.Encode())
+			query.Set("provider_model", filterTokenSentinel)
 			getSmokeManagementJSON[usageOverview](t, baseURL, modelRouterUsageBasePath+"/overview?"+query.Encode())
 			query.Set("provider_model", "ordinary/model")
 			getSmokeManagementJSON[usageOverview](t, baseURL, modelRouterUsageBasePath+"/overview?"+query.Encode())
@@ -678,7 +681,7 @@ openai-compatibility:
 				if !strings.Contains(line, "model_router.") {
 					continue
 				}
-				for _, secret := range []string{promptSentinel, payloadSentinel, "PRIVATE_HEADER_SENTINEL", "sk-PRIVATE_PROVIDER_KEY_SENTINEL", "sk-PRIVATE_FILTER_KEY_SENTINEL", "local-test-key", "local-management-key"} {
+				for _, secret := range []string{promptSentinel, payloadSentinel, filterTokenSentinel, "PRIVATE_HEADER_SENTINEL", "sk-PRIVATE_PROVIDER_KEY_SENTINEL", "sk-PRIVATE_FILTER_KEY_SENTINEL", "local-test-key", "local-management-key"} {
 					if strings.Contains(line, secret) {
 						t.Fatalf("diagnostic exposed %q", secret)
 					}
@@ -746,7 +749,7 @@ func verifySmokeAccountingDecisions(t *testing.T, events []smokeRouterEvent, deb
 		}
 		return
 	}
-	if len(chunks) != 5 || len(outcomes) != 5 {
+	if len(chunks) != 6 || len(outcomes) != 6 {
 		t.Fatalf("query evidence count: batches=%d outcomes=%d", len(chunks), len(outcomes))
 	}
 	revisions := map[uint64]bool{}

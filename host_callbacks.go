@@ -130,7 +130,7 @@ func diagnosticFilterValue(value string) string {
 	if len(value) > 512 {
 		return "[omitted: filter exceeds 512 bytes]"
 	}
-	if hasCredentialPrefix(value) || len(value) >= 32 && looksLikeCredential(value) && !strings.ContainsAny(value, "/-._") {
+	if hasCredentialPrefix(value) || len(value) >= 32 && looksLikeCredential(value) {
 		return "[omitted: credential-shaped filter]"
 	}
 	if parsed, err := url.Parse(value); err == nil && (parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "") {
@@ -168,7 +168,7 @@ func logModelRouterJSON(operation, event string, value any) {
 		logModelRouterEvent("", "error", "model_router.query.diagnostic_failed", diagnosticErrorFields(err))
 		return
 	}
-	parts := make([]string, 0, len(raw)/(32<<10)+1)
+	var parts []string
 	for len(raw) > 0 {
 		end := min(len(raw), 32<<10)
 		for end < len(raw) && !utf8.RuneStart(raw[end]) {
