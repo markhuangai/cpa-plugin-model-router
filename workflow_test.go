@@ -69,7 +69,7 @@ func TestWorkflowRunnersAndActionRuntimes(t *testing.T) {
 		"actions/setup-node@v7":        true,
 		"actions/upload-artifact@v7":   true,
 		"actions/download-artifact@v8": true,
-		"actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3": true,
+		"actions/github-script@v9":     true,
 	}
 
 	for _, path := range workflowPaths {
