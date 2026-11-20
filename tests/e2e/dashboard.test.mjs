@@ -49,6 +49,43 @@ async function waitForUsageReady(page) {
   assert.doesNotMatch(status || '', /Refresh failed|could not be loaded|could not be saved/i, status || '');
 }
 
+async function recordDashboardUsage(page, baseUrl, managementKey, routerModel, providerModels) {
+  const managementHeaders = { Authorization: 'Bearer ' + managementKey };
+  const keys = await page.request.get(baseUrl + '/v0/management/api-keys', { headers: managementHeaders });
+  assert.ok(keys.ok(), 'the disposable CPA should expose a client key');
+  const [key] = (await keys.json())['api-keys'];
+  assert.ok(key, 'the disposable CPA needs a client key');
+  const headers = { Authorization: 'Bearer ' + key };
+  let registered = false;
+  for (let poll = 0; poll < 100 && !registered; poll++) {
+    const models = await page.request.get(baseUrl + '/v1/models', { headers, timeout: 2000 });
+    if (models.ok()) registered = (await models.json()).data.some((item) => item.id === routerModel);
+    if (!registered) await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.ok(registered, 'the saved router alias should be registered in CPA');
+
+  for (let index = 0; index < 4; index++) {
+    const reply = await page.request.post(baseUrl + '/v1/chat/completions', {
+      headers,
+      data: { model: routerModel, messages: [{ role: 'user', content: index === 1 ? 'dashboard fixture fail east' : 'dashboard usage fixture' }] },
+    });
+    assert.equal(reply.status(), 200, 'the disposable CPA should execute each real routed request');
+    assert.equal((await reply.json()).model, routerModel);
+  }
+  const params = new URLSearchParams({ router_model: routerModel, dimension: 'router_model' });
+  for (let poll = 0; poll < 100; poll++) {
+    const groups = await page.request.get(baseUrl + '/v0/management/plugins/model-router/usage/groups?' + params, { headers: managementHeaders });
+    assert.ok(groups.ok());
+    const [group] = (await groups.json()).items;
+    if (group?.requests === 5) {
+      assert.deepEqual(group.provider_subtotals.map((item) => item.provider_model).sort(), [...providerModels].sort());
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.fail('the four completions and failed east attempt should appear in router usage');
+}
+
 test('dashboard reuses CPAMC credentials and preserves manual recovery', { timeout: 120_000 }, async (t) => {
   const { dashboardUrl, managementKey, executablePath } = dashboardEnvironment();
   const { host, origin } = new URL(dashboardUrl);
@@ -159,31 +196,34 @@ test('dashboard tabs retain their browser interactions after source assembly', {
     assert.equal(await page.locator('#configuration-tab').getAttribute('aria-selected'), 'true');
     assert.deepEqual(await routeAliases(page), [], 'the disposable E2E instance should start without routes');
 
+    const modelA = 'east/dashboard-e2e-model-a';
+    const modelB = 'west/dashboard-e2e-model-b';
     for (let index = 0; index < 5; index++) {
       await page.locator('#add-route').click();
       let card = page.locator('.route-card').nth(index);
+      assert.equal(await card.locator('details[open]').count(), 1, 'a new draft opens immediately');
       await card.locator('input[data-field="alias"]').fill(`dashboard-e2e-${index}`);
       if (index === 0) {
         await card.locator('select[data-field="strategy"]').selectOption('round-robin');
         card = page.locator('.route-card').nth(index);
       }
-      await card.locator('select[data-target-field="model"]').selectOption('dashboard-e2e-model-a');
+      await card.locator('select[data-target-field="model"]').selectOption(modelA);
       if (index === 0) await card.locator('input[data-target-field="weight"]').fill('3');
     }
     const modelOptions = await page.locator('.route-card').first().locator('select[data-target-field="model"] option').evaluateAll((options) => options.map((option) => option.value));
-    assert.ok(modelOptions.includes('dashboard-e2e-model-a'));
-    assert.ok(modelOptions.includes('dashboard-e2e-model-b'));
+    assert.ok(modelOptions.includes(modelA));
+    assert.ok(modelOptions.includes(modelB));
 
     let firstRoute = page.locator('.route-card').first();
     await firstRoute.locator('button[data-action="add-target"]').click();
     firstRoute = page.locator('.route-card').first();
-    await firstRoute.locator('.target-row').nth(1).locator('select[data-target-field="model"]').selectOption('dashboard-e2e-model-b');
+    await firstRoute.locator('.target-row').nth(1).locator('select[data-target-field="model"]').selectOption(modelB);
     await firstRoute.locator('.target-row').nth(1).locator('input[data-target-field="weight"]').fill('1');
     await firstRoute.locator('.target-row').nth(1).locator('button[data-action="target-up"]').click();
     firstRoute = page.locator('.route-card').first();
     assert.deepEqual(await firstRoute.locator('select[data-target-field="model"]').evaluateAll((selects) => selects.map((select) => select.value)), [
-      'dashboard-e2e-model-b',
-      'dashboard-e2e-model-a',
+      modelB,
+      modelA,
     ]);
     await firstRoute.locator('.target-row').first().locator('button[data-action="target-down"]').click();
 
@@ -211,9 +251,47 @@ test('dashboard tabs retain their browser interactions after source assembly', {
     await page.locator('#save').click();
     await page.waitForFunction(() => document.querySelector('#save-state')?.textContent === 'Saved in CPA', { timeout: 20_000 });
 
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.locator('#workspace').waitFor({ state: 'visible' });
+    await page.locator('#model-status[data-tone="ready"]').waitFor();
+    const cards = page.locator('.route-card');
+    assert.deepEqual(await routeAliases(page), beforeAliases);
+    assert.equal(await cards.locator('details[open]').count(), 0);
+    const firstSummary = cards.first().locator('summary');
+    assert.match(await firstSummary.innerText(), /dashboard-e2e-0\s+2 targets/);
+    await firstSummary.focus();
+    await page.keyboard.press('Enter');
+    const secondSummary = cards.nth(1).locator('summary');
+    await secondSummary.focus();
+    await page.keyboard.press('Space');
+    assert.equal(await cards.locator('details[open]').count(), 2);
+    assert.equal(await page.locator('#save-state').getAttribute('data-dirty'), 'false');
+    await cards.nth(1).locator('[data-field="alias"]').fill('dashboard-e2e-edited');
+    assert.match(await secondSummary.innerText(), /dashboard-e2e-edited/);
+    await secondSummary.click();
+    await secondSummary.click();
+    assert.equal(await cards.nth(1).locator('[data-field="alias"]').inputValue(), 'dashboard-e2e-edited');
+    await cards.nth(1).locator('[data-field="alias"]').fill(beforeAliases[1]);
+    assert.equal(await page.locator('#save-state').getAttribute('data-dirty'), 'false');
+    await secondSummary.click();
+    assert.equal(await cards.locator('details[open]').count(), 1);
+
+    await recordDashboardUsage(page, new URL(dashboardUrl).origin, managementKey, beforeAliases[0], [modelA, modelB]);
     await page.getByRole('tab', { name: 'Usage tracking' }).click();
     await page.locator('#usage-panel').waitFor({ state: 'visible' });
     await waitForUsageReady(page);
+    assert.equal(await page.locator('#group-dimension').inputValue(), 'router_model');
+    const routerTotal = page.locator('#usage-groups .router-total');
+    await routerTotal.waitFor();
+    assert.equal(await routerTotal.count(), 1);
+    assert.match(await routerTotal.innerText(), /dashboard-e2e-0/);
+    const providers = page.locator('.provider-subtotal .provider-subtotal-name');
+    assert.deepEqual((await providers.allTextContents()).sort(), [modelA, modelB]);
+    assert.match(await page.locator('#group-page-status').innerText(), /of 1 groups/);
+    assert.equal(await page.locator('#usage-requests tr').count(), 5);
+    await page.locator('#usage-requests').getByText(modelA, { exact: true }).first().waitFor();
+    const retryRow = page.locator('#usage-requests tr').filter({ hasText: 'dashboard-e2e-0-retry' });
+    await retryRow.getByText(modelB, { exact: true }).waitFor();
     for (const selector of [
       '#usage-range', '#usage-granularity', '#usage-router-model', '#usage-provider-model',
       '#usage-source', '#usage-service-tier', '#usage-result', '#usage-refresh',
@@ -223,7 +301,7 @@ test('dashboard tabs retain their browser interactions after source assembly', {
 
     await page.locator('#usage-range').selectOption('custom');
     assert.equal(await page.locator('#usage-custom-range').isVisible(), true);
-    const to = new Date();
+    const to = new Date(Date.now() + 60_000);
     const from = new Date(to.getTime() - 60 * 60 * 1000);
     await page.locator('#usage-from').fill(localDateTime(from));
     await page.locator('#usage-from').dispatchEvent('change');
@@ -289,6 +367,17 @@ test('dashboard tabs retain their browser interactions after source assembly', {
     assert.equal(await page.locator('#configuration-panel').isVisible(), true);
     await page.getByRole('tab', { name: 'Usage tracking' }).click();
     assert.equal(await page.locator('#usage-panel').isVisible(), true);
+    const saveGrouping = page.waitForResponse((response) =>
+      response.url().endsWith('/usage/preferences') && response.request().method() === 'PUT' && response.ok() &&
+      response.request().postDataJSON().group_dimension === 'provider_model'
+    );
+    await page.locator('#group-dimension').selectOption('provider_model');
+    await saveGrouping;
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.locator('#workspace').waitFor({ state: 'visible' });
+    await page.getByRole('tab', { name: 'Usage tracking' }).click();
+    await waitForUsageReady(page);
+    assert.equal(await page.locator('#group-dimension').inputValue(), 'provider_model');
 
     assert.deepEqual(pageErrors, [], 'dashboard should not raise browser runtime errors');
     assert.deepEqual(failedApiResponses, [], 'dashboard management requests should succeed');

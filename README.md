@@ -118,7 +118,7 @@ The page supports CPAMC's `enc::v2::` saved sessions and older `enc::v1::` sessi
 
 ### Usage tracking
 
-Usage tracking stores one row for each CPA usage record delivered for a physical routed attempt, including failed attempts before failover, and for each delivered direct-provider record. A routed row keeps the client-visible router alias in `router_model` and the physical CPA target in `provider_model`; direct rows have no router alias. This separation is used consistently in filters, summaries, grouped results, and request details.
+Usage tracking stores one row for each delivered CPA record, including failed attempts before failover and router failures before a provider runs. A routed row keeps the client-visible alias in `router_model`. The provider accounting key is the physical model qualified by the prefix carried by CPA's target or request, such as `west/gpt-4.1`. The Usage breakdown defaults to router totals with provider subtotals. Request details append `-retry` to the router alias for confirmed second and later target attempts.
 
 The dashboard provides preset or custom time ranges, minute/hour/day trends, router/provider/source/tier/result filters, USD cost estimates, configurable columns, server-side sorting and pagination, and model pricing with optional models.dev synchronization. Both usage tables start at 50 rows, and Router model joins Provider, Source, Service tier, and Result in the hidden Usage breakdown defaults; existing saved column and page-size preferences remain authoritative. Token trends use packet columns, cost and efficiency use halo lines, and provider share uses a gapped donut. Every chart has stronger pointer and keyboard hover/focus states while preserving the existing tooltips and filter actions. Manual prices take precedence over synchronized catalog prices, and the pricing dialog closes after a successful save. Pricing units are USD per one million tokens; context tiers, service tiers, and cache accounting modes are supported.
 
@@ -356,7 +356,7 @@ The black-box test builds CPA and the native plugin in a temporary directory, st
 
 The test currently runs on Linux and macOS.
 
-The browser E2E test exercises the dashboard against a disposable local CPA instance. It changes route configuration, pricing, and dashboard preferences, then resets usage history, so do not point it at a shared or production instance. Install its pinned browser dependency with `npm ci`, then run:
+The browser E2E test uses a disposable loopback CPA instance with no initial routes, an enabled usage store, a client API key, and two OpenAI-compatible fixture models. Make `east/dashboard-e2e-model-a` and `west/dashboard-e2e-model-b` available. The upstream fixture returns successful chat completions with token usage, with a single exception where the east model returns HTTP 429 for the user message `dashboard fixture fail east`. Set CPA's `request-retry` to zero so the plugin handles failover. The test writes routes, prices and preferences, then resets test usage. Install the pinned browser dependency with `npm ci` and run the suite.
 
 ```bash
 DASHBOARD_URL=http://127.0.0.1:8317/v0/resource/plugins/model-router/config \

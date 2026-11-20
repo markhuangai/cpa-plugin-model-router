@@ -63,7 +63,8 @@ func TestModelRouterWithCLIProxyAPI(t *testing.T) {
 		observedModels = append(observedModels, body.Model)
 		observedModelsMu.Unlock()
 		response.Header().Set("Content-Type", "application/json")
-		if body.Model == "fail-model" {
+		auth := request.Header.Get("Authorization")
+		if auth == "Bearer fail-provider-key" || auth == "Bearer cooldown-provider-key" {
 			failedCalls.Add(1)
 			response.WriteHeader(http.StatusTooManyRequests)
 			_ = json.NewEncoder(response).Encode(map[string]any{"error": map[string]any{"code": "rate_limit", "message": "smoke-test rate limit"}})
@@ -122,6 +123,9 @@ auth-dir: %q
 api-keys: ["local-test-key"]
 request-retry: 0
 usage-statistics-enabled: true
+debug: true
+logging-to-file: false
+logs-max-total-size-mb: 100
 remote-management:
   allow-remote: false
   secret-key: "local-management-key"
@@ -139,13 +143,18 @@ plugins:
           strategy: priority
           cooldown_seconds: 60
           models:
-            - fail/fail-model
-            - work/working-model
+            - fail/chat
+            - work/chat
+        - alias: cooldown-router-alias
+          strategy: priority
+          cooldown_seconds: 60
+          models:
+            - cold/cooldown-model
         - alias: weighted-router-alias
           strategy: round-robin
           cooldown_seconds: 60
           targets:
-            - model: work/working-model
+            - model: work/chat
               weight: 3
             - model: other/working-model-2
               weight: 1
@@ -156,7 +165,8 @@ openai-compatibility:
     api-key-entries:
       - api-key: fail-provider-key
     models:
-      - name: fail-model
+      - name: working-model
+        alias: chat
   - name: work
     prefix: work
     base-url: %q
@@ -164,6 +174,7 @@ openai-compatibility:
       - api-key: work-provider-key
     models:
       - name: working-model
+        alias: chat
   - name: other
     prefix: other
     base-url: %q
@@ -171,7 +182,14 @@ openai-compatibility:
       - api-key: other-provider-key
     models:
       - name: working-model-2
-`, port, filepath.Join(workDir, "auth"), pluginsDir, provider.URL+"/v1", provider.URL+"/v1", provider.URL+"/v1")
+  - name: cold
+    prefix: cold
+    base-url: %q
+    api-key-entries:
+      - api-key: cooldown-provider-key
+    models:
+      - name: cooldown-model
+`, port, filepath.Join(workDir, "auth"), pluginsDir, provider.URL+"/v1", provider.URL+"/v1", provider.URL+"/v1", provider.URL+"/v1")
 	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -208,15 +226,15 @@ openai-compatibility:
 	if failedCalls.Load() != 1 || workingCalls.Load() != 2 {
 		t.Fatalf("provider calls: failed=%d working=%d, want failed=1 working=2\n%s", failedCalls.Load(), workingCalls.Load(), logs.String())
 	}
-	directResponse := postSmokeChat(t, baseURL, "work/working-model")
-	if directResponse["model"] != "working-model" && directResponse["model"] != "work/working-model" {
+	directResponse := postSmokeChat(t, baseURL, "work/chat")
+	if directResponse["model"] == nil {
 		t.Fatalf("direct response model = %v; response = %#v\n%s", directResponse["model"], directResponse, logs.String())
 	}
 	routedStream := postSmokeChatStream(t, baseURL, "smoke-router-alias")
 	if !strings.Contains(routedStream, `"model":"smoke-router-alias"`) || !strings.Contains(routedStream, "upstream=working-model") {
 		t.Fatalf("routed stream was not rewritten: %s\n%s", routedStream, logs.String())
 	}
-	directStream := postSmokeChatStream(t, baseURL, "work/working-model")
+	directStream := postSmokeChatStream(t, baseURL, "work/chat")
 	if !strings.Contains(directStream, "upstream=working-model") {
 		t.Fatalf("direct stream was not delivered: %s\n%s", directStream, logs.String())
 	}
@@ -247,8 +265,9 @@ openai-compatibility:
 	if unauthenticated.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated dashboard status = %d", unauthenticated.StatusCode)
 	}
-	routedModel := ""
+	routedModel := "work/working-model"
 	foundDirect := false
+	retries := 0
 	routedSuccesses, routedFailures, directSuccesses := 0, 0, 0
 	totalTokens := uint64(0)
 	cacheCreationTokens := uint64(0)
@@ -257,8 +276,17 @@ openai-compatibility:
 		cacheCreationTokens += item.CacheCreationTokens
 		switch item.Attribution {
 		case attributionRouted:
-			if item.RouterModel == "smoke-router-alias" && item.ProviderModel != "" {
-				routedModel = item.ProviderModel
+			wantModel := routedModel
+			if item.Failed {
+				wantModel = "fail/working-model"
+			}
+			if item.RouterModel != "smoke-router-alias" || item.ProviderModel != wantModel || item.PhysicalModel != "working-model" {
+				t.Fatalf("routed provider identity = %#v", item)
+			}
+			if item.RouteAttempt == 2 && !item.Failed {
+				retries++
+			} else if item.RouteAttempt != 1 {
+				t.Fatalf("routed attempt = %#v", item)
 			}
 			if item.Failed {
 				routedFailures++
@@ -266,7 +294,7 @@ openai-compatibility:
 				routedSuccesses++
 			}
 		case attributionDirect:
-			if item.RouterModel == "" && item.ProviderModel != "" {
+			if item.RouterModel == "" && item.RouteAttempt == 0 && item.ProviderModel == routedModel {
 				foundDirect = true
 			}
 			if !item.Failed {
@@ -274,7 +302,7 @@ openai-compatibility:
 			}
 		}
 	}
-	if routedModel == "" || !foundDirect {
+	if retries != 1 || !foundDirect {
 		t.Fatalf("usage records do not distinguish routed and direct calls: %#v\n%s", page.Items, logs.String())
 	}
 	if page.Total != 6 || routedSuccesses != 3 || routedFailures != 1 || directSuccesses != 2 || totalTokens != 14 || cacheCreationTokens != 2 {
@@ -282,12 +310,41 @@ openai-compatibility:
 	}
 
 	savedPrices := putSmokeManagementJSON[saveModelPricesRequest, modelPriceBook](t, baseURL, modelRouterUsageBasePath+"/prices", saveModelPricesRequest{
-		Prices:       map[string]modelPrice{routedModel: {tokenRates: tokenRates{Input: 1.25, Output: 2.5}}},
+		Prices: map[string]modelPrice{
+			routedModel:     {tokenRates: tokenRates{Input: 1.25, Output: 2.5}},
+			"working-model": {tokenRates: tokenRates{Input: 2, Output: 3}},
+		},
 		SyncSettings: defaultPriceSyncSettings(),
 	})
 	if savedPrices.Revision != 1 || savedPrices.Prices[routedModel].Input != 1.25 {
 		t.Fatalf("saved prices = %#v", savedPrices)
 	}
+	beforeCooldown := failedCalls.Load()
+	if status, _ := postSmokeChatResponse(t, baseURL, "cooldown-router-alias", false); status != http.StatusServiceUnavailable {
+		t.Fatalf("initial single-target failure status = %d", status)
+	}
+	if status, _ := postSmokeChatResponse(t, baseURL, "cooldown-router-alias", false); status != http.StatusTooManyRequests {
+		t.Fatalf("pre-dispatch cooldown status = %d", status)
+	}
+	if failedCalls.Load() != beforeCooldown+1 {
+		t.Fatal("the initial cooldown fixture call should reach the provider exactly once")
+	}
+	page = waitForSmokeUsage(t, baseURL, usageStart, 8, 10*time.Second)
+	var noProviderCount int
+	for _, item := range page.Items {
+		if item.ProviderModelState == providerModelNotAttempted {
+			noProviderCount++
+			if item.RouterModel != "cooldown-router-alias" || item.Attribution != attributionRouted ||
+				item.StatusCode != http.StatusTooManyRequests || item.ProviderModel != "" || item.EstimatedCost.Priced {
+				t.Fatalf("pre-dispatch cooldown usage = %#v", item)
+			}
+		}
+	}
+	if noProviderCount != 1 {
+		t.Fatalf("pre-dispatch cooldown usage count = %d; page = %#v", noProviderCount, page)
+	}
+	getSmokeManagementJSON[usageOverview](t, baseURL, modelRouterUsageBasePath+"/overview")
+	verifySmokeUsageDiagnostics(t, logs.String())
 	preferences := defaultDashboardPreferences()
 	preferences.RequestPageSize = 25
 	preferences.HiddenGroupColumns = []string{"result", "service_tier", "source"}
@@ -315,6 +372,29 @@ openai-compatibility:
 		t.Fatalf("preferences were lost across restart: %#v", restartedPreferences)
 	}
 
+	streamStart := time.Now().UTC()
+	beforeFailed := failedCalls.Load()
+	if stream := postSmokeChatStream(t, baseURL, "smoke-router-alias"); !strings.Contains(stream, "upstream=working-model") {
+		t.Fatal("stream failover did not reach working model")
+	}
+	if stream := postSmokeChatStream(t, baseURL, "smoke-router-alias"); !strings.Contains(stream, "upstream=working-model") {
+		t.Fatal("fresh stream did not reach the available model")
+	}
+	if failedCalls.Load() != beforeFailed+1 {
+		t.Fatalf("stream retry with cooling target made %d failed calls", failedCalls.Load()-beforeFailed)
+	}
+	streamPage := waitForSmokeUsage(t, baseURL, usageStart, 11, 10*time.Second)
+	var streamAttempts []int
+	for _, item := range streamPage.Items {
+		if !item.RequestedAt.Before(streamStart) {
+			streamAttempts = append(streamAttempts, item.RouteAttempt)
+		}
+	}
+	if !slices.Equal(streamAttempts, []int{1, 2, 1}) {
+		t.Fatalf("newest-first stream attempt numbers = %v", streamAttempts)
+	}
+	verifySmokeUsageDispatch(t, smokeModelRouterEvents(t, logs.String()), true)
+
 	observedModelsMu.Lock()
 	weightedStart := len(observedModels)
 	observedModelsMu.Unlock()
@@ -330,6 +410,98 @@ openai-compatibility:
 	wantWeightedModels := []string{"working-model", "working-model", "working-model", "working-model-2", "working-model", "working-model", "working-model", "working-model-2"}
 	if !slices.Equal(weightedModels, wantWeightedModels) {
 		t.Fatalf("weighted provider sequence = %#v, want %#v", weightedModels, wantWeightedModels)
+	}
+
+	t.Run("diagnostic filtering", func(t *testing.T) {
+		cpa.Stop()
+		infoConfig := strings.Replace(config, "debug: true", "debug: false", 1)
+		if err := os.WriteFile(configPath, []byte(infoConfig), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		info := startSmokeCPA(t, cpaBinary, configPath, baseURL)
+		infoStart := time.Now().UTC()
+		postSmokeChat(t, baseURL, "smoke-router-alias")
+		postSmokeChat(t, baseURL, "work/chat")
+		waitForSmokeUsage(t, baseURL, infoStart, 3, 10*time.Second)
+		getSmokeManagementJSON[usageOverview](t, baseURL, modelRouterUsageBasePath+"/overview")
+		if strings.Contains(info.logs.String(), "model_router.usage.") || strings.Contains(info.logs.String(), "model_router.accounting.") {
+			t.Fatal("DEBUG usage evidence survived INFO filtering")
+		}
+	})
+}
+
+func verifySmokeUsageDispatch(t *testing.T, events []smokeRouterEvent, stream bool) {
+	t.Helper()
+	failedDispatches := map[any]bool{}
+	successfulDispatches := map[any]bool{}
+	retryRecords := map[any]bool{}
+	for _, event := range events {
+		fields := event.fields
+		if fields["router_model"] != "smoke-router-alias" {
+			continue
+		}
+		operation := fields["operation_id"]
+		if event.name == "model_router.usage.dispatch_complete" && fields["stream"] == stream {
+			if fields["target"] == "fail/chat" && fields["attempt"] == float64(1) && fields["status_code"] == float64(429) && fields["outcome"] == "failed" {
+				failedDispatches[operation] = true
+			}
+			if fields["target"] == "work/chat" && fields["attempt"] == float64(2) && fields["status_code"] == float64(200) && fields["outcome"] == "success" {
+				successfulDispatches[operation] = true
+			}
+		}
+		if event.name == "model_router.usage.record" && fields["attempt"] == float64(2) && fields["physical_model"] == "working-model" &&
+			fields["provider_model"] == "work/working-model" && fields["outcome"] == "recorded" {
+			retryRecords[operation] = true
+		}
+	}
+	for operation := range failedDispatches {
+		if successfulDispatches[operation] && retryRecords[operation] {
+			return
+		}
+	}
+	t.Fatalf("logs do not reconstruct 429 → successful retry for stream=%t", stream)
+}
+
+func verifySmokeUsageDiagnostics(t *testing.T, logs string) {
+	t.Helper()
+	for _, line := range strings.Split(logs, "\n") {
+		if !strings.Contains(line, "model_router.") {
+			continue
+		}
+		if strings.Contains(line, "local-test-key") || strings.Contains(line, "work-provider-key") ||
+			strings.Contains(line, "fail-provider-key") || strings.Contains(line, "cooldown-provider-key") ||
+			strings.Contains(line, "smoke-test rate limit") || strings.Contains(line, "upstream=") {
+			t.Fatal("usage diagnostics exposed a credential or body sentinel")
+		}
+	}
+	events := smokeModelRouterEvents(t, logs)
+	verifySmokeUsageDispatch(t, events, false)
+	prices := map[string]string{}
+	noProvider := false
+	for _, event := range events {
+		if event.name == "model_router.usage.record" && event.fields["reason"] == "router_without_provider" &&
+			event.fields["provider_model_state"] == providerModelNotAttempted && event.fields["provider_status"] == float64(429) {
+			noProvider = true
+		}
+		if event.name != "model_router.accounting.decisions" {
+			continue
+		}
+		var report struct {
+			Revision uint64                    `json:"price_book_revision"`
+			Groups   []accountingDiagnosticKey `json:"groups"`
+		}
+		if err := json.Unmarshal([]byte(event.fields["decision_json"].(string)), &report); err != nil {
+			t.Fatal(err)
+		}
+		if report.Revision == 1 {
+			for _, group := range report.Groups {
+				prices[group.Model] = group.PriceDecision + ":" + group.PriceKey
+			}
+		}
+	}
+	if !noProvider || prices["work/working-model"] != "qualified_price:work/working-model" ||
+		prices["fail/working-model"] != "generic_price:working-model" || prices[""] != "no_physical_model:" {
+		t.Fatalf("incomplete accounting diagnosis: prices=%v cooldown=%v", prices, noProvider)
 	}
 }
 
@@ -1285,7 +1457,7 @@ func verifyModelRouterManagementUI(t *testing.T, baseURL string, logs *smokeSync
 	for _, model := range models.Data {
 		modelIDs[model.ID] = true
 	}
-	for _, expected := range []string{"fail/fail-model", "work/working-model", "other/working-model-2"} {
+	for _, expected := range []string{"fail/chat", "work/chat", "other/working-model-2"} {
 		if !modelIDs[expected] {
 			t.Fatalf("CPA models missing %q: %#v", expected, modelIDs)
 		}

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -35,14 +34,15 @@ type usageStore struct {
 }
 
 type minuteAggregate struct {
-	Minute        time.Time `json:"minute"`
-	Attribution   string    `json:"attribution"`
-	RouterModel   string    `json:"router_model,omitempty"`
-	ProviderModel string    `json:"provider_model"`
-	Provider      string    `json:"provider,omitempty"`
-	Source        string    `json:"source,omitempty"`
-	ServiceTier   string    `json:"service_tier,omitempty"`
-	Result        string    `json:"result"`
+	Minute             time.Time `json:"minute"`
+	Attribution        string    `json:"attribution"`
+	RouterModel        string    `json:"router_model,omitempty"`
+	ProviderModel      string    `json:"provider_model"`
+	ProviderModelState string    `json:"provider_model_state,omitempty"`
+	Provider           string    `json:"provider,omitempty"`
+	Source             string    `json:"source,omitempty"`
+	ServiceTier        string    `json:"service_tier,omitempty"`
+	Result             string    `json:"result"`
 	usageCounters
 	LatencyTotal uint64 `json:"latency_total_ns"`
 	TTFTTotal    uint64 `json:"ttft_total_ns"`
@@ -308,7 +308,6 @@ func (store *usageStore) Record(record storedUsageRecord) error {
 	}()
 	if err != nil {
 		store.recordError(err)
-		log.Printf("model-router: persist usage: %v", err)
 	} else {
 		store.clearError()
 	}
@@ -317,14 +316,19 @@ func (store *usageStore) Record(record storedUsageRecord) error {
 
 func updateMinuteAggregateSQLite(transaction *sql.Tx, record storedUsageRecord) error {
 	minute := record.RequestedAt.UTC().Truncate(time.Minute)
-	dimensions, err := json.Marshal([]string{record.Attribution, record.RouterModel, record.ProviderModel, record.Provider, record.Source, record.ServiceTier, record.result()})
+	values := []string{record.Attribution, record.RouterModel, record.ProviderModel, record.Provider, record.Source, record.ServiceTier, record.result()}
+	if record.ProviderModelState != "" {
+		values = append(values, record.ProviderModelState)
+	}
+	dimensions, err := json.Marshal(values)
 	if err != nil {
 		return err
 	}
 	key := append(timestampPrefix(minute), dimensions...)
 	aggregate := minuteAggregate{
 		Minute: minute, Attribution: record.Attribution, RouterModel: record.RouterModel, ProviderModel: record.ProviderModel,
-		Provider: record.Provider, Source: record.Source, ServiceTier: record.ServiceTier, Result: record.result(),
+		ProviderModelState: record.ProviderModelState,
+		Provider:           record.Provider, Source: record.Source, ServiceTier: record.ServiceTier, Result: record.result(),
 	}
 	var raw []byte
 	err = transaction.QueryRow(`SELECT payload FROM minute_aggregates WHERE key = ?`, key).Scan(&raw)
@@ -459,6 +463,7 @@ func scanUsageRecords(connection *sql.Conn, filter usageFilter, visit func(store
 		if err := json.Unmarshal(value, &record); err != nil {
 			return fmt.Errorf("decode usage record: %w", err)
 		}
+		record.recoverProviderModel()
 		if filter.matches(record) {
 			visit(record)
 		}
@@ -653,16 +658,19 @@ func priceBookFromSQLite(reader interface {
 func (store *usageStore) QueryPreferences() (dashboardPreferences, error) {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
-	preferences := defaultDashboardPreferences()
+	stored := storedDashboardPreferences{dashboardPreferences: defaultDashboardPreferences()}
 	if store.db == nil {
 		return dashboardPreferences{}, errors.New("usage database is closed")
 	}
 	var raw []byte
 	err := store.db.QueryRow(`SELECT preferences_json FROM store_state WHERE id = 1`).Scan(&raw)
 	if err == nil && len(raw) > 0 {
-		err = json.Unmarshal(raw, &preferences)
+		err = json.Unmarshal(raw, &stored)
 	}
-	return preferences, err
+	if stored.GroupingVersion == 0 && stored.GroupDimension == "provider_model" {
+		stored.GroupDimension = "router_model"
+	}
+	return stored.dashboardPreferences, err
 }
 
 func (store *usageStore) SavePreferences(input dashboardPreferences) (dashboardPreferences, error) {
@@ -675,7 +683,7 @@ func (store *usageStore) SavePreferences(input dashboardPreferences) (dashboardP
 	if store.db == nil {
 		return dashboardPreferences{}, errors.New("usage database is closed")
 	}
-	value, err := json.Marshal(preferences)
+	value, err := json.Marshal(storedDashboardPreferences{dashboardPreferences: preferences, GroupingVersion: currentGroupingVersion})
 	if err == nil {
 		_, err = store.db.Exec(`UPDATE store_state SET preferences_json = ? WHERE id = 1`, value)
 	}

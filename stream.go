@@ -85,6 +85,7 @@ func (p *modelRouterPlugin) executeStreamWithHost(ctx context.Context, request p
 	policy := p.config.fallbackPolicy()
 	var lastErr error
 	attempted := make(map[string]struct{}, len(route.Targets))
+	operation := diagnosticOperationID()
 	for attempt := 0; attempt < len(route.Targets); attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -98,9 +99,15 @@ func (p *modelRouterPlugin) executeStreamWithHost(ctx context.Context, request p
 		}
 		attempted[routeKey(selection.model)] = struct{}{}
 		target := targetModel(requestedModel, selection.model)
-		p.attribution.MarkRouted(route.Alias, target, request.Headers)
+		nestedRequest := hostRequest(request, bodyInfo, target, true)
 		setStreamPhase(ctx, "start_stream", target, attempt+1)
-		receivedPayload, err := forwardStreamAttempt(ctx, request, bodyInfo, target, requestedModel, pluginStreamID, host, onPayload)
+		finish := p.attribution.beginDispatch(operation, route.Alias, nestedRequest, request.Headers, attempt+1)
+		receivedPayload, err := forwardStreamAttempt(ctx, nestedRequest, requestedModel, pluginStreamID, host, onPayload)
+		status := http.StatusOK
+		if err != nil {
+			status = statusFromError(err)
+		}
+		finish(status, err)
 		if err == nil {
 			return nil
 		}
@@ -122,9 +129,9 @@ func (p *modelRouterPlugin) executeStreamWithHost(ctx context.Context, request p
 	return newRouteError(http.StatusServiceUnavailable, "model_route_unavailable", route.Alias, fmt.Sprintf("no available candidate for model route %q", route.Alias), detail)
 }
 
-func forwardStreamAttempt(ctx context.Context, request pluginapi.ExecutorRequest, bodyInfo executionBody, target, requestedModel, pluginStreamID string, host modelHost, onPayload func()) (bool, error) {
+func forwardStreamAttempt(ctx context.Context, request pluginapi.HostModelExecutionRequest, requestedModel, pluginStreamID string, host modelHost, onPayload func()) (bool, error) {
 	setStreamCleanup(ctx, "upstream", "pending")
-	response, err := host.StartStream(hostRequest(request, bodyInfo, target, true))
+	response, err := host.StartStream(request)
 	if response.StreamID != "" {
 		if call, ok := ctx.Value(nativeStreamContextKey{}).(*nativeStreamCall); ok {
 			call.mu.Lock()
@@ -154,7 +161,7 @@ func forwardStreamAttempt(ctx context.Context, request pluginapi.ExecutorRequest
 		return false, err
 	}
 	if response.StatusCode >= 400 {
-		return false, statusError{status: response.StatusCode, message: fmt.Sprintf("host model %s stream returned status %d", target, response.StatusCode)}
+		return false, statusError{status: response.StatusCode, message: fmt.Sprintf("host model %s stream returned status %d", request.Model, response.StatusCode)}
 	}
 	if strings.TrimSpace(response.StreamID) == "" {
 		return false, statusError{status: http.StatusBadGateway, message: "host model stream returned an empty stream id"}
@@ -165,7 +172,7 @@ func forwardStreamAttempt(ctx context.Context, request pluginapi.ExecutorRequest
 		if err := ctx.Err(); err != nil {
 			return receivedPayload, err
 		}
-		setStreamPhase(ctx, "read_stream", target, 0)
+		setStreamPhase(ctx, "read_stream", request.Model, 0)
 		chunk, err := host.ReadStream(response.StreamID)
 		if cancelled := ctx.Err(); cancelled != nil {
 			return receivedPayload, cancelled
@@ -182,7 +189,7 @@ func forwardStreamAttempt(ctx context.Context, request pluginapi.ExecutorRequest
 			}
 			receivedPayload = true
 			if rewritten := rewriter.Rewrite(chunk.Payload); len(rewritten) > 0 {
-				setStreamPhase(ctx, "emit", target, 0)
+				setStreamPhase(ctx, "emit", request.Model, 0)
 				if err := host.Emit(pluginStreamID, rewritten); err != nil {
 					return true, err
 				}
@@ -190,7 +197,7 @@ func forwardStreamAttempt(ctx context.Context, request pluginapi.ExecutorRequest
 		}
 		if chunk.Done {
 			if tail := rewriter.Finish(); len(tail) > 0 {
-				setStreamPhase(ctx, "emit", target, 0)
+				setStreamPhase(ctx, "emit", request.Model, 0)
 				if err := host.Emit(pluginStreamID, tail); err != nil {
 					return receivedPayload, err
 				}

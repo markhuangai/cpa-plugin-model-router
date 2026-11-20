@@ -102,6 +102,8 @@ type estimatedCost struct {
 	CacheCreationUSD      float64 `json:"cache_creation_usd"`
 	TotalUSD              float64 `json:"total_usd"`
 	priceAccountingMode   string
+	priceKey              string
+	priceDecision         string
 }
 
 func defaultPriceSyncSettings() priceSyncSettings {
@@ -278,34 +280,38 @@ func validateRates(model string, rates tokenRates) error {
 }
 
 type resolvedModelPrice struct {
+	key       string
 	price     modelPrice
 	ambiguous bool
 }
 
 type modelPriceResolver struct {
-	exact      map[string]modelPrice
+	exact      map[string]resolvedModelPrice
 	settings   priceSyncSettings
 	normalized map[string]resolvedModelPrice
 }
 
 func newModelPriceResolver(prices map[string]modelPrice, settings priceSyncSettings) modelPriceResolver {
-	resolver := modelPriceResolver{exact: prices}
-	normalizedSettings, err := normalizePriceSyncSettings(settings)
-	if err != nil {
-		return resolver
-	}
-	resolver.settings = normalizedSettings
-	resolver.normalized = make(map[string]resolvedModelPrice, len(prices))
+	resolver := modelPriceResolver{exact: make(map[string]resolvedModelPrice, len(prices))}
 	keys := make([]string, 0, len(prices))
 	for key := range prices {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		comparison := comparisonModelName(key, normalizedSettings)
+		resolver.exact[strings.ToLower(key)] = resolvedModelPrice{key: key, price: prices[key]}
+	}
+	normalizedSettings, err := normalizePriceSyncSettings(settings)
+	if err != nil {
+		return resolver
+	}
+	resolver.settings = normalizedSettings
+	resolver.normalized = make(map[string]resolvedModelPrice, len(prices))
+	for _, key := range keys {
+		comparison := comparisonPriceKey(key, normalizedSettings)
 		current, exists := resolver.normalized[comparison]
 		if !exists {
-			resolver.normalized[comparison] = resolvedModelPrice{price: prices[key]}
+			resolver.normalized[comparison] = resolvedModelPrice{key: key, price: prices[key]}
 		} else if !sameBillablePrice(current.price, prices[key]) {
 			current.ambiguous = true
 			resolver.normalized[comparison] = current
@@ -314,17 +320,17 @@ func newModelPriceResolver(prices map[string]modelPrice, settings priceSyncSetti
 	return resolver
 }
 
-func (resolver modelPriceResolver) resolve(model string) (modelPrice, bool) {
-	if price, ok := resolver.exact[model]; ok {
-		return price, true
+func (resolver modelPriceResolver) resolve(model string) resolvedModelPrice {
+	if price, ok := resolver.exact[strings.ToLower(model)]; ok {
+		return price
 	}
-	for key, price := range resolver.exact {
-		if strings.EqualFold(key, model) {
-			return price, true
-		}
-	}
-	resolved, ok := resolver.normalized[comparisonModelName(model, resolver.settings)]
-	return resolved.price, ok && !resolved.ambiguous
+	return resolver.normalized[comparisonPriceKey(model, resolver.settings)]
+}
+
+func comparisonPriceKey(model string, settings priceSyncSettings) string {
+	model = strings.ToLower(strings.TrimSpace(model))
+	leaf := strings.LastIndexByte(model, '/') + 1
+	return model[:leaf] + comparisonModelName(model[leaf:], settings)
 }
 
 func sameBillablePrice(left, right modelPrice) bool {
@@ -368,10 +374,25 @@ func normalizeCatalogName(value string) string {
 }
 
 func estimateUsageCost(record storedUsageRecord, resolver modelPriceResolver) estimatedCost {
-	price, ok := resolver.resolve(record.ProviderModel)
-	if !ok {
-		return estimatedCost{}
+	if record.ProviderModelState != "" || record.ProviderModel == "" {
+		return estimatedCost{priceDecision: "no_physical_model"}
 	}
+	resolved := resolver.resolve(record.ProviderModel)
+	decision := "model_price"
+	if record.PhysicalModel != "" && !equalFold(record.PhysicalModel, record.ProviderModel) {
+		decision = "qualified_price"
+		if resolved.key == "" || resolved.ambiguous {
+			resolved = resolver.resolve(record.PhysicalModel)
+			decision = "generic_price"
+		}
+	}
+	if resolved.ambiguous {
+		return estimatedCost{priceDecision: "ambiguous_price"}
+	}
+	if resolved.key == "" {
+		return estimatedCost{priceDecision: "price_missing"}
+	}
+	price := resolved.price
 	cacheRead := effectiveCacheReadTokens(record)
 	cacheCreation := record.CacheCreationTokens
 	mode := effectiveAccountingMode(record, price.AccountingMode)
@@ -400,6 +421,8 @@ func estimateUsageCost(record storedUsageRecord, resolver modelPriceResolver) es
 	result := estimatedCost{
 		Priced:                true,
 		priceAccountingMode:   price.AccountingMode,
+		priceKey:              resolved.key,
+		priceDecision:         decision,
 		Source:                price.Source,
 		AccountingMode:        mode,
 		PriceServiceTier:      priceServiceTier,

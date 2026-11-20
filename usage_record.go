@@ -10,6 +10,11 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
+const (
+	providerModelNotAttempted = "not_attempted"
+	providerModelUnknown      = "unknown"
+)
+
 func storedRecordFromUsage(record pluginapi.UsageRecord, attribution attributionResult) storedUsageRecord {
 	requestedAt := record.RequestedAt.UTC()
 	if requestedAt.IsZero() {
@@ -20,15 +25,28 @@ func storedRecordFromUsage(record pluginapi.UsageRecord, attribution attribution
 		detail.TotalTokens = synthesizedOfficialUsageTotal(record, detail)
 	}
 	accountingMode, reasoningMode := usageAccountingModes(record.Provider, record.ExecutorType)
+	physicalModel := strings.TrimSpace(record.Model)
+	providerModel, modelState := physicalModel, ""
+	if isRouterOnlyRecord(record) {
+		modelState = providerModelNotAttempted
+		physicalModel, providerModel = "", ""
+	} else if physicalModel == "" {
+		modelState = providerModelUnknown
+	} else {
+		providerModel = qualifyProviderModel(physicalModel, firstNonEmpty(attribution.Target, record.Alias))
+	}
 	return storedUsageRecord{
 		RequestedAt:         requestedAt,
 		Attribution:         attribution.Kind,
 		RouterModel:         attribution.RouterModel,
+		RouteAttempt:        attribution.RouteAttempt,
 		Provider:            strings.TrimSpace(record.Provider),
 		ExecutorType:        strings.TrimSpace(record.ExecutorType),
 		AccountingMode:      accountingMode,
 		ReasoningMode:       reasoningMode,
-		ProviderModel:       firstNonEmpty(strings.TrimSpace(record.Model), strings.TrimSpace(record.Alias), "unknown"),
+		ProviderModel:       providerModel,
+		PhysicalModel:       physicalModel,
+		ProviderModelState:  modelState,
 		ProviderAlias:       strings.TrimSpace(record.Alias),
 		Source:              safeStoredUsageSource(record),
 		ReasoningEffort:     strings.TrimSpace(record.ReasoningEffort),
@@ -46,6 +64,74 @@ func storedRecordFromUsage(record pluginapi.UsageRecord, attribution attribution
 		CacheReadTokens:     nonnegativeUint64(detail.CacheReadTokens),
 		CacheCreationTokens: nonnegativeUint64(detail.CacheCreationTokens),
 		TotalTokens:         nonnegativeUint64(detail.TotalTokens),
+	}
+}
+
+func routerOnlyUsage(provider, executor string) bool {
+	return equalFold(provider, pluginID) && (strings.TrimSpace(executor) == "" || equalFold(executor, "plugin:"+pluginID))
+}
+
+func isRouterOnlyRecord(record pluginapi.UsageRecord) bool {
+	return routerOnlyUsage(record.Provider, record.ExecutorType) &&
+		strings.TrimSpace(record.AuthID) == "" && strings.TrimSpace(record.AuthIndex) == ""
+}
+
+func routerAliasFromUsage(model, alias string) string {
+	base, _, _ := splitThinkingSuffix(firstNonEmpty(strings.TrimSpace(model), strings.TrimSpace(alias)))
+	return base
+}
+
+func qualifyProviderModel(physical, target string) string {
+	target, _, _ = splitThinkingSuffix(target)
+	physicalBase, _, _ := splitThinkingSuffix(physical)
+	if equalFold(physicalBase, target) {
+		return physical
+	}
+	prefix, rest, qualified := strings.Cut(target, "/")
+	if !qualified || strings.TrimSpace(prefix) == "" || strings.TrimSpace(rest) == "" {
+		return physical
+	}
+	return prefix + "/" + physical
+}
+
+func (record *storedUsageRecord) recoverProviderModel() {
+	if record.PhysicalModel != "" || record.ProviderModelState != "" {
+		return
+	}
+	if routerOnlyUsage(record.Provider, record.ExecutorType) {
+		record.Attribution = attributionRouted
+		record.RouterModel = routerAliasFromUsage(record.ProviderModel, record.ProviderAlias)
+		record.ProviderModel = ""
+		record.ProviderModelState = providerModelNotAttempted
+		return
+	}
+	if record.ProviderModel == "" {
+		record.ProviderModel = ""
+		record.ProviderModelState = providerModelUnknown
+		return
+	}
+	if record.ProviderAlias == "" {
+		return
+	}
+	aliased, _, _ := splitThinkingSuffix(record.ProviderAlias)
+	if equalFold(aliased, record.RouterModel) {
+		return
+	}
+	_, remainder, qualified := strings.Cut(aliased, "/")
+	if physical, _, _ := splitThinkingSuffix(record.ProviderModel); qualified && equalFold(remainder, physical) {
+		record.PhysicalModel = record.ProviderModel
+		record.ProviderModel = qualifyProviderModel(record.PhysicalModel, aliased)
+	}
+}
+
+func (record storedUsageRecord) providerModelLabel() string {
+	switch record.ProviderModelState {
+	case providerModelNotAttempted:
+		return "No provider attempted"
+	case providerModelUnknown:
+		return "Unknown provider model"
+	default:
+		return record.ProviderModel
 	}
 }
 

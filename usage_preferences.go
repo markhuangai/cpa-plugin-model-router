@@ -7,6 +7,7 @@ import (
 )
 
 const maxDashboardPageSize = 500
+const currentGroupingVersion = 1
 
 var defaultHiddenGroupColumns = []string{"provider", "result", "router_model", "service_tier", "source"}
 
@@ -27,6 +28,11 @@ type dashboardPreferences struct {
 	CustomTo             string   `json:"custom_to,omitempty"`
 }
 
+type storedDashboardPreferences struct {
+	dashboardPreferences
+	GroupingVersion int `json:"grouping_version"`
+}
+
 func defaultDashboardPreferences() dashboardPreferences {
 	return dashboardPreferences{
 		RequestPageSize:    50,
@@ -36,7 +42,7 @@ func defaultDashboardPreferences() dashboardPreferences {
 		Granularity:        "hour",
 		RequestSort:        "time",
 		RequestOrder:       "desc",
-		GroupDimension:     "provider_model",
+		GroupDimension:     "router_model",
 		GroupSort:          "total_tokens",
 		GroupOrder:         "desc",
 	}

@@ -85,49 +85,39 @@
 .empty h3 { margin: 0 0 7px; }
 .empty p { margin: 0 0 18px; color: var(--muted); }
 .route-card {
-  display: grid;
-  grid-template-columns: 76px minmax(0, 1fr);
   overflow: hidden;
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 12px;
   box-shadow: 0 5px 18px rgba(23, 48, 66, .045);
 }
-.route-rail {
-  padding: 18px 12px;
-  text-align: center;
-  background: var(--blue-soft);
-  border-right: 1px solid var(--blue-border);
+.route-summary {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 18px;
+  cursor: pointer;
+  list-style: none;
 }
-.ordinal { display: block; color: var(--blue); font: 800 23px/1 "Cascadia Code", "SFMono-Regular", ui-monospace, monospace; }
-.rail-label { display: block; margin-top: 7px; color: var(--blue-label); font-size: 10px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
-.route-body { min-width: 0; padding: 18px; }
-.route-top { display: grid; grid-template-columns: minmax(180px, 1fr) auto; gap: 14px; align-items: start; }
+.route-summary::-webkit-details-marker { display: none; }
+.route-summary::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border: solid var(--muted);
+  border-width: 2px 2px 0 0;
+  transform: rotate(45deg);
+}
+.route-summary:hover, .route-disclosure[open] > .route-summary { background: var(--surface-soft); }
+.route-summary:focus-visible { outline: 2px solid var(--blue); outline-offset: -3px; border-radius: 11px; }
+.route-disclosure[open] > .route-summary::before { transform: translateY(-2px) rotate(135deg); }
+.route-summary-alias { overflow-wrap: anywhere; font-weight: 750; }
+.route-summary-count { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.route-body { min-width: 0; padding: 18px; border-top: 1px solid var(--line); }
+.route-top { display: grid; grid-template-columns: minmax(180px, 1fr) auto; gap: 14px; align-items: start; margin-bottom: 15px; }
 .route-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .icon-button { min-width: 36px; padding: 8px; }
-.route-preview {
-  display: grid;
-  grid-template-columns: minmax(100px, auto) 1fr minmax(120px, auto);
-  gap: 10px;
-  align-items: center;
-  margin: 15px 0;
-  padding: 10px;
-  background: var(--surface-soft);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
-.preview-alias, .preview-targets {
-  overflow: hidden;
-  padding: 5px 8px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  border-radius: 5px;
-  font: 700 11px/1.2 "Cascadia Code", "SFMono-Regular", ui-monospace, monospace;
-}
-.preview-alias { color: var(--blue); background: var(--blue-soft); border: 1px solid var(--blue-border); }
-.preview-targets { color: var(--amber); background: var(--amber-soft); border: 1px solid var(--amber-border); text-align: right; }
-.preview-line { height: 1px; background: var(--line-strong); position: relative; }
-.preview-line::after { content: ""; position: absolute; right: -1px; top: -3px; border: 3px solid transparent; border-left-color: var(--line-strong); }
 .field-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 13px; }
 .field { grid-column: span 4; min-width: 0; }
 .field label, .targets-head strong { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; font-weight: 800; letter-spacing: .02em; }

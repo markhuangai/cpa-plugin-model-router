@@ -84,6 +84,9 @@ button.model-legend-entry[aria-pressed="true"] { color: var(--blue); border-colo
 .usage-table th:first-child, .usage-table td:first-child, .usage-table .text-cell { text-align: left; }
 .usage-table tbody tr:last-child td { border-bottom: 0; }
 .usage-table tbody tr:hover { background: var(--blue-soft); }
+.usage-table .router-total { background: var(--surface-soft); font-weight: 750; }
+.usage-table td.provider-subtotal-name { padding-left: 24px; }
+.provider-subtotal-label { display: block; color: var(--muted); font-size: 11px; }
 .sort-button { display: inline-flex; gap: 5px; align-items: center; padding: 0; color: inherit; font: inherit; font-weight: inherit; letter-spacing: inherit; text-transform: inherit; background: transparent; border: 0; }
 .sort-button:hover { color: var(--ink); }
 .status-pill { display: inline-block; padding: 3px 7px; font-size: 10px; font-weight: 750; border-radius: 99px; background: var(--surface-soft); }
@@ -139,9 +142,6 @@ dialog::backdrop { background: rgba(10, 18, 25, .46); backdrop-filter: blur(2px)
   .save-state { grid-column: 1 / -1; justify-self: start; }
   .flow-rail { grid-template-columns: auto 1fr auto; }
   .flow-rail > :nth-child(n+4) { display: none; }
-  .route-card { grid-template-columns: 1fr; }
-  .route-rail { display: flex; align-items: center; gap: 8px; padding: 10px 14px; text-align: left; border-right: 0; border-bottom: 1px solid var(--blue-border); }
-  .rail-label { margin: 0; }
   .route-top { grid-template-columns: 1fr; }
   .route-actions { justify-content: flex-start; }
   .field { grid-column: 1 / -1; }
