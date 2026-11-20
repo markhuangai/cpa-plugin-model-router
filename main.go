@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
@@ -101,11 +102,16 @@ func (p *modelRouterPlugin) HandleUsage(_ context.Context, record pluginapi.Usag
 	if p == nil || !p.config.Enabled || p.store == nil {
 		return
 	}
-	attribution := attributionResult{Kind: attributionUnresolved}
-	if p.attribution != nil {
+	started := time.Now()
+	var attribution attributionResult
+	if isRouterOnlyRecord(record) {
+		attribution = attributionResult{Kind: attributionRouted, RouterModel: routerAliasFromUsage(record.Model, record.Alias), Reason: "router_without_provider"}
+	} else {
 		attribution = p.attribution.Match(record)
 	}
-	_ = p.store.Record(storedRecordFromUsage(record, attribution))
+	stored := storedRecordFromUsage(record, attribution)
+	err := p.store.Record(stored)
+	logUsageRecord(record, stored, attribution, started, err)
 }
 
 func (p *modelRouterPlugin) InterceptRequestBeforeAuth(_ context.Context, request pluginapi.RequestInterceptRequest) (pluginapi.RequestInterceptResponse, error) {

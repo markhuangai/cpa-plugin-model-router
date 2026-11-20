@@ -37,11 +37,14 @@ type storedUsageRecord struct {
 	RequestedAt         time.Time `json:"requested_at"`
 	Attribution         string    `json:"attribution"`
 	RouterModel         string    `json:"router_model,omitempty"`
+	RouteAttempt        int       `json:"route_attempt,omitempty"`
 	Provider            string    `json:"provider,omitempty"`
 	ExecutorType        string    `json:"executor_type,omitempty"`
 	AccountingMode      string    `json:"accounting_mode,omitempty"`
 	ReasoningMode       string    `json:"reasoning_mode,omitempty"`
 	ProviderModel       string    `json:"provider_model"`
+	PhysicalModel       string    `json:"physical_model,omitempty"`
+	ProviderModelState  string    `json:"provider_model_state,omitempty"`
 	ProviderAlias       string    `json:"provider_alias,omitempty"`
 	Source              string    `json:"source,omitempty"`
 	ReasoningEffort     string    `json:"reasoning_effort,omitempty"`
@@ -245,20 +248,22 @@ type usageOverview struct {
 }
 
 type usageGroup struct {
-	Key           string `json:"key"`
-	RouterModel   string `json:"router_model,omitempty"`
-	Attribution   string `json:"attribution,omitempty"`
-	ProviderModel string `json:"provider_model,omitempty"`
-	Provider      string `json:"provider,omitempty"`
-	Source        string `json:"source,omitempty"`
-	ServiceTier   string `json:"service_tier,omitempty"`
-	Result        string `json:"result,omitempty"`
+	Key                string `json:"key"`
+	RouterModel        string `json:"router_model,omitempty"`
+	Attribution        string `json:"attribution,omitempty"`
+	ProviderModel      string `json:"provider_model,omitempty"`
+	ProviderModelState string `json:"provider_model_state,omitempty"`
+	Provider           string `json:"provider,omitempty"`
+	Source             string `json:"source,omitempty"`
+	ServiceTier        string `json:"service_tier,omitempty"`
+	Result             string `json:"result,omitempty"`
 	usageCounters
-	AverageLatencyNS uint64  `json:"average_latency_ns"`
-	AverageTTFTNS    uint64  `json:"average_ttft_ns"`
-	AverageTPS       float64 `json:"average_tps"`
-	CostUSD          float64 `json:"cost_usd"`
-	PricedRequests   uint64  `json:"priced_requests"`
+	AverageLatencyNS  uint64       `json:"average_latency_ns"`
+	AverageTTFTNS     uint64       `json:"average_ttft_ns"`
+	AverageTPS        float64      `json:"average_tps"`
+	CostUSD           float64      `json:"cost_usd"`
+	PricedRequests    uint64       `json:"priced_requests"`
+	ProviderSubtotals []usageGroup `json:"provider_subtotals,omitempty"`
 }
 
 type usageGroupPage struct {

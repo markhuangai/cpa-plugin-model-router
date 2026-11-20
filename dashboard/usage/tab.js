@@ -192,7 +192,7 @@ function applyUsagePreferences(preferences){
   usageState.group.limit=Number(preferences.group_page_size)||50;
   usageState.request.sort=String(preferences.request_sort||'time');
   usageState.request.order=preferences.request_order==='asc'?'asc':'desc';
-  usageState.group.dimension=String(preferences.group_dimension||'provider_model');
+  usageState.group.dimension=String(preferences.group_dimension||'router_model');
   usageState.group.sort=String(preferences.group_sort||'total_tokens');
   usageState.group.order=preferences.group_order==='asc'?'asc':'desc';
   usageState.customFrom=String(preferences.custom_from||'');

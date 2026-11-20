@@ -12,9 +12,11 @@ import (
 )
 
 type usageRouterKey struct{ model, attribution string }
+type usageProviderKey struct{ model, state string }
 type usageGroupKey struct {
-	value  string
-	router usageRouterKey
+	value    string
+	router   usageRouterKey
+	provider usageProviderKey
 }
 
 type usagePageOptions struct {
@@ -175,6 +177,7 @@ func indexedUsageRequestPage(connection *sql.Conn, filter usageFilter, options u
 		if err := json.Unmarshal(value, &record); err != nil {
 			return nil, fmt.Errorf("decode usage record: %w", err)
 		}
+		record.recoverProviderModel()
 		items = append(items, requestDetail(record, resolver))
 	}
 	return items, rows.Err()
@@ -237,13 +240,15 @@ func (acc *usageOverviewAccumulator) add(record storedUsageRecord, cost estimate
 	router.usageCounters.add(record)
 	router.CostUSD += cost.TotalUSD
 
-	provider := providerModels[record.ProviderModel]
-	if provider == nil {
-		provider = &usageModelStats{Model: record.ProviderModel}
-		providerModels[record.ProviderModel] = provider
+	if record.ProviderModelState == "" {
+		provider := providerModels[record.ProviderModel]
+		if provider == nil {
+			provider = &usageModelStats{Model: record.ProviderModel}
+			providerModels[record.ProviderModel] = provider
+		}
+		provider.usageCounters.add(record)
+		provider.CostUSD += cost.TotalUSD
 	}
-	provider.usageCounters.add(record)
-	provider.CostUSD += cost.TotalUSD
 	if record.Source != "" {
 		sources[record.Source] = struct{}{}
 	}
@@ -297,8 +302,24 @@ func modelStatsValues[K comparable](values map[K]*usageModelStats) []usageModelS
 }
 
 type groupAccumulator struct {
-	group usageGroup
+	group     usageGroup
+	providers map[usageProviderKey]*groupAccumulator
 	usageTimingTotals
+}
+
+func (accumulator *groupAccumulator) add(record storedUsageRecord, cost estimatedCost) {
+	accumulator.group.usageCounters.add(record)
+	accumulator.usageTimingTotals.add(record)
+	accumulator.group.CostUSD += cost.TotalUSD
+	if cost.Priced {
+		accumulator.group.PricedRequests++
+	}
+}
+
+func (accumulator *groupAccumulator) summary() usageGroup {
+	group := accumulator.group
+	group.AverageLatencyNS, group.AverageTTFTNS, group.AverageTPS = accumulator.usageTimingTotals.averages(group.Requests)
+	return group
 }
 
 type usageGroupsAccumulator struct {
@@ -311,8 +332,11 @@ func (acc *usageGroupsAccumulator) add(record storedUsageRecord, cost estimatedC
 
 	value := usageDimensionValue(record, dimension)
 	key := usageGroupKey{value: value}
+	provider := usageProviderKey{model: record.ProviderModel, state: record.ProviderModelState}
 	if dimension == "router_model" {
 		key = usageGroupKey{router: usageRouterKey{model: record.RouterModel, attribution: record.Attribution}}
+	} else if dimension == "provider_model" {
+		key = usageGroupKey{provider: provider}
 	}
 	accumulator := groups[key]
 	if accumulator == nil {
@@ -320,11 +344,18 @@ func (acc *usageGroupsAccumulator) add(record storedUsageRecord, cost estimatedC
 		assignGroupDimension(&accumulator.group, record, dimension)
 		groups[key] = accumulator
 	}
-	accumulator.group.usageCounters.add(record)
-	accumulator.usageTimingTotals.add(record)
-	accumulator.group.CostUSD += cost.TotalUSD
-	if cost.Priced {
-		accumulator.group.PricedRequests++
+	accumulator.add(record, cost)
+	if dimension == "router_model" {
+		if accumulator.providers == nil {
+			accumulator.providers = make(map[usageProviderKey]*groupAccumulator)
+		}
+		child := accumulator.providers[provider]
+		if child == nil {
+			child = &groupAccumulator{group: usageGroup{Key: record.providerModelLabel()}}
+			assignGroupDimension(&child.group, record, "provider_model")
+			accumulator.providers[provider] = child
+		}
+		child.add(record, cost)
 	}
 }
 
@@ -332,22 +363,46 @@ func (acc *usageGroupsAccumulator) finish(options usageGroupOptions, now time.Ti
 	groups, dimension, sortField, order, offset, limit := acc.groups, options.Dimension, options.Sort, options.Order, options.Offset, options.Limit
 	items := make([]usageGroup, 0, len(groups))
 	for _, accumulator := range groups {
-		accumulator.group.AverageLatencyNS, accumulator.group.AverageTTFTNS, accumulator.group.AverageTPS = accumulator.usageTimingTotals.averages(accumulator.group.Requests)
-		items = append(items, accumulator.group)
+		items = append(items, accumulator.summary())
 	}
+	sortUsageGroups(items, sortField, order)
+	total := len(items)
+	items = paginateGroups(items, offset, limit)
+	if dimension == "router_model" {
+		for index := range items {
+			item := &items[index]
+			parent := groups[usageGroupKey{router: usageRouterKey{model: item.RouterModel, attribution: item.Attribution}}]
+			item.ProviderSubtotals = make([]usageGroup, 0, len(parent.providers))
+			for _, child := range parent.providers {
+				item.ProviderSubtotals = append(item.ProviderSubtotals, child.summary())
+			}
+			sortUsageGroups(item.ProviderSubtotals, sortField, order)
+		}
+	}
+	return usageGroupPage{SchemaVersion: usageSchemaVersion, GeneratedAt: now, Dimension: dimension, Total: total, Offset: offset, Limit: limit, Items: items}
+}
+
+func sortUsageGroups(items []usageGroup, sortField, order string) {
 	sort.SliceStable(items, func(left, right int) bool {
-		comparison := compareGroups(items[left], items[right], sortField)
+		a, b := items[left], items[right]
+		comparison := compareGroups(a, b, sortField)
 		if comparison == 0 {
-			comparison = strings.Compare(strings.ToLower(items[left].Key), strings.ToLower(items[right].Key))
+			comparison = strings.Compare(strings.ToLower(a.Key), strings.ToLower(b.Key))
+		}
+		if comparison == 0 {
+			comparison = strings.Compare(a.Key, b.Key)
+		}
+		if comparison == 0 {
+			comparison = strings.Compare(a.Attribution, b.Attribution)
+		}
+		if comparison == 0 {
+			comparison = strings.Compare(a.ProviderModelState, b.ProviderModelState)
 		}
 		if order == "asc" {
 			return comparison < 0
 		}
 		return comparison > 0
 	})
-	total := len(items)
-	items = paginateGroups(items, offset, limit)
-	return usageGroupPage{SchemaVersion: usageSchemaVersion, GeneratedAt: now, Dimension: dimension, Total: total, Offset: offset, Limit: limit, Items: items}
 }
 
 func usageDimensionValue(record storedUsageRecord, dimension string) string {
@@ -366,7 +421,7 @@ func usageDimensionValue(record storedUsageRecord, dimension string) string {
 	case "result":
 		return record.result()
 	default:
-		return record.ProviderModel
+		return record.providerModelLabel()
 	}
 }
 
@@ -384,6 +439,7 @@ func assignGroupDimension(group *usageGroup, record storedUsageRecord, dimension
 		group.Result = record.result()
 	default:
 		group.ProviderModel = record.ProviderModel
+		group.ProviderModelState = record.ProviderModelState
 	}
 }
 
@@ -515,7 +571,7 @@ func compareRequests(left, right usageRequestCandidate, field string) int {
 	case "router_model":
 		return strings.Compare(strings.ToLower(usageDimensionValue(left.storedUsageRecord, "router_model")), strings.ToLower(usageDimensionValue(right.storedUsageRecord, "router_model")))
 	case "provider_model":
-		return strings.Compare(strings.ToLower(left.ProviderModel), strings.ToLower(right.ProviderModel))
+		return strings.Compare(strings.ToLower(left.providerModelLabel()), strings.ToLower(right.providerModelLabel()))
 	case "source":
 		return strings.Compare(strings.ToLower(left.Source), strings.ToLower(right.Source))
 	case "service_tier":
@@ -577,22 +633,27 @@ func validateQueryChoice(value, fallback string, allowed []string) (string, erro
 }
 
 type accountingDiagnosticKey struct {
-	Model     string `json:"model"`
-	Provider  string `json:"provider"`
-	Executor  string `json:"executor"`
-	Override  string `json:"price_override"`
-	Stored    string `json:"stored_mode"`
-	Default   string `json:"default_mode"`
-	Effective string `json:"effective_mode"`
-	Priced    bool   `json:"priced"`
+	Model         string `json:"model"`
+	PhysicalModel string `json:"physical_model"`
+	ModelState    string `json:"provider_model_state"`
+	PriceKey      string `json:"price_key"`
+	PriceDecision string `json:"price_decision"`
+	Provider      string `json:"provider"`
+	Executor      string `json:"executor"`
+	Override      string `json:"price_override"`
+	Stored        string `json:"stored_mode"`
+	Default       string `json:"default_mode"`
+	Effective     string `json:"effective_mode"`
+	Priced        bool   `json:"priced"`
 }
 
 type accountingDiagnosticTotals struct {
-	Requests      uint64 `json:"requests"`
-	Input         uint64 `json:"input_tokens"`
-	CacheRead     uint64 `json:"cache_read_tokens"`
-	CacheCreation uint64 `json:"cache_creation_tokens"`
-	Included      uint64 `json:"cache_read_included_tokens"`
+	Requests      uint64  `json:"requests"`
+	Input         uint64  `json:"input_tokens"`
+	CacheRead     uint64  `json:"cache_read_tokens"`
+	CacheCreation uint64  `json:"cache_creation_tokens"`
+	Included      uint64  `json:"cache_read_included_tokens"`
+	CostUSD       float64 `json:"cost_usd"`
 }
 
 type usageAccountingDiagnostics struct {
@@ -603,12 +664,18 @@ type usageAccountingDiagnostics struct {
 }
 
 func (diagnostics *usageAccountingDiagnostics) add(record storedUsageRecord, cost estimatedCost) {
-	key := accountingDiagnosticKey{Model: record.ProviderModel, Provider: record.Provider, Executor: record.ExecutorType, Override: cost.priceAccountingMode, Stored: record.AccountingMode, Default: defaultAccountingMode(record.Provider, record.ExecutorType), Effective: effectiveAccountingMode(record, cost.AccountingMode), Priced: cost.Priced}
+	key := accountingDiagnosticKey{
+		Model: diagnosticModelName(record.ProviderModel, ""), PhysicalModel: diagnosticModelName(record.PhysicalModel, ""),
+		ModelState: record.ProviderModelState, PriceKey: diagnosticModelName(cost.priceKey, ""), PriceDecision: cost.priceDecision,
+		Provider: record.Provider, Executor: record.ExecutorType, Override: cost.priceAccountingMode, Stored: record.AccountingMode,
+		Default: defaultAccountingMode(record.Provider, record.ExecutorType), Effective: effectiveAccountingMode(record, cost.AccountingMode), Priced: cost.Priced,
+	}
 	totals := diagnostics.groups[key]
 	totals.Requests++
 	totals.Input += record.InputTokens
 	totals.CacheRead += effectiveCacheReadTokens(record)
 	totals.CacheCreation += record.CacheCreationTokens
+	totals.CostUSD += cost.TotalUSD
 	if key.Effective == accountingModeInputIncludesCache {
 		totals.Included += effectiveCacheReadTokens(record)
 	}

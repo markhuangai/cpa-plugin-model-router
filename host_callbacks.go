@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -137,6 +138,73 @@ func diagnosticFilterValue(value string) string {
 		return "[omitted: credential-bearing filter]"
 	}
 	return value
+}
+
+func diagnosticModelName(value, credential string) string {
+	if sameNonemptyValue(value, credential) {
+		return "[omitted: credential-shaped model]"
+	}
+	for _, component := range strings.Split(value, "/") {
+		if hasCredentialPrefix(component) || sameNonemptyValue(component, credential) {
+			return "[omitted: credential-shaped model]"
+		}
+	}
+	return diagnosticFilterValue(value)
+}
+
+func (tracker *attributionTracker) beginDispatch(operation, routerModel string, request pluginapi.HostModelExecutionRequest, headers http.Header, attempt int) func(int, error) {
+	startedAt := time.Now()
+	credential := clientCredential(headers)
+	fields := map[string]any{
+		"operation_id": operation, "router_model": diagnosticModelName(routerModel, credential),
+		"target": diagnosticModelName(request.Model, credential), "attempt": attempt, "stream": request.Stream,
+	}
+	logModelRouterEvent("", "debug", "model_router.usage.dispatch_started", fields)
+	id := tracker.MarkRouted(routerModel, request.Model, headers, attempt, operation)
+	return func(status int, err error) {
+		tracker.FinishRouted(id)
+		fields["elapsed_ms"] = time.Since(startedAt).Milliseconds()
+		fields["status_code"] = status
+		fields["outcome"] = "success"
+		if err != nil || status < 200 || status >= 300 {
+			fields["outcome"] = "failed"
+			for key, value := range diagnosticErrorFields(err) {
+				if key != "status_code" {
+					fields[key] = value
+				}
+			}
+		}
+		logModelRouterEvent("", "debug", "model_router.usage.dispatch_complete", fields)
+	}
+}
+
+func logUsageRecord(record pluginapi.UsageRecord, stored storedUsageRecord, attribution attributionResult, started time.Time, err error) {
+	operation := attribution.Operation
+	if operation == "" {
+		operation = diagnosticOperationID()
+	}
+	level := "debug"
+	fields := diagnosticErrorFields(err)
+	if err == nil {
+		fields["outcome"] = "recorded"
+	} else {
+		level = "error"
+		fields["outcome"] = "write_failed"
+	}
+	fields["operation_id"] = operation
+	fields["elapsed_ms"] = time.Since(started).Milliseconds()
+	fields["requested_at"] = record.RequestedAt
+	fields["provider_status"] = stored.StatusCode
+	fields["provider_failed"] = stored.Failed
+	fields["attempt"] = stored.RouteAttempt
+	fields["attribution"] = stored.Attribution
+	fields["reason"] = attribution.Reason
+	fields["router_model"] = diagnosticModelName(stored.RouterModel, record.APIKey)
+	fields["target"] = diagnosticModelName(firstNonEmpty(attribution.Target, record.Alias), record.APIKey)
+	fields["physical_model"] = diagnosticModelName(stored.PhysicalModel, record.APIKey)
+	fields["provider_model"] = diagnosticModelName(stored.ProviderModel, record.APIKey)
+	fields["provider_model_state"] = stored.ProviderModelState
+	logModelRouterEvent("", level, "model_router.usage.record", fields)
 }
 
 func logModelRouterEvent(callbackID, level, event string, fields map[string]any) {

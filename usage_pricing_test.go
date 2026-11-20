@@ -83,15 +83,43 @@ func TestModelPriceResolverMappingsAndAmbiguity(t *testing.T) {
 	settings := defaultPriceSyncSettings()
 	settings.Mappings = []priceSyncMapping{{Source: "gpt-5.4-latest", Target: "gpt-5.4"}}
 	resolver := newModelPriceResolver(map[string]modelPrice{"gpt-5.4": {tokenRates: tokenRates{Input: 1}}}, settings)
-	if price, ok := resolver.resolve("openai/gpt-5.4-latest(high)"); !ok || price.Input != 1 {
-		t.Fatalf("mapped price = %#v, %v", price, ok)
+	record := storedUsageRecord{ProviderModel: "openai/gpt-5.4-latest(high)", PhysicalModel: "gpt-5.4-latest(high)"}
+	if cost := estimateUsageCost(record, resolver); cost.priceKey != "gpt-5.4" || cost.priceDecision != "generic_price" {
+		t.Fatalf("mapped price = %#v", cost)
 	}
 	resolver = newModelPriceResolver(map[string]modelPrice{
 		"openai/gpt-5.4": {tokenRates: tokenRates{Input: 1}},
 		"other/gpt-5.4":  {tokenRates: tokenRates{Input: 2}},
 	}, settings)
-	if _, ok := resolver.resolve("gpt-5.4"); ok {
-		t.Fatal("ambiguous normalized prices must not resolve")
+	if cost := estimateUsageCost(storedUsageRecord{ProviderModel: "gpt-5.4"}, resolver); cost.Priced {
+		t.Fatal("bare models must not borrow a scoped rate")
+	}
+}
+
+func TestUsagePriceScopesPreservePhysicalPath(t *testing.T) {
+	settings := defaultPriceSyncSettings()
+	settings.Mappings = []priceSyncMapping{{Source: "gpt-latest", Target: "gpt"}}
+	rates := func(input float64) modelPrice { return modelPrice{tokenRates: tokenRates{Input: input}} }
+	resolver := newModelPriceResolver(map[string]modelPrice{
+		"east/vendor/gpt": rates(2), "west/vendor/gpt": rates(5), "vendor/gpt": rates(3),
+		"other/gpt-2": rates(7), "gpt": rates(19),
+	}, settings)
+	for _, test := range []struct {
+		key, physical, priceKey, state string
+		total                          float64
+	}{
+		{"east/vendor/gpt-latest(high)", "vendor/gpt-latest(high)", "east/vendor/gpt", "", 2},
+		{"west/vendor/gpt", "vendor/gpt", "west/vendor/gpt", "", 5},
+		{"north/vendor/gpt", "vendor/gpt", "vendor/gpt", "", 3},
+		{"vendor/gpt", "vendor/gpt", "vendor/gpt", "", 3},
+		{"north/other-vendor/gpt", "other-vendor/gpt", "", "", 0},
+		{"east/gpt-2", "gpt-2", "", "", 0},
+		{"gpt", "gpt", "", providerModelUnknown, 0},
+	} {
+		cost := estimateUsageCost(storedUsageRecord{ProviderModel: test.key, PhysicalModel: test.physical, ProviderModelState: test.state, InputTokens: 1_000_000}, resolver)
+		if cost.priceKey != test.priceKey || cost.TotalUSD != test.total || cost.Priced != (test.priceKey != "") {
+			t.Errorf("cost for %q = %#v, want key %q and total %v", test.key, cost, test.priceKey, test.total)
+		}
 	}
 }
 

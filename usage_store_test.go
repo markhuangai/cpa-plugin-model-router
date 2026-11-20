@@ -197,7 +197,7 @@ func TestUsageStorePersistsAndResetPreservesSettings(t *testing.T) {
 	}
 	now := time.Now().UTC().Add(-time.Minute)
 	plugin := &modelRouterPlugin{config: routerConfig{Enabled: true}, store: store, attribution: newAttributionTracker(func() time.Time { return now })}
-	plugin.attribution.MarkRouted("auto", "gpt-5.4", mapHeader("Authorization", "Bearer raw-client-secret"))
+	plugin.attribution.MarkRouted("auto", "gpt-5.4", mapHeader("Authorization", "Bearer raw-client-secret"), 1, "")
 	plugin.HandleUsage(t.Context(), pluginapi.UsageRecord{
 		Provider: "openai", ExecutorType: "openai", Model: "gpt-5.4", APIKey: "raw-client-secret", AuthType: "api-key", Source: "raw-provider-secret", RequestedAt: now,
 		Latency: 2 * time.Second, TTFT: 500 * time.Millisecond, Detail: pluginapi.UsageDetail{InputTokens: 100, OutputTokens: 20, CacheReadTokens: 10, TotalTokens: 120},
@@ -351,7 +351,7 @@ func TestHandleUsagePersistsAuthoritativeCPARecord(t *testing.T) {
 		store:       store,
 		attribution: newAttributionTracker(func() time.Time { return now }),
 	}
-	plugin.attribution.MarkRouted("smart", "provider/model", mapHeader("Authorization", "Bearer client-secret"))
+	plugin.attribution.MarkRouted("smart", "provider/model", mapHeader("Authorization", "Bearer client-secret"), 1, "")
 	plugin.HandleUsage(t.Context(), pluginapi.UsageRecord{
 		Provider: "openai-compatibility", ExecutorType: "OpenAICompatExecutor", Model: "provider/model", APIKey: "client-secret", RequestedAt: now,
 		Detail: pluginapi.UsageDetail{InputTokens: 10, OutputTokens: 1, CachedTokens: 4, CacheCreationTokens: 4, TotalTokens: 11}, Generate: true,
@@ -366,6 +366,132 @@ func TestHandleUsagePersistsAuthoritativeCPARecord(t *testing.T) {
 	}
 }
 
+func TestUsageRouterProviderSubtotals(t *testing.T) {
+	store, err := openUsageStore(filepath.Join(t.TempDir(), "usage.db"), 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC()
+	plugin := &modelRouterPlugin{config: routerConfig{Enabled: true}, store: store, attribution: newAttributionTracker(func() time.Time { return now })}
+	prices := map[string]modelPrice{
+		"east/vendor/gpt": {tokenRates: tokenRates{Input: 2}},
+		"vendor/gpt":      {tokenRates: tokenRates{Input: 3}},
+		"auto":            {tokenRates: tokenRates{Input: 99}},
+	}
+	if _, err := store.SavePriceBook(saveModelPricesRequest{Prices: prices}, now); err != nil {
+		t.Fatal(err)
+	}
+	for index, target := range []string{"east/chat", "west/chat"} {
+		marker := plugin.attribution.MarkRouted("auto", target, nil, index+1, "router")
+		plugin.attribution.FinishRouted(marker)
+		plugin.HandleUsage(t.Context(), pluginapi.UsageRecord{
+			Provider: "test", Model: "vendor/gpt", Alias: target, RequestedAt: now,
+			Detail: pluginapi.UsageDetail{InputTokens: 1_000_000},
+		})
+		if index == 1 {
+			plugin.HandleUsage(t.Context(), pluginapi.UsageRecord{
+				Provider: "test", Model: "vendor/gpt", Alias: target, RequestedAt: now, Failed: true,
+			})
+		}
+	}
+	for _, record := range []pluginapi.UsageRecord{
+		{Provider: pluginID, Model: "auto", Alias: "auto", Failed: true, RequestedAt: now},
+		{Provider: "test", Alias: "auto", Detail: pluginapi.UsageDetail{InputTokens: 5}, RequestedAt: now},
+	} {
+		plugin.HandleUsage(t.Context(), record)
+	}
+	plugin.attribution.MarkDirectRequest(pluginapi.RequestInterceptRequest{RequestedModel: "vendor/gpt"})
+	plugin.HandleUsage(t.Context(), pluginapi.UsageRecord{Provider: "test", Model: "vendor/gpt", Alias: "vendor/gpt", RequestedAt: now})
+
+	page, err := store.Groups(usageFilter{}, "router_model", "cost", "desc", 0, 1)
+	if err != nil || page.Total != 3 || len(page.Items) != 1 {
+		t.Fatalf("router page = %#v, %v", page, err)
+	}
+	group := page.Items[0]
+	if group.RouterModel != "auto" || group.Requests != 4 || group.FailedRequests != 2 || group.TotalTokens != 2_000_000 || group.CostUSD != 5 || group.PricedRequests != 3 {
+		t.Fatalf("router total = %#v", group)
+	}
+	children := group.ProviderSubtotals
+	if len(children) != 3 || children[0].ProviderModel != "west/vendor/gpt" || children[0].CostUSD != 3 || children[0].Requests != 2 ||
+		children[1].ProviderModel != "east/vendor/gpt" || children[1].CostUSD != 2 || children[2].Key != "No provider attempted" || children[2].PricedRequests != 0 {
+		t.Fatalf("provider subtotals = %#v", children)
+	}
+	next, err := store.Groups(usageFilter{Attribution: attributionUnresolved}, "router_model", "key", "asc", 0, 1)
+	if err != nil || len(next.Items) != 1 || len(next.Items[0].ProviderSubtotals) != 1 || next.Items[0].ProviderSubtotals[0].Key != "Unknown provider model" {
+		t.Fatalf("unresolved subtotal = %#v, %v", next, err)
+	}
+	dashboard, err := store.Dashboard(usageFilter{RouterModel: "auto", ProviderModel: "west/vendor/gpt"}, "hour",
+		usageGroupOptions{"router_model", usagePageOptions{"key", "asc", 0, 1}}, usagePageOptions{"time", "asc", 0, 10})
+	if err != nil || dashboard.Overview.Summary.Requests != 2 || len(dashboard.Overview.ProviderModels) != 1 ||
+		dashboard.Overview.ProviderModels[0].Model != "west/vendor/gpt" || len(dashboard.Groups.Items) != 1 ||
+		len(dashboard.Groups.Items[0].ProviderSubtotals) != 1 || len(dashboard.Requests.Items) != 2 ||
+		dashboard.Requests.Items[0].RouterModel != "auto" || dashboard.Requests.Items[0].RouteAttempt != 2 ||
+		dashboard.Requests.Items[1].RouterModel != "auto" || dashboard.Requests.Items[1].RouteAttempt != 2 {
+		t.Fatalf("filtered dashboard = %#v, %v", dashboard, err)
+	}
+}
+
+func TestUsageHistoricalModelRecoveryAndGroupingUpgrade(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage.db")
+	store, err := openUsageStore(path, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	now := time.Now().UTC()
+	for _, record := range []storedUsageRecord{
+		{RequestedAt: now, Attribution: attributionRouted, RouterModel: "auto", ProviderModel: "vendor/gpt", ProviderAlias: "west/vendor/gpt"},
+		{RequestedAt: now, Attribution: attributionUnresolved, Provider: pluginID, ProviderModel: "auto", Failed: true},
+		{RequestedAt: now, Attribution: attributionDirect, ProviderModel: "vendor/gpt", ProviderAlias: "east/chat"},
+	} {
+		if err := store.Record(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	indexed, err := store.Requests(usageFilter{}, "time", "asc", 0, 3)
+	if err != nil || len(indexed.Items) != 3 || indexed.Items[0].ProviderModel != "west/vendor/gpt" || indexed.Items[0].RouteAttempt != 0 ||
+		indexed.Items[1].RouterModel != "auto" || indexed.Items[1].ProviderModelState != providerModelNotAttempted || indexed.Items[2].ProviderModel != "vendor/gpt" {
+		t.Fatalf("historical detail = %#v, %v", indexed, err)
+	}
+	filtered, err := store.Requests(usageFilter{ProviderModel: "west/vendor/gpt"}, "provider_model", "asc", 0, 3)
+	if err != nil || len(filtered.Items) != 1 || filtered.Items[0].Sequence != indexed.Items[0].Sequence {
+		t.Fatalf("historical filter = %#v, %v", filtered, err)
+	}
+	var raw string
+	if err := store.db.QueryRow(`SELECT payload FROM requests WHERE sequence = 1`).Scan(&raw); err != nil ||
+		!strings.Contains(raw, `"provider_model":"vendor/gpt"`) {
+		t.Fatalf("historical payload changed: %s, %v", raw, err)
+	}
+
+	for _, selection := range []struct{ old, want string }{{"provider_model", "router_model"}, {"source", "source"}} {
+		legacy := fmt.Sprintf(`{"group_dimension":%q,"group_page_size":25,"hidden_group_columns":[]}`, selection.old)
+		if _, err := store.db.Exec(`UPDATE store_state SET preferences_json = ? WHERE id = 1`, legacy); err != nil {
+			t.Fatal(err)
+		}
+		preferences, err := store.QueryPreferences()
+		if err != nil || preferences.GroupDimension != selection.want || preferences.GroupPageSize != 25 ||
+			preferences.HiddenGroupColumns == nil || len(preferences.HiddenGroupColumns) != 0 {
+			t.Fatalf("legacy grouping preference = %#v, %v", preferences, err)
+		}
+		preferences.GroupDimension = "provider_model"
+		if _, err := store.SavePreferences(preferences); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = openUsageStore(path, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preferences, err := store.QueryPreferences()
+	if err != nil || preferences.GroupDimension != "provider_model" {
+		t.Fatalf("explicit grouping after restart = %#v, %v", preferences, err)
+	}
+}
+
 func TestHandleUsageStoresAmbiguousRecordAsUnattributed(t *testing.T) {
 	store, err := openUsageStore(filepath.Join(t.TempDir(), "usage.db"), 30)
 	if err != nil {
@@ -374,8 +500,8 @@ func TestHandleUsageStoresAmbiguousRecordAsUnattributed(t *testing.T) {
 	defer store.Close()
 	now := time.Now().UTC()
 	tracker := newAttributionTracker(func() time.Time { return now })
-	tracker.MarkRouted("first", "provider/model", mapHeader("X-Api-Key", "client-secret"))
-	tracker.MarkRouted("second", "provider/model", mapHeader("X-Api-Key", "client-secret"))
+	tracker.MarkRouted("first", "provider/model", mapHeader("X-Api-Key", "client-secret"), 1, "")
+	tracker.MarkRouted("second", "provider/model", mapHeader("X-Api-Key", "client-secret"), 1, "")
 	plugin := &modelRouterPlugin{config: routerConfig{Enabled: true}, store: store, attribution: tracker}
 	plugin.HandleUsage(t.Context(), pluginapi.UsageRecord{
 		Provider: "provider", Model: "provider/model", APIKey: "client-secret", Detail: pluginapi.UsageDetail{TotalTokens: 9}, Generate: true,
@@ -1048,6 +1174,9 @@ func TestUsageQuerySortingAndPaginationMatchOriginal(t *testing.T) {
 						}
 					}
 					for _, items := range [][]usageGroup{got.Items, want.Items} {
+						for index := range items {
+							items[index].ProviderSubtotals = nil
+						}
 						sort.Slice(items, func(i, j int) bool {
 							left, _ := json.Marshal(items[i])
 							right, _ := json.Marshal(items[j])

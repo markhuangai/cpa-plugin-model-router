@@ -10,9 +10,10 @@ Usage tracking covers both kinds of CPA traffic:
 
 | Attribution | `router_model` | `provider_model` | Stored row |
 | --- | --- | --- | --- |
-| Routed | Client-visible Model Router alias | Physical CPA target | One row per delivered CPA usage record for an attempted target, including failures before failover |
-| Direct | Empty | Physical CPA model | One row per delivered CPA usage record for a direct request |
-| Unattributed official record | Empty | Model from CPA's usage record | One row when a safe correlation cannot be made |
+| Routed | Client-visible Model Router alias | Prefixed physical CPA model when available | One row per delivered attempt, including failures before failover |
+| Router-only failure | Client-visible Model Router alias | Empty, with state `not_attempted` | One row per delivered CPA record for a failure before dispatch |
+| Direct | Empty | Prefixed physical CPA model when available | One row per delivered direct record |
+| Unattributed official record | Empty | Physical model when supplied by CPA | One row when a safe correlation cannot be made |
 
 Router and provider identities must remain separate throughout storage, filtering, aggregation, pricing, and display. A routed response can be rewritten to the alias for the client without changing the stored physical provider model.
 
@@ -109,8 +110,10 @@ logs-max-total-size-mb: 100
 Capture CPA stdout/stderr to a file, or use CPA's existing log collection when file logging is enabled. The retention cap applies to CPA-managed files; bound any shell capture separately. Production defaults are unchanged. Filter the capture with:
 
 ```bash
-rg 'model_router\.(stream|shutdown|accounting|query)' <captured-log>
+rg 'model_router\.(usage|stream|shutdown|accounting|query)' <captured-log>
 ```
+
+For a 429 followed by a successful fallback, match `model_router.usage.dispatch_started`, `model_router.usage.dispatch_complete` and `model_router.usage.record` by `operation_id`. The events carry the attempt, target, reported physical and accounting models, status, duration, attribution reason and storage outcome. The same operation shows whether routing advanced to the next target. A pre-dispatch failure records `router_without_provider` and `not_attempted`. The accounting report shows the price key and whether it was qualified, generic, missing, ambiguous or lacked a physical model. Join it by model key and price-book revision.
 
 Each message carries JSON because CPA v7.3.9's text formatter omits arbitrary structured fields. Correlate by `operation_id`. For accounting, concatenate the JSON strings in `decision_json` in `chunk` order from 1 through `chunks`, then decode the resulting JSON. Every decision group is retained in batches of at most 32 KiB of decision text; preserve every chunk. The report contains the sanitized range/filters, price-book revision, model/provider/executor identity, explicit override, stored/default/effective accounting modes, request counts and cache overlap totals. `model_router.query.complete` records the outcome and elapsed time under the same operation ID. Query the historical range before and after adding a price without an accounting override: the effective mode and overlap must stay unchanged. The precedence is explicit price override, then stored mode, then provider default. No business-table inspection is needed to explain the decision.
 
@@ -131,7 +134,9 @@ CPA usage.handle callback --> correlate marker and store one request row
                          +--> unmatched or ambiguous: store as unattributed
 ```
 
-Correlation uses request time, provider model, and an in-memory keyed fingerprint of the client credential when available. The fingerprint secret is random for the process and is never persisted. A uniquely matched marker is consumed. Conflicting candidates and timestamp-less callbacks with multiple active candidates are not guessed; the delivered record is retained as `unattributed`. Markers expire after 24 hours and are capped at 50,000 entries.
+Correlation uses CPA's request timestamp, model names, and an in-memory keyed fingerprint of the client credential when available. For routed calls, CPA's timestamp must fall within the actual target dispatch. Asynchronous delivery can arrive after that interval. Conflicting candidates remain unattributed. Timestamp-less records cannot establish a retry. Markers expire after 24 hours and are capped at 50,000 entries.
+
+The accounting key combines the visible namespace in CPA's selected target or provider-facing request with the complete physical model reported by CPA. For example, a request targeting `west/chat` and executed by `vendor/gpt-4.1` uses `west/vendor/gpt-4.1`. An identical target and physical path is kept as reported. CPA v7.3.9 supplies a model name without a separate configured-prefix field, so bare requests and callbacks use the physical name and literal slash aliases follow the same namespace convention. Historical rows recover qualified names when their saved alias contains the full physical model. They keep their original name when that evidence is ambiguous.
 
 CPA v7.3.9 or newer is required. That release preserves numeric HTTP statuses returned through native model callbacks, which lets Model Router apply its configured fallback rules. CPA v7.2.143 also detached asynchronous native usage delivery from request cancellation while preserving context values. CPA v7.2.142 and older can cancel `usage.handle` before Model Router receives it; the plugin does not recreate missing records from response bodies.
 
@@ -215,7 +220,9 @@ AND the document is visible
 AND no newer refresh has replaced the timer
 ```
 
-Leaving the tab or hiding the document stops the timer and aborts the active request. Returning starts one fresh request set. Dashboard preferences are saved to SQLite after a short debounce. Both tables default to 50 rows. Router model, Provider, Source, Service tier, and Result are hidden by default in Usage breakdown; every column checkbox change updates `hidden_group_columns`. Existing saved selections, including an empty hidden list or a saved page size, remain authoritative. Request-detail columns keep their existing defaults.
+Leaving the tab or hiding the document stops the timer and aborts the active request. Returning starts one fresh request set. Dashboard preferences are saved to SQLite after a short debounce. Usage breakdown defaults to router groups, each with provider subtotals. Pagination counts parent groups. An old saved Provider model grouping starts in Router model on upgrade. Later selections are saved normally. Request details show `<alias>-retry` for confirmed repeat dispatches. A new request that starts on the second configured target because the first is cooling still shows the base alias.
+
+Cost lookup tries the qualified provider model first, then the saved generic price for the complete physical model. Path prefixes stay in scope during suffix and mapping lookup. **No provider attempted** and **Unknown provider model** are unpriced subtotals.
 
 The page follows CPAMC light, white, and dark themes, redraws canvas charts after theme changes, supports keyboard tab and chart navigation, exposes visible focus states, fits metric values without ellipses, and collapses controls and charts for mobile widths. Token trends use packet-style columns, cost and efficiency use halo lines, and provider share uses a gapped donut. Hover and keyboard focus share the same active treatment: packet buckets widen and gain a marker, lines gain a guide and enlarged halo markers, and donut segments lift while peers dim. Successful request results use green pills. Saving valid model pricing closes the modal after the persisted price book is applied; validation or request failures leave it open.
 
@@ -238,7 +245,7 @@ All endpoints require CPA Management API authentication.
 
 Overview, group, and request queries accept RFC3339 `from` and `to` plus optional `attribution`, `router_model`, `provider_model`, `source`, `service_tier`, and `result` filters. `router_model` always matches a literal route alias. Use `attribution=direct`, `attribution=unattributed`, or `attribution=routed` to filter by request origin; this keeps aliases named `direct` or `unattributed` distinct from the synthetic traffic classes. Group and request endpoints also accept `sort`, `order`, `offset`, and `limit`; the maximum page size is 500.
 
-The dashboard endpoint accepts the same filters and `granularity`, plus `group_dimension`, `group_sort`, `group_order`, `group_offset`, `group_limit`, `request_sort`, `request_order`, `request_offset`, and `request_limit`. Defaults and limits match the individual endpoints. It returns `overview`, `groups`, and `requests`, with a shared `generated_at`, `schema_version`, and `price_book_revision` on the outer response. Existing endpoints retain their response formats.
+The dashboard endpoint accepts the same filters and `granularity`, plus `group_dimension`, `group_sort`, `group_order`, `group_offset`, `group_limit`, `request_sort`, `request_order`, `request_offset`, and `request_limit`. Defaults and limits match the individual endpoints. It returns `overview`, `groups`, and `requests`, with a shared `generated_at`, `schema_version`, and `price_book_revision` on the outer response. Router groups include `provider_subtotals`. Requests can include `physical_model`, `route_attempt`, and `provider_model_state`.
 
 ## Implementation map
 

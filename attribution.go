@@ -24,8 +24,12 @@ const (
 )
 
 type attributionResult struct {
-	Kind        string
-	RouterModel string
+	Kind         string
+	RouterModel  string
+	Target       string
+	RouteAttempt int
+	Operation    string
+	Reason       string
 }
 
 type attributionMarker struct {
@@ -33,23 +37,42 @@ type attributionMarker struct {
 	requestID     string
 	direct        bool
 	routerModel   string
+	target        string
 	providerModel string
+	routeAttempt  int
+	operation     string
 	startedAt     time.Time
+	finishedAt    time.Time
+	credential    [sha256.Size]byte
+	hasCredential bool
+}
+
+type attributionKey struct {
+	model         string
 	credential    [sha256.Size]byte
 	hasCredential bool
 }
 
 type attributionTracker struct {
-	mu        sync.Mutex
-	secret    [sha256.Size]byte
-	markers   []attributionMarker
-	nextID    uint64
-	lastPrune time.Time
-	now       func() time.Time
+	mu         sync.Mutex
+	secret     [sha256.Size]byte
+	markers    map[uint64]*attributionMarker
+	byModel    map[attributionKey]map[uint64]*attributionMarker
+	directByID map[string]*attributionMarker
+	firstID    uint64
+	nextID     uint64
+	lastPrune  time.Time
+	now        func() time.Time
 }
 
 func newAttributionTracker(now func() time.Time) *attributionTracker {
-	tracker := &attributionTracker{now: now}
+	tracker := &attributionTracker{
+		markers:    make(map[uint64]*attributionMarker),
+		byModel:    make(map[attributionKey]map[uint64]*attributionMarker),
+		directByID: make(map[string]*attributionMarker),
+		firstID:    1,
+		now:        now,
+	}
 	if tracker.now == nil {
 		tracker.now = time.Now
 	}
@@ -61,53 +84,60 @@ func newAttributionTracker(now func() time.Time) *attributionTracker {
 }
 
 func (tracker *attributionTracker) MarkDirect(request pluginapi.ModelRouteRequest) {
-	if tracker == nil {
-		return
-	}
-	tracker.add(true, "", request.RequestedModel, request.Headers, "")
+	tracker.add(attributionMarker{direct: true, target: request.RequestedModel}, request.Headers)
 }
 
-func (tracker *attributionTracker) MarkRouted(routerModel, providerModel string, headers http.Header) {
-	if tracker == nil {
-		return
-	}
-	tracker.add(false, routerModel, providerModel, headers, "")
+func (tracker *attributionTracker) MarkRouted(routerModel, target string, headers http.Header, attempt int, operation string) uint64 {
+	return tracker.add(attributionMarker{routerModel: routerModel, target: target, routeAttempt: attempt, operation: operation}, headers)
 }
 
 func (tracker *attributionTracker) MarkDirectRequest(request pluginapi.RequestInterceptRequest) {
+	tracker.add(attributionMarker{
+		direct:        true,
+		requestID:     strings.TrimSpace(request.RequestID),
+		target:        firstNonEmpty(strings.TrimSpace(request.RequestedModel), request.Model),
+		providerModel: strings.TrimSpace(request.Model),
+	}, request.Headers)
+}
+
+func (tracker *attributionTracker) FinishRouted(id uint64) {
 	if tracker == nil {
 		return
 	}
-	tracker.add(true, "", firstNonEmpty(request.Model, request.RequestedModel), request.Headers, request.RequestID)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	if marker := tracker.markers[id]; marker != nil {
+		marker.finishedAt = tracker.now().UTC()
+	}
 }
 
-func (tracker *attributionTracker) add(direct bool, routerModel, providerModel string, headers http.Header, requestID string) {
-	credential := clientCredential(headers)
-	fingerprint, hasCredential := tracker.fingerprint(credential)
-	marker := attributionMarker{
-		requestID:     strings.TrimSpace(requestID),
-		direct:        direct,
-		routerModel:   strings.TrimSpace(routerModel),
-		providerModel: strings.TrimSpace(providerModel),
-		startedAt:     tracker.now().UTC(),
-		credential:    fingerprint,
-		hasCredential: hasCredential,
+func (tracker *attributionTracker) add(marker attributionMarker, headers http.Header) uint64 {
+	if tracker == nil {
+		return 0
 	}
+	marker.target = strings.TrimSpace(marker.target)
+	marker.credential, marker.hasCredential = tracker.fingerprint(clientCredential(headers))
 	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	marker.startedAt = tracker.now().UTC()
 	tracker.pruneLocked(marker.startedAt)
 	tracker.nextID++
 	marker.id = tracker.nextID
-	tracker.markers = append(tracker.markers, marker)
-	if overflow := len(tracker.markers) - maxAttributionMarks; overflow > 0 {
-		copy(tracker.markers, tracker.markers[overflow:])
-		tracker.markers = tracker.markers[:maxAttributionMarks]
+	tracker.markers[marker.id] = &marker
+	tracker.indexMarker(&marker)
+	if marker.requestID != "" {
+		tracker.directByID[marker.requestID] = &marker
 	}
-	tracker.mu.Unlock()
+	for len(tracker.markers) > maxAttributionMarks {
+		tracker.removeMarker(tracker.markers[tracker.firstID])
+		tracker.firstID++
+	}
+	return marker.id
 }
 
 func (tracker *attributionTracker) Match(record pluginapi.UsageRecord) attributionResult {
 	if tracker == nil {
-		return attributionResult{Kind: attributionUnresolved}
+		return attributionResult{Kind: attributionUnresolved, Reason: "tracker_unavailable"}
 	}
 	hasRequestedAt := !record.RequestedAt.IsZero()
 	requestedAt := record.RequestedAt.UTC()
@@ -120,131 +150,99 @@ func (tracker *attributionTracker) Match(record pluginapi.UsageRecord) attributi
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
 	tracker.pruneLocked(tracker.now().UTC())
-	indexes := tracker.matchingIndexesLocked(requestedAt, fingerprint, hasCredential, models, false, hasRequestedAt)
-	if len(indexes) == 0 {
-		indexes = tracker.matchingIndexesLocked(requestedAt, fingerprint, hasCredential, models, true, hasRequestedAt)
-	}
-	if len(indexes) == 0 {
-		return attributionResult{Kind: attributionUnresolved}
-	}
-	if !hasRequestedAt {
-		// A timestamp-less record cannot safely choose among concurrent markers.
-		if len(indexes) > 1 {
-			return attributionResult{Kind: attributionUnresolved}
+	var marker *attributionMarker
+	for _, model := range models {
+		key := attributionKey{model: model, credential: fingerprint, hasCredential: hasCredential}
+		for _, candidate := range tracker.byModel[key] {
+			if candidate == marker || (hasRequestedAt && !candidate.includes(requestedAt)) {
+				continue
+			}
+			if marker != nil && (!hasRequestedAt || marker.conflictsWith(candidate)) {
+				return attributionResult{Kind: attributionUnresolved, Reason: "conflicting_markers"}
+			}
+			if marker == nil || candidate.startedAt.After(marker.startedAt) ||
+				(candidate.startedAt.Equal(marker.startedAt) && candidate.id < marker.id) {
+				marker = candidate
+			}
 		}
 	}
-	index := tracker.closestIndexLocked(indexes, requestedAt)
-	closest := tracker.equallyCloseIndexesLocked(indexes, requestedAt, index)
-	if tracker.conflictingIndexesLocked(closest) {
-		tracker.removeIndexesLocked(closest)
-		return attributionResult{Kind: attributionUnresolved}
+	if marker == nil {
+		return attributionResult{Kind: attributionUnresolved, Reason: "no_matching_marker"}
 	}
-	marker := tracker.markers[index]
-	tracker.removeIndexesLocked([]int{index})
 	if marker.direct {
-		return attributionResult{Kind: attributionDirect}
+		tracker.removeMarker(marker)
+		return attributionResult{Kind: attributionDirect, Target: marker.target, Reason: "direct_marker"}
 	}
-	return attributionResult{Kind: attributionRouted, RouterModel: marker.routerModel}
+	// One host dispatch can yield multiple official records when CPA retries internally.
+	attempt := marker.routeAttempt
+	if !hasRequestedAt {
+		attempt = 0
+	}
+	return attributionResult{
+		Kind: attributionRouted, RouterModel: marker.routerModel, Target: marker.target,
+		RouteAttempt: attempt, Operation: marker.operation, Reason: "route_marker",
+	}
 }
 
-func (tracker *attributionTracker) equallyCloseIndexesLocked(indexes []int, requestedAt time.Time, closest int) []int {
-	delta := absoluteDuration(tracker.markers[closest].startedAt.Sub(requestedAt))
-	result := make([]int, 0, len(indexes))
-	for _, index := range indexes {
-		if absoluteDuration(tracker.markers[index].startedAt.Sub(requestedAt)) == delta {
-			result = append(result, index)
+func (marker *attributionMarker) conflictsWith(other *attributionMarker) bool {
+	return marker.direct != other.direct || !equalFold(marker.routerModel, other.routerModel) ||
+		!equalFold(marker.target, other.target) || marker.routeAttempt != other.routeAttempt || marker.operation != other.operation
+}
+
+func (tracker *attributionTracker) indexMarker(marker *attributionMarker) {
+	for _, model := range compactModels(marker.target, marker.providerModel) {
+		key := attributionKey{model: model, credential: marker.credential, hasCredential: marker.hasCredential}
+		if tracker.byModel[key] == nil {
+			tracker.byModel[key] = make(map[uint64]*attributionMarker)
+		}
+		tracker.byModel[key][marker.id] = marker
+	}
+}
+
+func (tracker *attributionTracker) unindexMarker(marker *attributionMarker) {
+	for _, model := range compactModels(marker.target, marker.providerModel) {
+		key := attributionKey{model: model, credential: marker.credential, hasCredential: marker.hasCredential}
+		bucket := tracker.byModel[key]
+		delete(bucket, marker.id)
+		if len(bucket) == 0 {
+			delete(tracker.byModel, key)
 		}
 	}
-	return result
 }
 
-func (tracker *attributionTracker) conflictingIndexesLocked(indexes []int) bool {
-	if len(indexes) < 2 {
-		return false
+func (tracker *attributionTracker) removeMarker(marker *attributionMarker) {
+	if marker == nil {
+		return
 	}
-	first := tracker.markers[indexes[0]]
-	for _, index := range indexes[1:] {
-		marker := tracker.markers[index]
-		if marker.direct != first.direct || !equalFold(marker.routerModel, first.routerModel) {
-			return true
-		}
+	delete(tracker.markers, marker.id)
+	tracker.unindexMarker(marker)
+	if tracker.directByID[marker.requestID] == marker {
+		delete(tracker.directByID, marker.requestID)
 	}
-	return false
-}
-
-func (tracker *attributionTracker) removeIndexesLocked(indexes []int) {
-	remove := make(map[int]struct{}, len(indexes))
-	for _, index := range indexes {
-		remove[index] = struct{}{}
-	}
-	kept := tracker.markers[:0]
-	for index, marker := range tracker.markers {
-		if _, found := remove[index]; !found {
-			kept = append(kept, marker)
-		}
-	}
-	for index := len(kept); index < len(tracker.markers); index++ {
-		tracker.markers[index] = attributionMarker{}
-	}
-	tracker.markers = kept
-}
-
-func (tracker *attributionTracker) closestIndexLocked(indexes []int, requestedAt time.Time) int {
-	closest := indexes[0]
-	closestDelta := absoluteDuration(tracker.markers[closest].startedAt.Sub(requestedAt))
-	for _, index := range indexes[1:] {
-		delta := absoluteDuration(tracker.markers[index].startedAt.Sub(requestedAt))
-		if delta < closestDelta || (delta == closestDelta && tracker.markers[index].id < tracker.markers[closest].id) {
-			closest = index
-			closestDelta = delta
-		}
-	}
-	return closest
-}
-
-func absoluteDuration(value time.Duration) time.Duration {
-	if value < 0 {
-		return -value
-	}
-	return value
 }
 
 func (tracker *attributionTracker) updateDirectRequest(request pluginapi.RequestInterceptRequest) {
-	if tracker == nil || strings.TrimSpace(request.RequestID) == "" {
+	requestID := strings.TrimSpace(request.RequestID)
+	if tracker == nil || requestID == "" {
 		return
 	}
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
-	for index := len(tracker.markers) - 1; index >= 0; index-- {
-		marker := &tracker.markers[index]
-		if marker.direct && marker.requestID == request.RequestID {
-			marker.providerModel = firstNonEmpty(strings.TrimSpace(request.Model), marker.providerModel)
-			return
-		}
+	if marker := tracker.directByID[requestID]; marker != nil {
+		tracker.unindexMarker(marker)
+		marker.providerModel = firstNonEmpty(strings.TrimSpace(request.Model), marker.providerModel)
+		tracker.indexMarker(marker)
 	}
 }
 
-func (tracker *attributionTracker) matchingIndexesLocked(requestedAt time.Time, fingerprint [sha256.Size]byte, hasCredential bool, models []string, stripSuffix, enforceWindow bool) []int {
-	indexes := make([]int, 0, 2)
-	for index, marker := range tracker.markers {
-		if marker.hasCredential != hasCredential || (hasCredential && !hmac.Equal(marker.credential[:], fingerprint[:])) {
-			continue
-		}
-		if enforceWindow {
-			delta := marker.startedAt.Sub(requestedAt)
-			if delta < -attributionWindow || delta > attributionWindow {
-				continue
-			}
-		}
-		markerModel := normalizedAttributionModel(marker.providerModel, stripSuffix)
-		for _, model := range models {
-			if strings.EqualFold(markerModel, normalizedAttributionModel(model, stripSuffix)) {
-				indexes = append(indexes, index)
-				break
-			}
-		}
+func (marker attributionMarker) includes(requestedAt time.Time) bool {
+	if requestedAt.Before(marker.startedAt) {
+		return false
 	}
-	return indexes
+	if marker.direct {
+		return requestedAt.Sub(marker.startedAt) <= attributionWindow
+	}
+	return marker.finishedAt.IsZero() || !requestedAt.After(marker.finishedAt)
 }
 
 func (tracker *attributionTracker) fingerprint(value string) ([sha256.Size]byte, bool) {
@@ -265,16 +263,14 @@ func (tracker *attributionTracker) pruneLocked(now time.Time) {
 	}
 	tracker.lastPrune = now
 	activeCutoff := now.Add(-attributionRetention)
-	kept := tracker.markers[:0]
-	for _, marker := range tracker.markers {
-		if !marker.startedAt.Before(activeCutoff) {
-			kept = append(kept, marker)
+	for tracker.firstID <= tracker.nextID {
+		marker := tracker.markers[tracker.firstID]
+		if marker != nil && !marker.startedAt.Before(activeCutoff) {
+			break
 		}
+		tracker.removeMarker(marker)
+		tracker.firstID++
 	}
-	for index := len(kept); index < len(tracker.markers); index++ {
-		tracker.markers[index] = attributionMarker{}
-	}
-	tracker.markers = kept
 }
 
 func clientCredential(headers http.Header) string {
@@ -299,26 +295,22 @@ func compactModels(values ...string) []string {
 	models := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		value = strings.TrimSpace(value)
+		value = normalizedAttributionModel(value)
 		if value == "" {
 			continue
 		}
-		key := strings.ToLower(value)
-		if _, exists := seen[key]; exists {
+		if _, exists := seen[value]; exists {
 			continue
 		}
-		seen[key] = struct{}{}
+		seen[value] = struct{}{}
 		models = append(models, value)
 	}
 	return models
 }
 
-func normalizedAttributionModel(value string, stripSuffix bool) string {
-	value = strings.TrimSpace(value)
-	if stripSuffix {
-		value, _, _ = splitThinkingSuffix(value)
-	}
-	return value
+func normalizedAttributionModel(value string) string {
+	value, _, _ = splitThinkingSuffix(value)
+	return strings.ToLower(value)
 }
 
 func maskAPIKey(value string) string {

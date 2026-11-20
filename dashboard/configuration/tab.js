@@ -236,7 +236,11 @@ function createTargetRow(target,targetIndex,targetCount,weighted){
 function createRouteCard(route,index){
   const card=document.getElementById('route-template').content.firstElementChild.cloneNode(true);
   card.dataset.index=String(index);
-  card.querySelector('.ordinal').textContent=String(index+1).padStart(2,'0');
+  const disclosure=card.querySelector('details');
+  disclosure.open=Boolean(route.expanded);
+  disclosure.addEventListener('toggle',()=>{
+    if(disclosure.isConnected)route.expanded=disclosure.open;
+  });
   card.querySelector('[data-field="alias"]').value=route.alias;
   card.querySelector('[data-field="strategy"]').value=route.strategy;
   card.querySelector('[data-field="cooldown_seconds"]').value=route.cooldown_seconds;
@@ -245,10 +249,10 @@ function createRouteCard(route,index){
   const addTarget=card.querySelector('[data-action="add-target"]');
   addTarget.disabled=!state.catalogLoaded;
   if(!state.catalogLoaded)addTarget.title=state.catalogError||'CPA models are still loading.';
-  card.querySelector('.preview-alias').textContent=route.alias||'unnamed alias';
+  card.querySelector('.route-summary-alias').textContent=route.alias.trim()||'Unnamed alias';
   const weighted=route.strategy==='round-robin';
   card.querySelector('[data-target-help]').hidden=!weighted;
-  card.querySelector('.preview-targets').textContent=route.targets.length+(route.targets.length===1?' target':' targets');
+  card.querySelector('.route-summary-count').textContent=route.targets.length+(route.targets.length===1?' target':' targets');
   const targetList=card.querySelector('.target-list');
   if(route.targets.length===0){
     const empty=document.createElement('div');
@@ -273,7 +277,6 @@ function renumberRouteCards(){
   const cards=routeCardsInOrder();
   cards.forEach((card,index)=>{
     card.dataset.index=String(index);
-    card.querySelector('.ordinal').textContent=String(index+1).padStart(2,'0');
     card.querySelector('[data-action="up"]').disabled=index===0;
     card.querySelector('[data-action="down"]').disabled=index===cards.length-1;
     const rows=targetRowsInOrder(card);
@@ -289,16 +292,18 @@ function renumberRouteCards(){
 }
 function describeRouteControl(element){
   if(!element||typeof element.closest!=='function'||!routesEl.contains(element))return null;
-  const button=element.closest('button[data-action]');
-  if(!button)return null;
-  const card=button.closest('.route-card');
-  const row=button.closest('.target-row');
-  return{action:button.dataset.action,routeIndex:card?Number.parseInt(card.dataset.index,10):-1,targetIndex:row?Number.parseInt(row.dataset.targetIndex,10):-1};
+  const control=element.closest('button[data-action], [data-field], .route-summary');
+  if(!control)return null;
+  const card=control.closest('.route-card');
+  const row=control.closest('.target-row');
+  const {action,field}=control.dataset;
+  const selector=action?'button[data-action="'+action+'"]':field?'[data-field="'+field+'"]':'.route-summary';
+  return{action,selector,routeIndex:card?Number.parseInt(card.dataset.index,10):-1,targetIndex:row?Number.parseInt(row.dataset.targetIndex,10):-1};
 }
 function restoreRouteFocus(descriptor){
   // Destructive controls are skipped: the row they belonged to no longer exists, and
   // focusing a different Remove button would let the next Enter key delete that row.
-  if(!descriptor||descriptor.action.startsWith('remove'))return;
+  if(!descriptor||descriptor.action?.startsWith('remove'))return;
   const card=descriptor.routeIndex>=0?routesEl.querySelector('.route-card[data-index="'+descriptor.routeIndex+'"]'):null;
   if(!card)return;
   let scope=card;
@@ -306,8 +311,8 @@ function restoreRouteFocus(descriptor){
     const row=targetRowsInOrder(card).find(candidate=>candidate.dataset.targetIndex===String(descriptor.targetIndex));
     if(row)scope=row;
   }
-  const button=scope.querySelector('button[data-action="'+descriptor.action+'"]');
-  if(button&&!button.disabled)button.focus({preventScroll:true});
+  const control=scope.querySelector(descriptor.selector);
+  if(control&&!control.disabled)control.focus({preventScroll:true});
 }
 function keepRouteControlFocus(node,action){
   if(!node||!action)return;
@@ -337,8 +342,13 @@ function renderRoutes(){
     window.scrollTo(scrollX,scrollY);
   }
 }
-function newRoute(){return{alias:'route-'+(state.routes.length+1),strategy:'priority',cooldown_seconds:'60',targets:[{model:'',weight:'1'}]}}
-function addRoute(){state.routes.push(newRoute());renderRoutes();refreshDirty()}
+function newRoute(){return{alias:'route-'+(state.routes.length+1),strategy:'priority',cooldown_seconds:'60',targets:[{model:'',weight:'1'}],expanded:true}}
+function addRoute(){
+  state.routes.push(newRoute());
+  renderRoutes();
+  refreshDirty();
+  routesEl.lastElementChild.querySelector('[data-field="alias"]').focus();
+}
 function routeIndexFrom(target){
   const card=target.closest('.route-card');
   return card?Number.parseInt(card.dataset.index,10):-1;
@@ -383,7 +393,7 @@ function updateFromInput(target){
     }
   }else if(target.dataset.field)route[target.dataset.field]=target.value;
   const card=target.closest('.route-card');
-  if(card&&target.dataset.field==='alias')card.querySelector('.preview-alias').textContent=target.value||'unnamed alias';
+  if(card&&target.dataset.field==='alias')card.querySelector('.route-summary-alias').textContent=target.value.trim()||'Unnamed alias';
   if(target.dataset.field==='strategy')renderRoutes();
   refreshDirty();
 }

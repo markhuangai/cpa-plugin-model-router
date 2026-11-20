@@ -58,25 +58,38 @@ function statusCell(row,result){
   badge.textContent=resultDisplay(result);
   cell.appendChild(badge);row.appendChild(cell);
 }
-function groupCell(row,item,column){
+function providerModelDisplay(item){
+  if(item.provider_model_state==='not_attempted')return 'No provider attempted';
+  if(item.provider_model_state==='unknown')return 'Unknown provider model';
+  return item.provider_model;
+}
+function groupCell(row,item,column,dimension,subtotalLabelColumn){
+  if(column.key===subtotalLabelColumn&&(column.key==='key'||column.key==='router_model'||column.key==='provider_model')){
+    return tableCell(row,providerModelDisplay(item),true);
+  }
   switch(column.key){
-  case 'key':return tableCell(row,usageState.group.dimension==='router_model'?routerDisplay(item):item.key,true);
-  case 'router_model':return tableCell(row,routerDisplay(item),true);
-  case 'provider_model':case 'provider':case 'source':case 'service_tier':return tableCell(row,item[column.key],true);
-  case 'result':return statusCell(row,item.result);
+  case 'key':{
+    const label=dimension==='router_model'?(item.attribution==='direct'?'Direct provider calls':routerDisplay(item)):item.key;
+    return tableCell(row,subtotalLabelColumn?'':label,true);
+  }
+  case 'router_model':return tableCell(row,subtotalLabelColumn?'':routerDisplay(item),true);
+  case 'provider_model':return tableCell(row,providerModelDisplay(item),true);
+  case 'provider':case 'source':case 'service_tier':return tableCell(row,item[column.key],true);
+  case 'result':return item.result?statusCell(row,item.result):tableCell(row,'',true);
   case 'cache_read_tokens':return tableCell(row,formatNumber(effectiveCacheReadValue(item)));
   case 'latency':return tableCell(row,formatDuration(item.average_latency_ns));
   case 'ttft':return tableCell(row,formatDuration(item.average_ttft_ns));
   case 'tps':return tableCell(row,formatTPS(item.average_tps));
-  case 'cost':return tableCell(row,formatUSD(item.cost_usd));
+  case 'cost':return tableCell(row,item.provider_model_state?'':formatUSD(item.cost_usd));
   default:return tableCell(row,formatNumber(item[column.key]));
   }
 }
 function requestCell(row,item,column){
   switch(column.key){
   case 'time':return tableCell(row,formatRequestTime(item.requested_at),true);
-  case 'router_model':return tableCell(row,routerDisplay(item),true);
-  case 'provider_model':case 'provider':case 'source':case 'service_tier':return tableCell(row,item[column.key],true);
+  case 'router_model':return tableCell(row,item.attribution==='routed'&&item.route_attempt>1?item.router_model+'-retry':routerDisplay(item),true);
+  case 'provider_model':return tableCell(row,providerModelDisplay(item),true);
+  case 'provider':case 'source':case 'service_tier':return tableCell(row,item[column.key],true);
   case 'result':return statusCell(row,item.result);
   case 'latency':return tableCell(row,formatDuration(item.latency_ns));
   case 'ttft':return tableCell(row,formatDuration(item.ttft_ns));
@@ -98,7 +111,33 @@ function renderGroupTable(){
   const fragment=document.createDocumentFragment();
   if(!page||!Array.isArray(page.items)||page.items.length===0){
     const row=document.createElement('tr'),cell=document.createElement('td');cell.colSpan=columns.length;cell.className='empty-row';cell.textContent='No usage groups match this range.';row.appendChild(cell);fragment.appendChild(row);
-  }else page.items.forEach(item=>{const row=document.createElement('tr');columns.forEach(column=>groupCell(row,item,column));fragment.appendChild(row)});
+  }else{
+    const identities=['provider_model','key','router_model'];
+    const labelColumn=identities.find(key=>columns.some(column=>column.key===key))||columns[0]?.key;
+    for(const item of page.items){
+      const row=document.createElement('tr');
+      if(item.provider_subtotals?.length)row.className='router-total';
+      columns.forEach(column=>groupCell(row,item,column,page.dimension));
+      fragment.appendChild(row);
+      for(const subtotal of item.provider_subtotals||[]){
+        const child=document.createElement('tr');
+        child.className='provider-subtotal';
+        for(const column of columns){
+          groupCell(child,subtotal,column,page.dimension,labelColumn);
+          if(column.key!==labelColumn)continue;
+          const labelCell=child.lastElementChild;
+          labelCell.classList.add('provider-subtotal-name');
+          if(!identities.includes(column.key)){
+            const label=document.createElement('span');
+            label.className='provider-subtotal-label';
+            label.textContent=providerModelDisplay(subtotal);
+            labelCell.prepend(label);
+          }
+        }
+        fragment.appendChild(child);
+      }
+    }
+  }
   replaceTableRows(document.getElementById('usage-groups'),document.getElementById('group-table-scroll'),fragment);
   const total=Number(page&&page.total||0),start=total?usageState.group.offset+1:0,end=Math.min(usageState.group.offset+Number(page&&page.items&&page.items.length||0),total);
   document.getElementById('group-page-status').textContent=start+'–'+end+' of '+formatNumber(total)+' groups';

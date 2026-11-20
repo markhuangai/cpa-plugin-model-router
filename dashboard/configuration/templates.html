@@ -8,45 +8,46 @@
 
 <template id="route-template">
   <article class="route-card">
-    <aside class="route-rail"><span class="ordinal"></span><span class="rail-label">Route</span></aside>
-    <div class="route-body">
-      <div class="route-top">
-        <div class="field">
-          <label>Client alias</label>
-          <input type="text" data-field="alias" placeholder="auto" autocomplete="off">
-          <small>The name clients send in the model field.</small>
+    <details class="route-disclosure">
+      <summary class="route-summary">
+        <span class="route-summary-alias"></span>
+        <span class="route-summary-count"></span>
+      </summary>
+      <div class="route-body">
+        <div class="route-top">
+          <div class="field">
+            <label>Client alias</label>
+            <input type="text" data-field="alias" placeholder="auto" autocomplete="off">
+            <small>The name clients send in the model field.</small>
+          </div>
+          <div class="route-actions">
+            <button class="icon-button" type="button" data-action="up" aria-label="Move route up">↑</button>
+            <button class="icon-button" type="button" data-action="down" aria-label="Move route down">↓</button>
+            <button class="danger-button" type="button" data-action="remove">Remove</button>
+          </div>
         </div>
-        <div class="route-actions">
-          <button class="icon-button" type="button" data-action="up" aria-label="Move route up">↑</button>
-          <button class="icon-button" type="button" data-action="down" aria-label="Move route down">↓</button>
-          <button class="danger-button" type="button" data-action="remove">Remove</button>
-        </div>
-      </div>
 
-      <div class="route-preview" aria-hidden="true">
-        <span class="preview-alias"></span><span class="preview-line"></span><span class="preview-targets"></span>
-      </div>
+        <div class="field-grid">
+          <div class="field">
+            <label>Selection strategy</label>
+            <select data-field="strategy"><option value="priority">Priority order</option><option value="round-robin">Round robin</option></select>
+          </div>
+          <div class="field">
+            <label>Cooldown seconds</label>
+            <input type="number" data-field="cooldown_seconds" min="0" step="1" inputmode="numeric">
+            <small>Zero uses the 60-second default.</small>
+          </div>
+        </div>
 
-      <div class="field-grid">
-        <div class="field">
-          <label>Selection strategy</label>
-          <select data-field="strategy"><option value="priority">Priority order</option><option value="round-robin">Round robin</option></select>
-        </div>
-        <div class="field">
-          <label>Cooldown seconds</label>
-          <input type="number" data-field="cooldown_seconds" min="0" step="1" inputmode="numeric">
-          <small>Zero uses the 60-second default.</small>
+        <div class="targets">
+          <div class="targets-head">
+            <strong>Ordered model targets <button class="target-help" type="button" data-target-help aria-label="Target weight help: in round-robin mode, weight repeats this model in the outer schedule. CPA still chooses the actual provider credential." title="Round-robin weight repeats this model in the outer schedule. CPA still chooses the actual provider credential.">!</button></strong>
+            <button class="secondary" type="button" data-action="add-target">Add target</button>
+          </div>
+          <div class="target-list"></div>
         </div>
       </div>
-
-      <div class="targets">
-        <div class="targets-head">
-          <strong>Ordered model targets <button class="target-help" type="button" data-target-help aria-label="Target weight help: in round-robin mode, weight repeats this model in the outer schedule. CPA still chooses the actual provider credential." title="Round-robin weight repeats this model in the outer schedule. CPA still chooses the actual provider credential.">!</button></strong>
-          <button class="secondary" type="button" data-action="add-target">Add target</button>
-        </div>
-        <div class="target-list"></div>
-      </div>
-    </div>
+    </details>
   </article>
 </template>
 

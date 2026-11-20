@@ -32,6 +32,7 @@ func (p *modelRouterPlugin) executeWithHost(request pluginapi.ExecutorRequest, h
 	policy := p.config.fallbackPolicy()
 	var lastErr error
 	attempted := make(map[string]struct{}, len(route.Targets))
+	operation := diagnosticOperationID()
 	for attempt := 0; attempt < len(route.Targets); attempt++ {
 		selection := p.runtime.SelectExcluding(route, attempted)
 		if selection.allCooling {
@@ -42,8 +43,9 @@ func (p *modelRouterPlugin) executeWithHost(request pluginapi.ExecutorRequest, h
 		}
 		attempted[routeKey(selection.model)] = struct{}{}
 		target := targetModel(requestedModel, selection.model)
-		p.attribution.MarkRouted(route.Alias, target, request.Headers)
-		response, err := host.Execute(hostRequest(request, bodyInfo, target, false))
+		nestedRequest := hostRequest(request, bodyInfo, target, false)
+		finish := p.attribution.beginDispatch(operation, route.Alias, nestedRequest, request.Headers, attempt+1)
+		response, err := host.Execute(nestedRequest)
 		status := response.StatusCode
 		if status == 0 && err == nil {
 			status = http.StatusOK
@@ -51,6 +53,7 @@ func (p *modelRouterPlugin) executeWithHost(request pluginapi.ExecutorRequest, h
 		if status == 0 && err != nil {
 			status = statusFromError(err)
 		}
+		finish(status, err)
 		if err == nil && status >= 200 && status < 300 {
 			return pluginapi.ExecutorResponse{
 				Payload: rewriteResponseModel(response.Body, requestedModel),
