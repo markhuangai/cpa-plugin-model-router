@@ -12,7 +12,7 @@ on:
 
 permissions:
   contents: read
-  actions: read
+  actions: write
 
 jobs:
   test:
@@ -25,8 +25,12 @@ jobs:
       ORM_CONFIGURATION_VARIABLES: ${{ toJSON(vars) }}
       ORM_CONFIGURATION_SECRETS: |
         {
-          "AI_ENDPOINT": ${{ toJSON(secrets.AI_ENDPOINT) }},
           "ORM_GITHUB_TOKEN": ${{ toJSON(secrets.ORM_GITHUB_TOKEN) }},
-          "ORM_PROXY_KEY": ${{ toJSON(secrets.ORM_PROXY_KEY) }},
           "ORM_SESSION_KEY": ${{ toJSON(secrets.ORM_SESSION_KEY) }}
         }
+      ORM_AGENT_PROFILES: |
+        {
+          "claude": ${{ toJSON(secrets.CLAUDE_SETTINGS_JSON) }}
+        }
+      ORM_CLAUDE_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ORM_AGENT_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -9,6 +9,9 @@ on:
     types: [synchronize, closed]
   schedule:
     - cron: "7,22,37,52 * * * *"
+  workflow_run:
+    workflows: [ORM agent]
+    types: [completed]
   workflow_dispatch:
     inputs:
       issue-number:
@@ -31,8 +34,6 @@ jobs:
       ORM_CONFIGURATION_VARIABLES: ${{ toJSON(vars) }}
       ORM_CONFIGURATION_SECRETS: |
         {
-          "AI_ENDPOINT": ${{ toJSON(secrets.AI_ENDPOINT) }},
           "ORM_GITHUB_TOKEN": ${{ toJSON(secrets.ORM_GITHUB_TOKEN) }},
-          "ORM_PROXY_KEY": ${{ toJSON(secrets.ORM_PROXY_KEY) }},
           "ORM_SESSION_KEY": ${{ toJSON(secrets.ORM_SESSION_KEY) }}
         }

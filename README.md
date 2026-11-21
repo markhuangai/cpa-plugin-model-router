@@ -247,57 +247,63 @@ Maintenance requires the repository Actions variable `ORM_ENABLED=true`.
 Leaving it unset or setting another value disables maintenance. The manual
 **Test AI configuration** workflow remains available while maintenance is off.
 Existing backlog requires selecting an issue through **Repository maintenance**;
-the schedule resumes enrolled tasks every 15 minutes.
+the schedule resumes enrolled tasks every 15 minutes. An **ORM agent** run
+finishing also wakes the controller for its issue.
 
-Both callers use ORM's reusable workflows at `@v1-prerelease` directly.
+The maintenance, agent, and probe callers use ORM's reusable workflows at
+`@v1-prerelease` directly.
 ORM selects a compatible immutable image for its workflow revision and reuses
-that image throughout the run. New runs adopt published v1 prereleases without
-a repository edit. This repository supplies no runtime image or resolver.
+that image throughout the run. New runs adopt published prereleases from that
+channel.
 
 ### Configuration and activation
 
-`.github/orm.yml` selects the Claude SDK profile for all five roles.
-Model IDs and efforts come from Actions variables without a model catalogue or
-`behaves_as` declaration. The proxy must support the chosen model and effort;
-provider errors fail without changing either setting.
+The v2 `.github/orm.yml` selects one Claude profile for all five roles. Set the
+model and effort in the native settings supplied by `CLAUDE_SETTINGS_JSON`.
+`.remote-dev.yml` allows `MarkHuang-AI-Service` to dispatch issue phases and
+`Z-M-Huang` to run manual probes. ORM handles phase continuation and supplies the
+project skills.
 
 | Actions secret | Purpose |
 | --- | --- |
-| `AI_ENDPOINT` | Private HTTPS proxy URL; the organization secret must be available to this repository. |
-| `ORM_PROXY_KEY` | Proxy authentication. |
-| `ORM_GITHUB_TOKEN` | Repository-scoped PAT for issue/PR publication, branch updates, and monitoring. |
+| `ORM_GITHUB_TOKEN` | Repository-scoped controller PAT for dispatching Actions and publishing and monitoring issues and PRs. |
 | `ORM_SESSION_KEY` | Persistent canonical base64 encoding of 32 random bytes for state authentication and artifact encryption. |
+| `CLAUDE_SETTINGS_JSON` | Organization secret containing native Claude settings for the `claude` profile. |
+| `ANTHROPIC_API_KEY` | Organization secret for Claude provider authentication. |
+| `REMOTE_DEV_PAT` | Organization secret for authorized coding runs. The PAT needs Actions read and permission to push to `orm-work/**`. |
 
-`CLAUDE_MODEL` and `CLAUDE_EFFORT` are repository Actions variables.
-The callers forward only the four named secrets through
-`ORM_CONFIGURATION_SECRETS` and variables through
-`ORM_CONFIGURATION_VARIABLES`. Keep the same session key across runs and
-upgrades. See the upstream installation instructions for PAT permissions.
+Native read phases and probes receive the short-lived `GITHUB_TOKEN` with
+Contents read access. The native workflow also requires Actions write for its
+artifacts. Authorized coding phases receive `REMOTE_DEV_PAT`. Keep the same
+session key across runs and upgrades. See the upstream installation
+instructions for the controller PAT's permissions.
 
 After merging this configuration:
 
-1. Keep maintenance disabled while checking the secret and variable setup.
-2. Run the fixed-prompt live check for all five roles from the default branch:
+1. Keep maintenance disabled while checking the secret setup. Confirm the
+   controller can dispatch workflows, and that the work PAT can read Actions
+   artifacts and push work branches. Verify the work identity has no bypass on
+   `main`.
+2. Run the fixed-prompt live check from the default branch as `Z-M-Huang`. All
+   five roles use the same profile.
 
    ```bash
-   for orm_role in bootstrap investigation implementation audit output_review; do
-     gh workflow run test-ai.yml --repo markhuangai/cpa-plugin-model-router \
-       --ref main -f role="$orm_role"
-   done
+   gh workflow run test-ai.yml --repo markhuangai/cpa-plugin-model-router \
+     --ref main -f role=implementation
    ```
 
-3. Require every run's summary to report `outcome: completed` and `cleanup: passed`.
-   The check is bounded to 120 seconds and two upstream requests. It creates no
-   issues, comments, PRs, or session artifacts and does not prove tool execution
-   or GitHub write permissions.
-4. Set the repository Actions variable `ORM_ENABLED` to `true`.
-5. Select one known bug for supervised maintenance. Verify actual tool execution,
-   PR publication, all four CI checks (`test`, `windows-sqlite`,
-   `analyze`, `CodeQL`), and a completed Codex review of the latest head.
+3. Require the **AI configuration test** summary to confirm the harness returned
+   `ORM probe completed.` The probe allows two minutes for native execution and
+   checks the response in the native result artifact.
+4. Set the repository Actions variable `ORM_ENABLED` to `true`. Select one known
+   bug for supervised maintenance. Verify agent dispatch, execution, and
+   controller resumption after the agent finishes. If the task produces a PR,
+   verify all four CI checks (`test`, `windows-sqlite`, `analyze`, `CodeQL`) and a
+   completed Codex review of its latest head.
 
-Each task retains lifetime limits of 60 active minutes, 200 model requests, three
-repair cycles, two infrastructure retries, and 24 hours waiting for CI/review.
-These limits do not impose a repository-wide spending cap.
+Each task has lifetime limits of 60 active minutes, 200 authorized agent runs,
+three repair cycles, two infrastructure retries, and 24 hours waiting for
+CI/review. An agent run can make multiple model requests.
 
 ### Diagnosis and recovery
 
@@ -306,7 +312,7 @@ Collect the exact run attempt with:
 ```bash
 gh run view RUN_ID --attempt ATTEMPT \
   --repo markhuangai/cpa-plugin-model-router --log |
-  rg 'runtime\.|configuration_|model\.request\.|ai\.test\.'
+  rg 'runtime\.|configuration_|agent\.|api\.request\.|actions\.failed'
 ```
 
 At normal log visibility, ORM's `runtime.resolved` records the workflow revision
@@ -318,8 +324,10 @@ repository's existing Actions retention.
 For runtime selection failures, verify GHCR access and image publication for
 the workflow revision identified in the log. Start a new run after upstream
 publication completes. For missing configuration sources, fix the named
-variable or forwarded secret. For provider failures, inspect
-`model.request.failed` and `ai.test.finished` before another live check.
+variable or forwarded secret. For `agent.dispatch_failed`, verify that the
+**ORM agent** workflow is registered on the default branch and that the
+allowlisted controller can dispatch it. For a failed probe, inspect the native
+execution and the probe verification job before starting another run.
 To pause intake, set `ORM_ENABLED=false`. Preserve managed comments, the
 `orm:managed` label, task branches/PRs, session key, and artifacts during
 recovery; incompatible state is a blocker, not permission to reset budgets.
