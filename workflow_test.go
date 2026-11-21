@@ -19,6 +19,7 @@ var workflowPaths = []string{
 	".github/workflows/release.yml",
 	".github/workflows/maintenance.yml",
 	".github/workflows/test-ai.yml",
+	".github/workflows/orm-agent.yml",
 }
 
 func TestWorkflowYAML(t *testing.T) {
@@ -62,6 +63,7 @@ func TestWorkflowRunnersAndActionRuntimes(t *testing.T) {
 		".github/workflows/release.yml":      3,
 		".github/workflows/maintenance.yml":  0,
 		".github/workflows/test-ai.yml":      0,
+		".github/workflows/orm-agent.yml":    0,
 	}
 	allowedActions := map[string]bool{
 		"actions/checkout@v7":          true,
@@ -102,6 +104,7 @@ func TestWorkflowRunnersAndActionRuntimes(t *testing.T) {
 
 type ormWorkflow struct {
 	Name        string
+	RunName     string `yaml:"run-name"`
 	On          map[string]any
 	Permissions map[string]string
 	Jobs        map[string]struct {
@@ -307,83 +310,155 @@ func readORMYAML(t *testing.T, path string, target any) {
 }
 
 func TestORMWorkflowDefaultsAndTrust(t *testing.T) {
-	secretReference := regexp.MustCompile("\\$\\{\\{ toJSON\\(secrets\\.([A-Z_]+)\\) \\}\\}")
-	expectedSecrets := map[string]string{
-		"AI_ENDPOINT":      "fixture",
-		"ORM_GITHUB_TOKEN": "fixture",
-		"ORM_PROXY_KEY":    "fixture",
-		"ORM_SESSION_KEY":  "fixture",
-	}
-	for filename, jobName := range map[string]string{"maintenance.yml": "maintenance", "test-ai.yml": "test"} {
-		t.Run(filename, func(t *testing.T) {
+	for _, caller := range []struct {
+		file, job, upstream, guard, actions string
+		inputs                              map[string]any
+	}{
+		{
+			file:     "maintenance.yml",
+			job:      "maintenance",
+			upstream: "maintenance.yml",
+			guard:    "vars.ORM_ENABLED == 'true'",
+			actions:  "read",
+			inputs:   map[string]any{"issue-number": "${{ inputs.issue-number || '' }}"},
+		},
+		{
+			file:     "test-ai.yml",
+			job:      "test",
+			upstream: "test-ai.yml",
+			guard:    "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)",
+			actions:  "write",
+			inputs:   map[string]any{"role": "${{ inputs.role }}"},
+		},
+		{
+			file:     "orm-agent.yml",
+			job:      "agent",
+			upstream: "test-ai.yml",
+			guard:    "github.run_attempt == '1'",
+			actions:  "write",
+			inputs: map[string]any{
+				"issue-number": "${{ inputs.issue }}",
+				"turn":         "${{ inputs.turn }}",
+				"plan":         "${{ inputs.plan }}",
+			},
+		},
+	} {
+		t.Run(caller.file, func(t *testing.T) {
 			var workflow ormWorkflow
-			readORMYAML(t, ".github/workflows/"+filename, &workflow)
-			if !reflect.DeepEqual(workflow.Permissions, map[string]string{"contents": "read", "actions": "read"}) {
+			readORMYAML(t, ".github/workflows/"+caller.file, &workflow)
+			job := workflow.Jobs[caller.job]
+			if !reflect.DeepEqual(workflow.Permissions, map[string]string{"contents": "read", "actions": caller.actions}) || len(job.Permissions) != 0 {
 				t.Fatalf("unexpected caller permissions: %v", workflow.Permissions)
 			}
-			job := workflow.Jobs[jobName]
 			if len(workflow.Jobs) != 1 || job.Needs != "" ||
-				job.Uses != "markhuangai/opensource-repo-manager/.github/workflows/"+filename+"@v1-prerelease" {
+				job.Uses != "markhuangai/opensource-repo-manager/.github/workflows/"+caller.upstream+"@v1-prerelease" {
 				t.Fatal("caller must use the upstream prerelease workflow directly")
 			}
-			expectedIf := "vars.ORM_ENABLED == 'true'"
-			expectedWith := map[string]any{"runner": "ubuntu-24.04", "issue-number": "${{ inputs.issue-number || '' }}"}
-			if filename == "test-ai.yml" {
-				expectedIf = "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
-				expectedWith = map[string]any{"runner": "ubuntu-24.04", "role": "${{ inputs.role }}"}
-			}
-			if job.If != expectedIf || !reflect.DeepEqual(job.With, expectedWith) {
+			caller.inputs["runner"] = "ubuntu-24.04"
+			if job.If != caller.guard || !reflect.DeepEqual(job.With, caller.inputs) {
 				t.Fatal("direct caller must preserve admission guards and use upstream runtime defaults")
 			}
-			if len(job.Secrets) != 2 || job.Secrets["ORM_CONFIGURATION_VARIABLES"] != "${{ toJSON(vars) }}" {
-				t.Fatal("unexpected configuration transports")
+			checkORMSecretMap(t, job.Secrets["ORM_CONFIGURATION_SECRETS"], map[string]string{
+				"ORM_GITHUB_TOKEN": "ORM_GITHUB_TOKEN",
+				"ORM_SESSION_KEY":  "ORM_SESSION_KEY",
+			})
+			delete(job.Secrets, "ORM_CONFIGURATION_SECRETS")
+			wantSecrets := map[string]string{"ORM_CONFIGURATION_VARIABLES": "${{ toJSON(vars) }}"}
+			if caller.upstream == "test-ai.yml" {
+				checkORMSecretMap(t, job.Secrets["ORM_AGENT_PROFILES"], map[string]string{"claude": "CLAUDE_SETTINGS_JSON"})
+				delete(job.Secrets, "ORM_AGENT_PROFILES")
+				wantSecrets["ORM_CLAUDE_API_KEY"] = "${{ secrets.ANTHROPIC_API_KEY }}"
+				wantSecrets["ORM_AGENT_READ_TOKEN"] = "${{ secrets.GITHUB_TOKEN }}"
 			}
-			payload := job.Secrets["ORM_CONFIGURATION_SECRETS"]
-			for _, match := range secretReference.FindAllStringSubmatch(payload, -1) {
-				if _, ok := expectedSecrets[match[1]]; !ok {
-					t.Fatalf("unexpected forwarded secret %s", match[1])
-				}
+			if caller.file == "orm-agent.yml" {
+				wantSecrets["ORM_AGENT_WORK_TOKEN"] = "${{ secrets.REMOTE_DEV_PAT }}"
 			}
-			var forwarded map[string]string
-			if err := json.Unmarshal([]byte(secretReference.ReplaceAllString(payload, "\"fixture\"")), &forwarded); err != nil {
-				t.Fatalf("secret map is not JSON after expression resolution: %v", err)
-			}
-			if !reflect.DeepEqual(forwarded, expectedSecrets) {
-				t.Fatalf("unexpected forwarded secrets: %v", forwarded)
+			if !reflect.DeepEqual(job.Secrets, wantSecrets) {
+				t.Fatal("caller forwards unexpected secret inputs")
 			}
 		})
 	}
 }
 
+func checkORMSecretMap(t *testing.T, payload string, want map[string]string) {
+	t.Helper()
+	reference := regexp.MustCompile(`\$\{\{ toJSON\(secrets\.([A-Z_]+)\) \}\}`)
+	if len(reference.FindAllStringIndex(payload, -1)) != len(want) {
+		t.Fatal("each secret map entry must use an explicit secret reference")
+	}
+	var resolved map[string]string
+	if err := json.Unmarshal([]byte(reference.ReplaceAllString(payload, `"$1"`)), &resolved); err != nil {
+		t.Fatal("secret map must be valid JSON after expression resolution")
+	}
+	if !reflect.DeepEqual(resolved, want) {
+		t.Fatal("secret map forwards unexpected references")
+	}
+}
+
+func TestORMAgentDispatchAndCompletion(t *testing.T) {
+	var agent, maintenance ormWorkflow
+	readORMYAML(t, ".github/workflows/orm-agent.yml", &agent)
+	readORMYAML(t, ".github/workflows/maintenance.yml", &maintenance)
+	if agent.Name != "ORM agent" || agent.RunName != "ORM agent #${{ inputs.issue }} ${{ inputs.turn }}" {
+		t.Fatal("agent runs must carry the issue and turn identity the controller routes")
+	}
+	dispatch, _ := agent.On["workflow_dispatch"].(map[string]any)
+	inputs, _ := dispatch["inputs"].(map[string]any)
+	if len(agent.On) != 1 || len(inputs) != 3 {
+		t.Fatal("agent must accept only the issue, turn and plan through workflow_dispatch")
+	}
+	for _, name := range []string{"issue", "turn", "plan"} {
+		input, _ := inputs[name].(map[string]any)
+		if input["type"] != "string" || input["required"] != true {
+			t.Fatalf("%s must be a required string input", name)
+		}
+	}
+	wake := map[string]any{"workflows": []any{agent.Name}, "types": []any{"completed"}}
+	if !reflect.DeepEqual(maintenance.On["workflow_run"], wake) {
+		t.Fatal("maintenance must wake on agent completion")
+	}
+
+	var remoteDev struct {
+		AllowedActors []string `yaml:"allowed-actors"`
+		Skills        []string
+		AutoContinue  *bool `yaml:"auto-continue"`
+	}
+	readORMYAML(t, ".remote-dev.yml", &remoteDev)
+	if !reflect.DeepEqual(remoteDev.AllowedActors, []string{"MarkHuang-AI-Service", "Z-M-Huang"}) ||
+		remoteDev.Skills == nil || len(remoteDev.Skills) != 0 || remoteDev.AutoContinue == nil || *remoteDev.AutoContinue {
+		t.Fatal("remote development must allow only the controller and probe operator and defer skills and continuation to ORM")
+	}
+}
+
 func TestORMConfigurationProfilesAndGates(t *testing.T) {
 	var configuration struct {
+		Version    int
 		Github     struct{ Token map[string]string }
 		SessionKey map[string]string `yaml:"session_key"`
-		Proxy      struct{ URL, Key map[string]string }
-		Profiles   map[string]struct {
-			SDK           string
-			Model, Effort map[string]string
-		}
-		Roles map[string]struct {
+		Profiles   map[string]map[string]string
+		Limits     map[string]int
+		Roles      map[string]struct {
 			Profile string
 			Skills  []string
 		}
 		Monitor struct {
-			Checks    []string                         `yaml:"required_checks"`
-			Reviewers []struct{ Login, Signal string } `yaml:"automated_reviewers"`
+			Enabled            bool
+			RequirementsSource string                           `yaml:"requirements_source"`
+			Checks             []string                         `yaml:"required_checks"`
+			Reviewers          []struct{ Login, Signal string } `yaml:"automated_reviewers"`
 		} `yaml:"pr_monitor"`
 	}
 	readORMYAML(t, ".github/orm.yml", &configuration)
-	if configuration.Github.Token["from_secret"] != "ORM_GITHUB_TOKEN" ||
-		configuration.SessionKey["from_secret"] != "ORM_SESSION_KEY" ||
-		configuration.Proxy.URL["from_secret"] != "AI_ENDPOINT" ||
-		configuration.Proxy.Key["from_secret"] != "ORM_PROXY_KEY" {
-		t.Fatal("credentials and private endpoint must remain explicit secret references")
+	if configuration.Version != 2 || configuration.Github.Token["from_secret"] != "ORM_GITHUB_TOKEN" ||
+		configuration.SessionKey["from_secret"] != "ORM_SESSION_KEY" {
+		t.Fatal("the v2 controller must resolve its PAT and session key from explicit secret references")
 	}
-	profile := configuration.Profiles["claude"]
-	if len(configuration.Profiles) != 1 || profile.SDK != "claude" ||
-		profile.Model["from_variable"] != "CLAUDE_MODEL" || profile.Effort["from_variable"] != "CLAUDE_EFFORT" {
-		t.Fatal("all roles must preserve the selected Claude SDK model and effort variables")
+	if !reflect.DeepEqual(configuration.Profiles, map[string]map[string]string{"claude": {"sdk": "claude"}}) {
+		t.Fatal("the workflow must supply native settings for the sole Claude profile")
+	}
+	limits := map[string]int{"active_minutes": 60, "agent_runs": 200, "repair_cycles": 3, "infrastructure_retries": 2, "wait_hours": 24}
+	if !reflect.DeepEqual(configuration.Limits, limits) {
+		t.Fatal("unexpected v2 task limits")
 	}
 	if len(configuration.Roles) != 5 {
 		t.Fatal("all five supervisor roles must be configured")
@@ -397,7 +472,8 @@ func TestORMConfigurationProfilesAndGates(t *testing.T) {
 	if _, err := os.Stat(".github/orm/skills/project/SKILL.md"); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(configuration.Monitor.Checks, []string{"test", "windows-sqlite", "analyze", "CodeQL"}) ||
+	if !configuration.Monitor.Enabled || configuration.Monitor.RequirementsSource != "github" ||
+		!reflect.DeepEqual(configuration.Monitor.Checks, []string{"test", "windows-sqlite", "analyze", "CodeQL"}) ||
 		len(configuration.Monitor.Reviewers) != 1 ||
 		configuration.Monitor.Reviewers[0].Login != "chatgpt-codex-connector[bot]" ||
 		configuration.Monitor.Reviewers[0].Signal != "codex" {

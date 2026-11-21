@@ -1,0 +1,46 @@
+name: ORM agent
+run-name: "ORM agent #${{ inputs.issue }} ${{ inputs.turn }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue with an authenticated ORM task
+        type: string
+        required: true
+      turn:
+        description: ORM dispatch operation UUID
+        type: string
+        required: true
+      plan:
+        description: Controller-supplied phase instructions
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  agent:
+    if: github.run_attempt == '1'
+    uses: markhuangai/opensource-repo-manager/.github/workflows/test-ai.yml@v1-prerelease
+    with:
+      runner: ubuntu-24.04
+      issue-number: ${{ inputs.issue }}
+      turn: ${{ inputs.turn }}
+      plan: ${{ inputs.plan }}
+    secrets:
+      ORM_CONFIGURATION_VARIABLES: ${{ toJSON(vars) }}
+      ORM_CONFIGURATION_SECRETS: |
+        {
+          "ORM_GITHUB_TOKEN": ${{ toJSON(secrets.ORM_GITHUB_TOKEN) }},
+          "ORM_SESSION_KEY": ${{ toJSON(secrets.ORM_SESSION_KEY) }}
+        }
+      ORM_AGENT_PROFILES: |
+        {
+          "claude": ${{ toJSON(secrets.CLAUDE_SETTINGS_JSON) }}
+        }
+      ORM_CLAUDE_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ORM_AGENT_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ORM_AGENT_WORK_TOKEN: ${{ secrets.REMOTE_DEV_PAT }}
