@@ -44,6 +44,9 @@ func TestModelRouterWithCLIProxyAPI(t *testing.T) {
 	var failedCalls atomic.Int32
 	var workingCalls atomic.Int32
 	var creationCalls atomic.Int32
+	var overlapCalls atomic.Int32
+	overlapEntered := make(chan struct{})
+	overlapReleased := make(chan struct{})
 	var observedModelsMu sync.Mutex
 	var observedModels []string
 	provider := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -58,6 +61,14 @@ func TestModelRouterWithCLIProxyAPI(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			http.Error(response, err.Error(), http.StatusBadRequest)
 			return
+		}
+		if body.Model == "overlap-model" && overlapCalls.Add(1) == 1 {
+			close(overlapEntered)
+			select {
+			case <-overlapReleased:
+			case <-request.Context().Done():
+				return
+			}
 		}
 		observedModelsMu.Lock()
 		observedModels = append(observedModels, body.Model)
@@ -158,6 +169,10 @@ plugins:
               weight: 3
             - model: other/working-model-2
               weight: 1
+        - alias: overlap-router-alias
+          strategy: priority
+          models:
+            - work/overlap-chat
 openai-compatibility:
   - name: fail
     prefix: fail
@@ -175,6 +190,8 @@ openai-compatibility:
     models:
       - name: working-model
         alias: chat
+      - name: overlap-model
+        alias: overlap-chat
   - name: other
     prefix: other
     base-url: %q
@@ -412,6 +429,77 @@ openai-compatibility:
 		t.Fatalf("weighted provider sequence = %#v, want %#v", weightedModels, wantWeightedModels)
 	}
 
+	t.Run("overlapping usage attribution", func(t *testing.T) {
+		const alias = "overlap-router-alias"
+		started := time.Now().UTC()
+		release := sync.OnceFunc(func() { close(overlapReleased) })
+		defer release()
+		chat := func() error {
+			status, body, err := sendSmokeChat(baseURL, alias, false)
+			if err != nil {
+				return err
+			}
+			var response struct{ Model string }
+			if err := json.Unmarshal(body, &response); err != nil {
+				return fmt.Errorf("decode chat response with status %d: %w", status, err)
+			}
+			if status != http.StatusOK || response.Model != alias {
+				return fmt.Errorf("chat status = %d, model = %q, want 200 and %q", status, response.Model, alias)
+			}
+			return nil
+		}
+		first := make(chan error, 1)
+		go func() { first <- chat() }()
+		select {
+		case <-overlapEntered:
+		case err := <-first:
+			t.Fatalf("first request finished before entering the provider barrier: %v", err)
+		case <-time.After(10 * time.Second):
+			t.Fatal("first request did not enter the provider barrier")
+		}
+		if err := chat(); err != nil {
+			t.Fatal(err)
+		}
+		release()
+		if err := <-first; err != nil {
+			t.Fatal(err)
+		}
+		if overlapCalls.Load() != 2 {
+			t.Fatalf("provider overlap calls = %d, want 2", overlapCalls.Load())
+		}
+
+		query := url.Values{
+			"from":  {started.Format(time.RFC3339Nano)},
+			"to":    {time.Now().UTC().Add(time.Minute).Format(time.RFC3339Nano)},
+			"order": {"asc"},
+		}
+		path := modelRouterUsageBasePath + "/requests?" + query.Encode()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			page := getSmokeManagementJSON[usageRequestPage](t, baseURL, path)
+			capture := logs.String()
+			if page.Total >= 2 && strings.Count(capture, "\"physical_model\":\"overlap-model\"") >= 2 {
+				if page.Total != 2 || len(page.Items) != 2 {
+					t.Fatalf("overlap usage rows = %#v, want two", page)
+				}
+				for _, row := range page.Items {
+					if row.Attribution != attributionRouted || row.RouterModel != alias || row.RouteAttempt != 1 ||
+						row.ProviderModel != "work/overlap-model" || row.PhysicalModel != "overlap-model" ||
+						row.MaskedAPIKey != "lo******ey" || row.InputTokens != 1 || row.OutputTokens != 1 ||
+						row.TotalTokens != 2 || row.Failed {
+						t.Fatalf("overlap usage row = %#v", row)
+					}
+				}
+				verifySmokeOverlapDiagnostics(t, capture, page.Items)
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for overlap usage rows and logs: page=%#v", page)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	})
+
 	t.Run("diagnostic filtering", func(t *testing.T) {
 		cpa.Stop()
 		infoConfig := strings.Replace(config, "debug: true", "debug: false", 1)
@@ -428,6 +516,70 @@ openai-compatibility:
 			t.Fatal("DEBUG usage evidence survived INFO filtering")
 		}
 	})
+}
+
+func verifySmokeOverlapDiagnostics(t *testing.T, capture string, rows []usageRequestDetail) {
+	t.Helper()
+	var relevant []string
+	for _, line := range strings.Split(capture, "\n") {
+		if !strings.Contains(line, "model_router.usage.") {
+			continue
+		}
+		for _, sentinel := range []string{"local-test-key", "work-provider-key", "\"content\":\"hello\"", "upstream="} {
+			if strings.Contains(line, sentinel) {
+				t.Fatal("usage diagnostics exposed a credential or body sentinel")
+			}
+		}
+		if strings.Contains(line, "\"target\":\"work/overlap-chat\"") {
+			relevant = append(relevant, line)
+		}
+	}
+
+	var starts []string
+	finished := map[string]bool{}
+	records := map[string]map[string]any{}
+	for _, event := range smokeModelRouterEvents(t, strings.Join(relevant, "\n")+"\n") {
+		fields := event.fields
+		operation, _ := fields["operation_id"].(string)
+		if operation == "" || fields["router_model"] != "overlap-router-alias" || fields["attempt"] != float64(1) {
+			t.Fatalf("unexpected overlap diagnostic: %s %v", event.name, fields)
+		}
+		switch event.name {
+		case "model_router.usage.dispatch_started":
+			starts = append(starts, operation)
+		case "model_router.usage.dispatch_complete":
+			if fields["outcome"] != "success" || fields["status_code"] != float64(200) || fields["elapsed_ms"] == nil {
+				t.Fatalf("unexpected overlap dispatch result: %v", fields)
+			}
+			finished[operation] = true
+		case "model_router.usage.record":
+			if fields["attribution"] != attributionRouted || fields["physical_model"] != "overlap-model" ||
+				fields["provider_model"] != "work/overlap-model" || fields["outcome"] != "recorded" ||
+				fields["provider_failed"] != false || fields["elapsed_ms"] == nil {
+				t.Fatalf("unexpected overlap storage diagnostic: %v", fields)
+			}
+			reason, _ := fields["reason"].(string)
+			if records[reason] != nil {
+				t.Fatalf("duplicate overlap diagnostic for %q", reason)
+			}
+			records[reason] = fields
+		}
+	}
+	exact, consensus := records["route_marker"], records["route_consensus"]
+	if len(starts) != 2 || starts[0] == starts[1] || len(finished) != 2 || !finished[starts[0]] || !finished[starts[1]] ||
+		len(records) != 2 || exact["operation_id"] != starts[0] || consensus["operation_id"] == nil ||
+		consensus["operation_id"] == starts[0] || consensus["operation_id"] == starts[1] {
+		t.Fatalf("overlap logs did not distinguish exact dispatch and shared route: starts=%v completions=%v records=%v", starts, finished, records)
+	}
+	for index, record := range []map[string]any{exact, consensus} {
+		requestedAt, err := time.Parse(time.RFC3339Nano, fmt.Sprint(record["requested_at"]))
+		if err != nil || !requestedAt.Equal(rows[index].RequestedAt) {
+			t.Fatalf("usage log requested_at = %v, want %s", record["requested_at"], rows[index].RequestedAt)
+		}
+	}
+	for _, line := range relevant {
+		t.Log(line)
+	}
 }
 
 func verifySmokeUsageDispatch(t *testing.T, events []smokeRouterEvent, stream bool) {
@@ -1855,39 +2007,30 @@ func waitForSmokeModel(t *testing.T, baseURL, model string, timeout time.Duratio
 
 func postSmokeChat(t *testing.T, baseURL, model string) map[string]any {
 	t.Helper()
-	payload, err := json.Marshal(map[string]any{
-		"model": model,
-		"messages": []map[string]string{
-			{"role": "user", "content": "hello"},
-		},
-		"stream": false,
-	})
+	status, payload, err := sendSmokeChat(baseURL, model, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := http.NewRequest(http.MethodPost, baseURL+"/v1/chat/completions", bytes.NewReader(payload))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Set("Authorization", "Bearer local-test-key")
-	request.Header.Set("Content-Type", "application/json")
-	response, err := (&http.Client{Timeout: 20 * time.Second}).Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
 	var body map[string]any
-	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
-		t.Fatalf("decode status %s response: %v", response.Status, err)
+	if err := json.Unmarshal(payload, &body); err != nil {
+		t.Fatalf("decode status %d response: %v", status, err)
 	}
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("chat status = %s; body = %#v", response.Status, body)
+	if status != http.StatusOK {
+		t.Fatalf("chat status = %d; body = %#v", status, body)
 	}
 	return body
 }
 
 func postSmokeChatResponse(t *testing.T, baseURL, model string, stream bool) (int, string) {
 	t.Helper()
+	status, body, err := sendSmokeChat(baseURL, model, stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return status, string(body)
+}
+
+func sendSmokeChat(baseURL, model string, stream bool) (int, []byte, error) {
 	body := map[string]any{
 		"model": model,
 		"messages": []map[string]string{
@@ -1900,24 +2043,24 @@ func postSmokeChatResponse(t *testing.T, baseURL, model string, stream bool) (in
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
-		t.Fatal(err)
+		return 0, nil, err
 	}
 	request, err := http.NewRequest(http.MethodPost, baseURL+"/v1/chat/completions", bytes.NewReader(payload))
 	if err != nil {
-		t.Fatal(err)
+		return 0, nil, err
 	}
 	request.Header.Set("Authorization", "Bearer local-test-key")
 	request.Header.Set("Content-Type", "application/json")
 	response, err := (&http.Client{Timeout: 20 * time.Second}).Do(request)
 	if err != nil {
-		t.Fatalf("send %s chat request: %v", model, err)
+		return 0, nil, fmt.Errorf("send %s chat request: %w", model, err)
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(response.Body)
 	if err != nil {
-		t.Fatalf("read %s chat response: %v", model, err)
+		return 0, nil, fmt.Errorf("read %s chat response: %w", model, err)
 	}
-	return response.StatusCode, string(responseBody)
+	return response.StatusCode, responseBody, nil
 }
 
 func sharedLibraryExtension() string {

@@ -37,26 +37,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          orm_lint_dir="$(mktemp -d "$RUNNER_TEMP/orm-actionlint.XXXXXX")"
+          actionlint_dir="$(mktemp -d "$RUNNER_TEMP/actionlint.XXXXXX")"
           cleanup() {
-            for orm_file in "$orm_lint_dir/actionlint.tar.gz" "$orm_lint_dir/actionlint"; do
-              if [[ -f "$orm_file" ]]; then rm -- "$orm_file"; fi
+            for lint_file in "$actionlint_dir/actionlint.tar.gz" "$actionlint_dir/actionlint"; do
+              if [[ -f "$lint_file" ]]; then rm -- "$lint_file"; fi
             done
-            rmdir -- "$orm_lint_dir"
-            echo "orm.tools.cleanup passed"
+            rmdir -- "$actionlint_dir"
           }
           trap cleanup EXIT
           curl --fail --silent --show-error --location --max-time 60 \
             https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
-            --output "$orm_lint_dir/actionlint.tar.gz"
+            --output "$actionlint_dir/actionlint.tar.gz"
           printf '%s  %s\n' \
             8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8 \
-            "$orm_lint_dir/actionlint.tar.gz" | sha256sum --check -
-          tar -xzf "$orm_lint_dir/actionlint.tar.gz" -C "$orm_lint_dir" actionlint
-          "$orm_lint_dir/actionlint" \
+            "$actionlint_dir/actionlint.tar.gz" | sha256sum --check -
+          tar -xzf "$actionlint_dir/actionlint.tar.gz" -C "$actionlint_dir" actionlint
+          "$actionlint_dir/actionlint" \
             .github/workflows/test.yml .github/workflows/codeql.yml \
-            .github/workflows/ai-pr-review.yml .github/workflows/maintenance.yml \
-            .github/workflows/test-ai.yml .github/workflows/orm-agent.yml
+            .github/workflows/ai-pr-review.yml .github/workflows/remote-dev.yml
       - run: go test ./...
       - run: go test -race ./...
       - run: go vet ./...

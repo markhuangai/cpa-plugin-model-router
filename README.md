@@ -228,109 +228,47 @@ The reviewer uses the available organization secrets `PR_REVIEW_PAT` and
 `AI_ENDPOINT`, the repository secret `ORM_PROXY_KEY`, and the existing
 `CLAUDE_MODEL`/`CLAUDE_EFFORT` variables. The review PAT needs Contents and Pull
 requests read/write permissions for interactive review and thread resolution.
-This is independent of Codex review and requires no ORM runtime resolver.
+The repository also uses Codex review.
 
-After the workflow reaches the default branch, a maintainer can also select a PR
-through its manual `pull-request-number` input. The action binds its result to
-the captured PR revision; a review for an earlier head does not prove the latest
-head was reviewed. Its provider requests and findings are a separate cost from
-ORM's task budgets.
+A maintainer can select a PR through the manual `pull-request-number` input.
+Each result is tied to the captured PR revision.
 
-## Repository maintenance
+## Remote development
 
-The [opensource-repo-manager](https://github.com/markhuangai/opensource-repo-manager)
-workflows investigate new issues, prepare audited fixes for evidenced bugs, and
-follow their own PRs through CI and Codex review. A human reviews and merges each
-PR. Feature requests remain manual.
-
-Maintenance requires the repository Actions variable `ORM_ENABLED=true`.
-Leaving it unset or setting another value disables maintenance. The manual
-**Test AI configuration** workflow remains available while maintenance is off.
-Existing backlog requires selecting an issue through **Repository maintenance**;
-the schedule resumes enrolled tasks every 15 minutes. An **ORM agent** run
-finishing also wakes the controller for its issue.
-
-The maintenance, agent, and probe callers use ORM's reusable workflows at
-`@v1-prerelease` directly.
-ORM selects a compatible immutable image for its workflow revision and reuses
-that image throughout the run. New runs adopt published prereleases from that
-channel.
-
-### Configuration and activation
-
-The v2 `.github/orm.yml` selects one Claude profile for all five roles. Set the
-model and effort in the native settings supplied by `CLAUDE_SETTINGS_JSON`.
-`.remote-dev.yml` allows `MarkHuang-AI-Service` to dispatch issue phases and
-`Z-M-Huang` to run manual probes. ORM handles phase continuation and supplies the
-project skills.
-
-| Actions secret | Purpose |
-| --- | --- |
-| `ORM_GITHUB_TOKEN` | Repository-scoped controller PAT for dispatching Actions and publishing and monitoring issues and PRs. |
-| `ORM_SESSION_KEY` | Persistent canonical base64 encoding of 32 random bytes for state authentication and artifact encryption. |
-| `CLAUDE_SETTINGS_JSON` | Organization secret containing native Claude settings for the `claude` profile. |
-| `ANTHROPIC_API_KEY` | Organization secret for Claude provider authentication. |
-| `REMOTE_DEV_PAT` | Organization secret for authorized coding runs. The PAT needs Actions read and permission to push to `orm-work/**`. |
-
-Native read phases and probes receive the short-lived `GITHUB_TOKEN` with
-Contents read access. The native workflow also requires Actions write for its
-artifacts. Authorized coding phases receive `REMOTE_DEV_PAT`. Keep the same
-session key across runs and upgrades. See the upstream installation
-instructions for the controller PAT's permissions.
-
-After merging this configuration:
-
-1. Keep maintenance disabled while checking the secret setup. Confirm the
-   controller can dispatch workflows, and that the work PAT can read Actions
-   artifacts and push work branches. Verify the work identity has no bypass on
-   `main`.
-2. Run the fixed-prompt live check from the default branch as `Z-M-Huang`. All
-   five roles use the same profile.
-
-   ```bash
-   gh workflow run test-ai.yml --repo markhuangai/cpa-plugin-model-router \
-     --ref main -f role=implementation
-   ```
-
-3. Require the **AI configuration test** summary to confirm the harness returned
-   `ORM probe completed.` The probe allows two minutes for native execution and
-   checks the response in the native result artifact.
-4. Set the repository Actions variable `ORM_ENABLED` to `true`. Select one known
-   bug for supervised maintenance. Verify agent dispatch, execution, and
-   controller resumption after the agent finishes. If the task produces a PR,
-   verify all four CI checks (`test`, `windows-sqlite`, `analyze`, `CodeQL`) and a
-   completed Codex review of its latest head.
-
-Each task has lifetime limits of 60 active minutes, 200 authorized agent runs,
-three repair cycles, two infrastructure retries, and 24 hours waiting for
-CI/review. An agent run can make multiple model requests.
-
-### Diagnosis and recovery
-
-Collect the exact run attempt with:
+The [Remote development](https://github.com/markhuangai/cpa-plugin-model-router/actions/workflows/remote-dev.yml)
+workflow runs approved coding tasks through
+[agent-remote-dev](https://github.com/markhuangai/agent-remote-dev). Dispatch it
+from `main` as `Z-M-Huang`, the operator in `.remote-dev.yml`. Codex is the
+default runner. Set `runner=claude` to use Claude.
 
 ```bash
-gh run view RUN_ID --attempt ATTEMPT \
-  --repo markhuangai/cpa-plugin-model-router --log |
-  rg 'runtime\.|configuration_|agent\.|api\.request\.|actions\.failed'
+gh workflow run remote-dev.yml --ref main -f runner=codex -F plan=@plan.md
 ```
 
-At normal log visibility, ORM's `runtime.resolved` records the workflow revision
-and selected image; `runtime.used` records which image each controller job uses.
-`runtime.failed` identifies the stage, cause, expected/observed publication
-evidence, registry exit status, elapsed time, and recovery action. Logs use the
-repository's existing Actions retention.
+To resume a saved conversation, use the original runner and pass
+`-f resume-run-id=RUN_ID`. Include `-F plan=@context.md` to add instructions.
+Each continuation requires a manual dispatch. Start a fresh run for issues
+carried over from the retired maintenance workflow.
 
-For runtime selection failures, verify GHCR access and image publication for
-the workflow revision identified in the log. Start a new run after upstream
-publication completes. For missing configuration sources, fix the named
-variable or forwarded secret. For `agent.dispatch_failed`, verify that the
-**ORM agent** workflow is registered on the default branch and that the
-allowlisted controller can dispatch it. For a failed probe, inspect the native
-execution and the probe verification job before starting another run.
-To pause intake, set `ORM_ENABLED=false`. Preserve managed comments, the
-`orm:managed` label, task branches/PRs, session key, and artifacts during
-recovery; incompatible state is a blocker, not permission to reset budgets.
+Codex uses the Actions secrets `CODEX_CONFIG_TOML` and `CODEX_API_KEY`. Claude
+uses `CLAUDE_SETTINGS_JSON` and `ANTHROPIC_API_KEY`. Both use `REMOTE_DEV_PAT`
+for authorized Git and GitHub operations. See the
+[upstream setup guide](https://github.com/markhuangai/agent-remote-dev/blob/v1.0.2/docs/setup.md)
+for the token permissions required for the task.
+
+Inspect the run result artifact for the agent's outcome. For setup or resume
+failures, filter the Actions log by run ID:
+
+```bash
+gh run view RUN_ID --log | rg 'submission\.|runtime\.|checkpoint\.|resume\.|continuation\.'
+```
+
+Audited PR delivery uses the skills pinned in `.remote-dev.yml`. Run
+`make check` and `make build`, and run actionlint plus the Go workflow policy
+tests for workflow changes. Linux CI tests the CPA v7.3.9 source pinned in
+`test.yml`. Verify the native Windows SQLite check, CodeQL, Codex and the
+standalone AI review on the latest PR revision. A human reviews and merges each
+PR.
 
 ## Build And Test
 

@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -17,9 +16,7 @@ var workflowPaths = []string{
 	".github/workflows/codeql.yml",
 	".github/workflows/ai-pr-review.yml",
 	".github/workflows/release.yml",
-	".github/workflows/maintenance.yml",
-	".github/workflows/test-ai.yml",
-	".github/workflows/orm-agent.yml",
+	".github/workflows/remote-dev.yml",
 }
 
 func TestWorkflowYAML(t *testing.T) {
@@ -61,9 +58,7 @@ func TestWorkflowRunnersAndActionRuntimes(t *testing.T) {
 		".github/workflows/codeql.yml":       2,
 		".github/workflows/ai-pr-review.yml": 1,
 		".github/workflows/release.yml":      3,
-		".github/workflows/maintenance.yml":  0,
-		".github/workflows/test-ai.yml":      0,
-		".github/workflows/orm-agent.yml":    0,
+		".github/workflows/remote-dev.yml":   0,
 	}
 	allowedActions := map[string]bool{
 		"actions/checkout@v7":          true,
@@ -75,24 +70,19 @@ func TestWorkflowRunnersAndActionRuntimes(t *testing.T) {
 	}
 
 	for _, path := range workflowPaths {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
+		var workflow workflowDefinition
+		readWorkflowYAML(t, path, &workflow)
 		runnerCount := 0
-		for _, line := range strings.Split(string(raw), "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "runs-on:") {
-				runner := strings.TrimSpace(strings.TrimPrefix(line, "runs-on:"))
-				if !allowedRunners[path][runner] {
-					t.Errorf("%s uses unsupported runner %q", path, runner)
+		for _, job := range workflow.Jobs {
+			if job.RunsOn != "" {
+				if !allowedRunners[path][job.RunsOn] {
+					t.Errorf("%s uses unsupported runner %q", path, job.RunsOn)
 				}
 				runnerCount++
 			}
-			if strings.HasPrefix(line, "- uses: actions/") {
-				action := strings.TrimSpace(strings.TrimPrefix(line, "- uses:"))
-				if !allowedActions[action] {
-					t.Errorf("%s uses an action without the approved Node 24 runtime: %s", path, action)
+			for _, step := range job.Steps {
+				if strings.HasPrefix(step.Uses, "actions/") && !allowedActions[step.Uses] {
+					t.Errorf("%s uses an action without the approved Node 24 runtime: %s", path, step.Uses)
 				}
 			}
 		}
@@ -102,15 +92,15 @@ func TestWorkflowRunnersAndActionRuntimes(t *testing.T) {
 	}
 }
 
-type ormWorkflow struct {
+type workflowDefinition struct {
 	Name        string
-	RunName     string `yaml:"run-name"`
 	On          map[string]any
 	Permissions map[string]string
 	Jobs        map[string]struct {
 		Name        string
 		If          string
 		Needs       string
+		RunsOn      string `yaml:"runs-on"`
 		Uses        string
 		With        map[string]any
 		Secrets     map[string]string
@@ -137,8 +127,8 @@ type ormWorkflow struct {
 }
 
 func TestCodeQLLanguageMatrixAndAggregate(t *testing.T) {
-	var workflow ormWorkflow
-	readORMYAML(t, ".github/workflows/codeql.yml", &workflow)
+	var workflow workflowDefinition
+	readWorkflowYAML(t, ".github/workflows/codeql.yml", &workflow)
 	if workflow.Name != "CodeQL" {
 		t.Fatal("CodeQL must have the documented workflow name")
 	}
@@ -180,8 +170,8 @@ func TestCodeQLLanguageMatrixAndAggregate(t *testing.T) {
 }
 
 func TestCodeQLAggregateExecutionPolicy(t *testing.T) {
-	var workflow ormWorkflow
-	readORMYAML(t, ".github/workflows/codeql.yml", &workflow)
+	var workflow workflowDefinition
+	readWorkflowYAML(t, ".github/workflows/codeql.yml", &workflow)
 	script, ok := workflow.Jobs["gate"].Steps[0].With["script"].(string)
 	if !ok {
 		t.Fatal("aggregate check script is missing")
@@ -247,8 +237,8 @@ process.stdout.write(JSON.stringify(failures));
 }
 
 func TestAIReviewerDirectActionAndTrust(t *testing.T) {
-	var workflow ormWorkflow
-	readORMYAML(t, ".github/workflows/ai-pr-review.yml", &workflow)
+	var workflow workflowDefinition
+	readWorkflowYAML(t, ".github/workflows/ai-pr-review.yml", &workflow)
 	if _, ok := workflow.On["pull_request"]; !ok {
 		t.Fatal("automatic reviews must use an unprivileged PR event")
 	}
@@ -298,7 +288,7 @@ func TestAIReviewerDirectActionAndTrust(t *testing.T) {
 	}
 }
 
-func readORMYAML(t *testing.T, path string, target any) {
+func readWorkflowYAML(t *testing.T, path string, target any) {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -309,175 +299,75 @@ func readORMYAML(t *testing.T, path string, target any) {
 	}
 }
 
-func TestORMWorkflowDefaultsAndTrust(t *testing.T) {
-	for _, caller := range []struct {
-		file, job, upstream, guard, actions string
-		inputs                              map[string]any
-	}{
-		{
-			file:     "maintenance.yml",
-			job:      "maintenance",
-			upstream: "maintenance.yml",
-			guard:    "vars.ORM_ENABLED == 'true'",
-			actions:  "read",
-			inputs:   map[string]any{"issue-number": "${{ inputs.issue-number || '' }}"},
-		},
-		{
-			file:     "test-ai.yml",
-			job:      "test",
-			upstream: "test-ai.yml",
-			guard:    "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)",
-			actions:  "write",
-			inputs:   map[string]any{"role": "${{ inputs.role }}"},
-		},
-		{
-			file:     "orm-agent.yml",
-			job:      "agent",
-			upstream: "test-ai.yml",
-			guard:    "github.run_attempt == '1'",
-			actions:  "write",
-			inputs: map[string]any{
-				"issue-number": "${{ inputs.issue }}",
-				"turn":         "${{ inputs.turn }}",
-				"plan":         "${{ inputs.plan }}",
-			},
-		},
-	} {
-		t.Run(caller.file, func(t *testing.T) {
-			var workflow ormWorkflow
-			readORMYAML(t, ".github/workflows/"+caller.file, &workflow)
-			job := workflow.Jobs[caller.job]
-			if !reflect.DeepEqual(workflow.Permissions, map[string]string{"contents": "read", "actions": caller.actions}) || len(job.Permissions) != 0 {
-				t.Fatalf("unexpected caller permissions: %v", workflow.Permissions)
-			}
-			if len(workflow.Jobs) != 1 || job.Needs != "" ||
-				job.Uses != "markhuangai/opensource-repo-manager/.github/workflows/"+caller.upstream+"@v1-prerelease" {
-				t.Fatal("caller must use the upstream prerelease workflow directly")
-			}
-			caller.inputs["runner"] = "ubuntu-24.04"
-			if job.If != caller.guard || !reflect.DeepEqual(job.With, caller.inputs) {
-				t.Fatal("direct caller must preserve admission guards and use upstream runtime defaults")
-			}
-			checkORMSecretMap(t, job.Secrets["ORM_CONFIGURATION_SECRETS"], map[string]string{
-				"ORM_GITHUB_TOKEN": "ORM_GITHUB_TOKEN",
-				"ORM_SESSION_KEY":  "ORM_SESSION_KEY",
-			})
-			delete(job.Secrets, "ORM_CONFIGURATION_SECRETS")
-			wantSecrets := map[string]string{"ORM_CONFIGURATION_VARIABLES": "${{ toJSON(vars) }}"}
-			if caller.upstream == "test-ai.yml" {
-				checkORMSecretMap(t, job.Secrets["ORM_AGENT_PROFILES"], map[string]string{"claude": "CLAUDE_SETTINGS_JSON"})
-				delete(job.Secrets, "ORM_AGENT_PROFILES")
-				wantSecrets["ORM_CLAUDE_API_KEY"] = "${{ secrets.ANTHROPIC_API_KEY }}"
-				wantSecrets["ORM_AGENT_READ_TOKEN"] = "${{ secrets.GITHUB_TOKEN }}"
-			}
-			if caller.file == "orm-agent.yml" {
-				wantSecrets["ORM_AGENT_WORK_TOKEN"] = "${{ secrets.REMOTE_DEV_PAT }}"
-			}
-			if !reflect.DeepEqual(job.Secrets, wantSecrets) {
-				t.Fatal("caller forwards unexpected secret inputs")
-			}
-		})
-	}
-}
-
-func checkORMSecretMap(t *testing.T, payload string, want map[string]string) {
-	t.Helper()
-	reference := regexp.MustCompile(`\$\{\{ toJSON\(secrets\.([A-Z_]+)\) \}\}`)
-	if len(reference.FindAllStringIndex(payload, -1)) != len(want) {
-		t.Fatal("each secret map entry must use an explicit secret reference")
-	}
-	var resolved map[string]string
-	if err := json.Unmarshal([]byte(reference.ReplaceAllString(payload, `"$1"`)), &resolved); err != nil {
-		t.Fatal("secret map must be valid JSON after expression resolution")
-	}
-	if !reflect.DeepEqual(resolved, want) {
-		t.Fatal("secret map forwards unexpected references")
-	}
-}
-
-func TestORMAgentDispatchAndCompletion(t *testing.T) {
-	var agent, maintenance ormWorkflow
-	readORMYAML(t, ".github/workflows/orm-agent.yml", &agent)
-	readORMYAML(t, ".github/workflows/maintenance.yml", &maintenance)
-	if agent.Name != "ORM agent" || agent.RunName != "ORM agent #${{ inputs.issue }} ${{ inputs.turn }}" {
-		t.Fatal("agent runs must carry the issue and turn identity the controller routes")
-	}
-	dispatch, _ := agent.On["workflow_dispatch"].(map[string]any)
+func TestRemoteDevelopmentWorkflow(t *testing.T) {
+	var workflow workflowDefinition
+	readWorkflowYAML(t, ".github/workflows/remote-dev.yml", &workflow)
+	dispatch, _ := workflow.On["workflow_dispatch"].(map[string]any)
 	inputs, _ := dispatch["inputs"].(map[string]any)
-	if len(agent.On) != 1 || len(inputs) != 3 {
-		t.Fatal("agent must accept only the issue, turn and plan through workflow_dispatch")
+	if len(workflow.On) != 1 || len(inputs) != 3 {
+		t.Fatal("remote development must accept only manual dispatch with its three task inputs")
 	}
-	for _, name := range []string{"issue", "turn", "plan"} {
+	runner, _ := inputs["runner"].(map[string]any)
+	if runner["type"] != "choice" || runner["default"] != "codex" ||
+		!reflect.DeepEqual(runner["options"], []any{"codex", "claude"}) {
+		t.Fatalf("unexpected runner input: %v", runner)
+	}
+	for _, name := range []string{"plan", "resume-run-id"} {
 		input, _ := inputs[name].(map[string]any)
-		if input["type"] != "string" || input["required"] != true {
-			t.Fatalf("%s must be a required string input", name)
+		if input["type"] != "string" || input["required"] == true {
+			t.Fatalf("%s must be an optional string input", name)
 		}
 	}
-	wake := map[string]any{"workflows": []any{agent.Name}, "types": []any{"completed"}}
-	if !reflect.DeepEqual(maintenance.On["workflow_run"], wake) {
-		t.Fatal("maintenance must wake on agent completion")
-	}
 
-	var remoteDev struct {
+	job := workflow.Jobs["run"]
+	if len(workflow.Jobs) != 1 || len(job.Steps) != 0 ||
+		job.Uses != "markhuangai/agent-remote-dev/.github/workflows/remote-dev.yml@3930ee1ed5704803b33ab63b781ff90bcf1810a1" {
+		t.Fatal("remote development must call the pinned reusable workflow directly")
+	}
+	if !reflect.DeepEqual(workflow.Permissions, map[string]string{"contents": "read", "actions": "write"}) || len(job.Permissions) != 0 {
+		t.Fatalf("unexpected remote development permissions: %v", workflow.Permissions)
+	}
+	if !reflect.DeepEqual(job.With, map[string]any{
+		"runner":          "${{ inputs.runner }}",
+		"plan":            "${{ inputs.plan }}",
+		"resume-run-id":   "${{ inputs.resume-run-id }}",
+		"runs-on":         `["ubuntu-latest"]`,
+		"timeout-minutes": 360,
+	}) {
+		t.Fatalf("unexpected reusable workflow inputs: %v", job.With)
+	}
+	if !reflect.DeepEqual(job.Secrets, map[string]string{
+		"codex-config":    "${{ secrets.CODEX_CONFIG_TOML }}",
+		"codex-api-key":   "${{ secrets.CODEX_API_KEY }}",
+		"claude-settings": "${{ secrets.CLAUDE_SETTINGS_JSON }}",
+		"claude-api-key":  "${{ secrets.ANTHROPIC_API_KEY }}",
+		"github-token":    "${{ secrets.REMOTE_DEV_PAT }}",
+	}) {
+		t.Fatal("remote development must forward only the named runner and GitHub secrets")
+	}
+}
+
+func TestRemoteDevelopmentProjectConfiguration(t *testing.T) {
+	type skillSource struct {
+		Repository string
+		Ref        string
+		Names      []string
+	}
+	var config struct {
 		AllowedActors []string `yaml:"allowed-actors"`
-		Skills        []string
+		Skills        []skillSource
 		AutoContinue  *bool `yaml:"auto-continue"`
 	}
-	readORMYAML(t, ".remote-dev.yml", &remoteDev)
-	if !reflect.DeepEqual(remoteDev.AllowedActors, []string{"MarkHuang-AI-Service", "Z-M-Huang"}) ||
-		remoteDev.Skills == nil || len(remoteDev.Skills) != 0 || remoteDev.AutoContinue == nil || *remoteDev.AutoContinue {
-		t.Fatal("remote development must allow only the controller and probe operator and defer skills and continuation to ORM")
+	readWorkflowYAML(t, ".remote-dev.yml", &config)
+	if !reflect.DeepEqual(config.AllowedActors, []string{"Z-M-Huang"}) || config.AutoContinue == nil || *config.AutoContinue {
+		t.Fatal("remote development must admit only Z-M-Huang and require manual continuation")
 	}
-}
-
-func TestORMConfigurationProfilesAndGates(t *testing.T) {
-	var configuration struct {
-		Version    int
-		Github     struct{ Token map[string]string }
-		SessionKey map[string]string `yaml:"session_key"`
-		Profiles   map[string]map[string]string
-		Limits     map[string]int
-		Roles      map[string]struct {
-			Profile string
-			Skills  []string
-		}
-		Monitor struct {
-			Enabled            bool
-			RequirementsSource string                           `yaml:"requirements_source"`
-			Checks             []string                         `yaml:"required_checks"`
-			Reviewers          []struct{ Login, Signal string } `yaml:"automated_reviewers"`
-		} `yaml:"pr_monitor"`
-	}
-	readORMYAML(t, ".github/orm.yml", &configuration)
-	if configuration.Version != 2 || configuration.Github.Token["from_secret"] != "ORM_GITHUB_TOKEN" ||
-		configuration.SessionKey["from_secret"] != "ORM_SESSION_KEY" {
-		t.Fatal("the v2 controller must resolve its PAT and session key from explicit secret references")
-	}
-	if !reflect.DeepEqual(configuration.Profiles, map[string]map[string]string{"claude": {"sdk": "claude"}}) {
-		t.Fatal("the workflow must supply native settings for the sole Claude profile")
-	}
-	limits := map[string]int{"active_minutes": 60, "agent_runs": 200, "repair_cycles": 3, "infrastructure_retries": 2, "wait_hours": 24}
-	if !reflect.DeepEqual(configuration.Limits, limits) {
-		t.Fatal("unexpected v2 task limits")
-	}
-	if len(configuration.Roles) != 5 {
-		t.Fatal("all five supervisor roles must be configured")
-	}
-	for _, role := range []string{"bootstrap", "investigation", "implementation", "audit", "output_review"} {
-		selected := configuration.Roles[role]
-		if selected.Profile != "claude" || len(selected.Skills) == 0 || selected.Skills[0] != "project" {
-			t.Fatalf("role %s must use the common profile and project skill", role)
-		}
-	}
-	if _, err := os.Stat(".github/orm/skills/project/SKILL.md"); err != nil {
-		t.Fatal(err)
-	}
-	if !configuration.Monitor.Enabled || configuration.Monitor.RequirementsSource != "github" ||
-		!reflect.DeepEqual(configuration.Monitor.Checks, []string{"test", "windows-sqlite", "analyze", "CodeQL"}) ||
-		len(configuration.Monitor.Reviewers) != 1 ||
-		configuration.Monitor.Reviewers[0].Login != "chatgpt-codex-connector[bot]" ||
-		configuration.Monitor.Reviewers[0].Signal != "codex" {
-		t.Fatal("all current-head CI and Codex review must gate readiness")
+	if !reflect.DeepEqual(config.Skills, []skillSource{{
+		Repository: "markhuangai/agent-remote-dev-skills",
+		Ref:        "21591711c35d84ef7e4d67afe30828265574e4e4",
+		Names:      []string{"sdlc-plan", "sdlc-plan-implementation", "plan-audit", "pr-review-loop"},
+	}}) {
+		t.Fatalf("unexpected remote development skills: %v", config.Skills)
 	}
 }
 
