@@ -1,3 +1,6 @@
-allowed-actors: [MarkHuang-AI-Service, Z-M-Huang]
-skills: []
+allowed-actors: [Z-M-Huang]
+skills:
+  - repository: markhuangai/agent-remote-dev-skills
+    ref: 21591711c35d84ef7e4d67afe30828265574e4e4
+    names: [sdlc-plan, sdlc-plan-implementation, plan-audit, pr-review-loop]
 auto-continue: false

@@ -151,16 +151,30 @@ func (tracker *attributionTracker) Match(record pluginapi.UsageRecord) attributi
 	defer tracker.mu.Unlock()
 	tracker.pruneLocked(tracker.now().UTC())
 	var marker *attributionMarker
+	var attempt int
+	var operation string
+	reason := "route_marker"
 	for _, model := range models {
 		key := attributionKey{model: model, credential: fingerprint, hasCredential: hasCredential}
 		for _, candidate := range tracker.byModel[key] {
 			if candidate == marker || (hasRequestedAt && !candidate.includes(requestedAt)) {
 				continue
 			}
-			if marker != nil && (!hasRequestedAt || marker.conflictsWith(candidate)) {
+			if marker == nil {
+				marker, attempt, operation = candidate, candidate.routeAttempt, candidate.operation
+				continue
+			}
+			if !hasRequestedAt || !marker.sameRoute(candidate) {
 				return attributionResult{Kind: attributionUnresolved, Reason: "conflicting_markers"}
 			}
-			if marker == nil || candidate.startedAt.After(marker.startedAt) ||
+			reason = "route_consensus"
+			if attempt != candidate.routeAttempt {
+				attempt = 0
+			}
+			if operation != candidate.operation {
+				operation = ""
+			}
+			if candidate.startedAt.After(marker.startedAt) ||
 				(candidate.startedAt.Equal(marker.startedAt) && candidate.id < marker.id) {
 				marker = candidate
 			}
@@ -174,19 +188,17 @@ func (tracker *attributionTracker) Match(record pluginapi.UsageRecord) attributi
 		return attributionResult{Kind: attributionDirect, Target: marker.target, Reason: "direct_marker"}
 	}
 	// One host dispatch can yield multiple official records when CPA retries internally.
-	attempt := marker.routeAttempt
 	if !hasRequestedAt {
 		attempt = 0
 	}
 	return attributionResult{
 		Kind: attributionRouted, RouterModel: marker.routerModel, Target: marker.target,
-		RouteAttempt: attempt, Operation: marker.operation, Reason: "route_marker",
+		RouteAttempt: attempt, Operation: operation, Reason: reason,
 	}
 }
 
-func (marker *attributionMarker) conflictsWith(other *attributionMarker) bool {
-	return marker.direct != other.direct || !equalFold(marker.routerModel, other.routerModel) ||
-		!equalFold(marker.target, other.target) || marker.routeAttempt != other.routeAttempt || marker.operation != other.operation
+func (marker *attributionMarker) sameRoute(other *attributionMarker) bool {
+	return marker.direct == other.direct && equalFold(marker.routerModel, other.routerModel) && equalFold(marker.target, other.target)
 }
 
 func (tracker *attributionTracker) indexMarker(marker *attributionMarker) {

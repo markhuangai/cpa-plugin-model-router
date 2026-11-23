@@ -65,7 +65,7 @@ func TestAttributionTrackerLeavesAmbiguousTimestampLessUsageUnattributed(t *test
 	headers := http.Header{"X-Api-Key": {"key-one"}}
 	tracker.MarkRouted("first", "gpt-5.4", headers, 1, "")
 	now = now.Add(time.Second)
-	tracker.MarkRouted("second", "gpt-5.4", headers, 1, "")
+	tracker.MarkRouted("first", "gpt-5.4", headers, 1, "")
 	if got := tracker.Match(pluginapi.UsageRecord{Model: "gpt-5.4", APIKey: "key-one"}); got.Kind != attributionUnresolved {
 		t.Fatalf("ambiguous timestamp-less attribution = %#v", got)
 	}
@@ -120,8 +120,96 @@ func TestAttributionDispatchIntervals(t *testing.T) {
 	now = now.Add(time.Millisecond)
 	tracker.MarkRouted("auto", "west/chat", headers, 1, "another request")
 	record.RequestedAt = now.Add(time.Millisecond)
-	if match := tracker.Match(record); match.Kind != attributionUnresolved || match.RouteAttempt != 0 || match.Reason != "conflicting_markers" {
+	want := attributionResult{Kind: attributionRouted, RouterModel: "auto", Target: "west/chat", Reason: "route_consensus"}
+	if match := tracker.Match(record); match != want {
 		t.Fatalf("overlapping first attempt and retry matched: %#v", match)
+	}
+}
+
+func TestAttributionOverlappingDispatchConsensus(t *testing.T) {
+	type dispatch struct {
+		alias, target, operation string
+		attempt                  int
+	}
+	for _, test := range []struct {
+		name          string
+		marks         []dispatch
+		wantAttempt   int
+		wantOperation string
+		wantConflict  bool
+	}{
+		{
+			name: "first attempts from separate operations",
+			marks: []dispatch{
+				{"auto", "west/chat", "first", 1},
+				{"auto", "west/chat", "second", 1},
+			},
+			wantAttempt: 1,
+		},
+		{
+			name: "same retry ordinal from separate operations",
+			marks: []dispatch{
+				{"auto", "west/chat", "first", 2},
+				{"auto", "west/chat", "second", 2},
+			},
+			wantAttempt: 2,
+		},
+		{
+			name: "ordinal disagreement retains common operation",
+			marks: []dispatch{
+				{"auto", "west/chat", "same", 1},
+				{"auto", "west/chat", "same", 2},
+			},
+			wantOperation: "same",
+		},
+		{
+			name: "a third marker cannot restore disputed details",
+			marks: []dispatch{
+				{"auto", "west/chat", "first", 1},
+				{"auto", "west/chat", "second", 2},
+				{"auto", "west/chat", "first", 1},
+			},
+		},
+		{
+			name: "a third marker can disagree on the router alias",
+			marks: []dispatch{
+				{"auto", "west/chat", "first", 1},
+				{"auto", "west/chat", "second", 1},
+				{"cheap", "west/chat", "third", 1},
+			},
+			wantConflict: true,
+		},
+		{
+			name: "candidate targets must agree even when indexed under the same model",
+			marks: []dispatch{
+				{"auto", "west/chat(high)", "first", 1},
+				{"auto", "west/chat(low)", "second", 1},
+			},
+			wantConflict: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+			tracker := newAttributionTracker(func() time.Time { return now })
+			headers := http.Header{"X-Api-Key": {"client-test"}}
+			for _, mark := range test.marks {
+				tracker.MarkRouted(mark.alias, mark.target, headers, mark.attempt, mark.operation)
+				now = now.Add(time.Millisecond)
+			}
+			want := attributionResult{
+				Kind: attributionRouted, RouterModel: "auto", Target: "west/chat",
+				RouteAttempt: test.wantAttempt, Operation: test.wantOperation, Reason: "route_consensus",
+			}
+			if test.wantConflict {
+				want = attributionResult{Kind: attributionUnresolved, Reason: "conflicting_markers"}
+			}
+			got := tracker.Match(pluginapi.UsageRecord{
+				Model: "upstream/gpt", Alias: "west/chat", APIKey: "client-test", RequestedAt: now,
+			})
+			if got != want {
+				t.Fatalf("overlapping match = %#v, want %#v", got, want)
+			}
+		})
 	}
 }
 
