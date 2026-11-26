@@ -39,6 +39,11 @@ func (rewriter *streamModelRewriter) Rewrite(chunk []byte) []byte {
 	if rewriter == nil || rewriter.model == "" || len(chunk) == 0 {
 		return chunk
 	}
+	if isSSECommentChunk(chunk) && pendingEndsLine(rewriter.pending) {
+		// SSE comments such as ": keep-alive" carry no model and close no event.
+		// Forward them unchanged so a held partial event is never glued to them.
+		return chunk
+	}
 	if len(rewriter.pending) > 0 {
 		needsLineBreak := sseChunksNeedLineBreak(rewriter.pending, chunk)
 		combined := make([]byte, 0, len(rewriter.pending)+len(chunk)+1)
@@ -131,6 +136,35 @@ func sseChunksNeedLineBreak(pending, chunk []byte) bool {
 	}
 	lineStart := bytes.LastIndexByte(pending, '\n') + 1
 	return lineStart < len(pending) && bytes.HasPrefix(pending[lineStart:], []byte("event:"))
+}
+
+// isSSECommentChunk reports whether every non-empty line of chunk is an SSE
+// comment, i.e. starts with ':'. Upstreams send such lines, for example
+// ": keep-alive", to keep an idle stream open.
+func isSSECommentChunk(chunk []byte) bool {
+	found := false
+	for _, line := range bytes.Split(chunk, []byte("\n")) {
+		line = bytes.TrimSuffix(line, []byte("\r"))
+		if len(line) == 0 {
+			continue
+		}
+		if line[0] != ':' {
+			return false
+		}
+		found = true
+	}
+	return found
+}
+
+// pendingEndsLine reports whether the held bytes end on an SSE line boundary,
+// so a chunk starting with ':' begins a new line rather than continuing a split
+// data payload such as `data: {"model"` followed by `:"x"}`.
+func pendingEndsLine(pending []byte) bool {
+	if len(pending) == 0 || pending[len(pending)-1] == '\n' {
+		return true
+	}
+	lineStart := bytes.LastIndexByte(pending, '\n') + 1
+	return bytes.HasPrefix(pending[lineStart:], []byte("event:"))
 }
 
 func normalizeGluedSSEEvents(chunk []byte) []byte {

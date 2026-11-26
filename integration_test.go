@@ -1412,7 +1412,12 @@ func TestModelRouterResponsesSSEFramingWithCLIProxyAPI(t *testing.T) {
 				data:  fmt.Sprintf(`{"type":"response.completed","response":{"id":"resp_1","object":"response","status":"completed","model":%q,"output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`, body.Model),
 			},
 		}
-		for _, frame := range frames {
+		for index, frame := range frames {
+			if index > 0 {
+				// Upstreams keep idle streams open with SSE comments between events.
+				_, _ = fmt.Fprint(response, ": keep-alive\n\n")
+				flusher.Flush()
+			}
 			_, _ = fmt.Fprintf(response, "event: %s\n", frame.event)
 			flusher.Flush()
 			_, _ = fmt.Fprintf(response, "data: %s\n\n", frame.data)

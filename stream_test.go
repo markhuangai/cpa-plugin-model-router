@@ -441,3 +441,70 @@ func TestStreamModelRewriterSeparatesGluedSSEEvents(t *testing.T) {
 		t.Fatalf("Rewrite() = %q", payload)
 	}
 }
+
+func TestStreamModelRewriterForwardsKeepAliveComments(t *testing.T) {
+	rewriter := newStreamModelRewriter("responses-router-alias")
+	chunks := []string{
+		"event: response.created",
+		`data: {"type":"response.created","response":{"model":"physical-model"}}`,
+		": keep-alive",
+		"event: response.output_item.added",
+		`data: {"type":"response.output_item.added","item":{"type":"reasoning"}}`,
+		": keep-alive",
+		"event: response.completed",
+		`data: {"type":"response.completed","response":{"model":"physical-model"}}`,
+	}
+	var outputs []string
+	for _, chunk := range chunks {
+		if rewritten := rewriter.Rewrite([]byte(chunk)); len(rewritten) > 0 {
+			outputs = append(outputs, string(rewritten))
+		}
+	}
+	if tail := rewriter.Finish(); len(tail) > 0 {
+		t.Fatalf("Finish() = %q, want every event forwarded before the stream ends", tail)
+	}
+	want := []string{"event: response.created\ndata: ", ": keep-alive", "event: response.output_item.added\ndata: ", ": keep-alive", "event: response.completed\ndata: "}
+	if len(outputs) != len(want) {
+		t.Fatalf("rewritten outputs = %#v, want %d", outputs, len(want))
+	}
+	for index, prefix := range want {
+		if !strings.HasPrefix(outputs[index], prefix) {
+			t.Fatalf("output %d = %q, want prefix %q", index, outputs[index], prefix)
+		}
+	}
+	combined := strings.Join(outputs, "\n")
+	if strings.Count(combined, `"model":"responses-router-alias"`) != 2 || strings.Contains(combined, "physical-model") {
+		t.Fatalf("rewritten stream = %q", combined)
+	}
+}
+
+func TestStreamModelRewriterForwardsCommentBetweenEventAndData(t *testing.T) {
+	rewriter := newStreamModelRewriter("responses-router-alias")
+	var outputs []string
+	for _, chunk := range []string{
+		"event: response.completed",
+		": keep-alive\n\n",
+		`data: {"type":"response.completed","response":{"model":"physical-model"}}`,
+	} {
+		if rewritten := rewriter.Rewrite([]byte(chunk)); len(rewritten) > 0 {
+			outputs = append(outputs, string(rewritten))
+		}
+	}
+	if tail := rewriter.Finish(); len(tail) > 0 {
+		t.Fatalf("Finish() = %q", tail)
+	}
+	if len(outputs) != 2 || outputs[0] != ": keep-alive\n\n" || !strings.HasPrefix(outputs[1], "event: response.completed\ndata: ") || !strings.Contains(outputs[1], `"model":"responses-router-alias"`) {
+		t.Fatalf("rewritten outputs = %#v", outputs)
+	}
+}
+
+func TestStreamModelRewriterKeepsSplitPayloadStartingWithColon(t *testing.T) {
+	rewriter := newStreamModelRewriter("smart")
+	if first := rewriter.Rewrite([]byte(`data: {"model"`)); first != nil {
+		t.Fatalf("first Rewrite() = %q", first)
+	}
+	second := string(rewriter.Rewrite([]byte(`:"physical"}` + "\n\n")))
+	if !strings.Contains(second, `"model":"smart"`) || strings.Contains(second, "physical") {
+		t.Fatalf("second Rewrite() = %q", second)
+	}
+}
